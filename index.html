@@ -1108,6 +1108,7 @@
                                 <tr>
                                     <th>Nama</th>
                                     <th>Username</th>
+                                    <th>Password</th>
                                     <th>Email</th>
                                     <th>Telepon</th>
                                     <th>Usia</th>
@@ -1117,7 +1118,7 @@
                                 </tr>
                             </thead>
                             <tbody id="adminKonsumenListBody">
-                                <tr><td colspan="8" class="empty-state">Tidak ada data</td></tr>
+                                <tr><td colspan="9" class="empty-state">Tidak ada data</td></tr>
                             </tbody>
                         </table>
                     </div>
@@ -1131,6 +1132,7 @@
                                 <tr>
                                     <th>Nama</th>
                                     <th>Username</th>
+                                    <th>Password</th>
                                     <th>NIK</th>
                                     <th>Usia</th>
                                     <th>Spesialisasi</th>
@@ -1141,7 +1143,7 @@
                                 </tr>
                             </thead>
                             <tbody id="adminTeknisiListBody">
-                                <tr><td colspan="9" class="empty-state">Tidak ada data</td></tr>
+                                <tr><td colspan="10" class="empty-state">Tidak ada data</td></tr>
                             </tbody>
                         </table>
                     </div>
@@ -1195,7 +1197,10 @@
                 </div>
 
                 <div class="card" id="adminUserImageCard" style="display:none;">
-                    <div class="card-header"><h3>Katalog Gambar Lokal</h3></div>
+                    <div class="card-header card-header-space-between">
+                        <h3>Katalog Gambar Lokal</h3>
+                        <button class="btn btn-primary btn-sm" onclick="openAddImageCatalogModal()">Upload Gambar</button>
+                    </div>
                     <div class="table-responsive">
                         <table class="data-table">
                             <thead>
@@ -1458,6 +1463,56 @@
             </div>
             <div class="modal-footer">
                 <button class="btn btn-outline" onclick="closeModal('modalImageViewer')">Tutup</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="modalImageCatalogForm" style="display:none;">
+        <div class="modal modal-scrollable">
+            <div class="modal-header">
+                <h3 id="imageCatalogModalTitle">Upload Gambar Katalog</h3>
+                <button class="modal-close" onclick="closeModal('modalImageCatalogForm')">&times;</button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" id="imageCatalogFormId">
+                <input type="hidden" id="imageCatalogFormSrc">
+                <div class="form-grid modal-form-grid">
+                    <div class="form-group full-width">
+                        <label for="imageCatalogFormName">Nama Gambar</label>
+                        <input type="text" id="imageCatalogFormName" placeholder="Contoh: Banner Promo Servis">
+                    </div>
+                    <div class="form-group">
+                        <label for="imageCatalogFormCategory">Kategori</label>
+                        <input type="text" id="imageCatalogFormCategory" placeholder="Contoh: promo, hero, layanan">
+                    </div>
+                    <div class="form-group">
+                        <label for="imageCatalogFormActive">Status</label>
+                        <select id="imageCatalogFormActive">
+                            <option value="true">Aktif</option>
+                            <option value="false">Nonaktif</option>
+                        </select>
+                    </div>
+                    <div class="form-group full-width">
+                        <label for="imageCatalogFormAlt">Alt Text</label>
+                        <input type="text" id="imageCatalogFormAlt" placeholder="Deskripsi gambar untuk aksesibilitas">
+                    </div>
+                    <div class="form-group full-width">
+                        <label for="imageCatalogFormFile">File Gambar</label>
+                        <input type="file" id="imageCatalogFormFile" accept="image/*">
+                        <div class="service-image-upload-note text-muted text-sm">Upload baru akan disimpan ke localStorage dan langsung masuk ke katalog gambar lokal.</div>
+                    </div>
+                    <div class="form-group full-width">
+                        <label>Preview</label>
+                        <div class="service-image-preview" id="imageCatalogPreview" style="display:none;">
+                            <img id="imageCatalogPreviewImg" src="" alt="Preview gambar katalog">
+                            <button type="button" class="btn btn-outline btn-xs" onclick="clearImageCatalogImage()">Hapus Gambar</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-outline" onclick="closeModal('modalImageCatalogForm')">Batal</button>
+                <button class="btn btn-primary" onclick="saveImageCatalogItem()">Simpan</button>
             </div>
         </div>
     </div>

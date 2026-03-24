@@ -28,6 +28,8 @@ const ROLE_LABELS = {
     teknisi: 'Teknisi'
 };
 
+const LOCALHOST_HOSTNAMES = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
+
 const DEFAULT_IMAGE_CATALOG = [
     { id: 'IMG001', name: 'Logo Indo Sejuk AC', category: 'brand', src: 'image/logo.png', alt: 'Logo Indo Sejuk AC', isActive: true },
     { id: 'IMG002', name: 'Hero Service AC', category: 'hero', src: 'image/hero-ac-service.png', alt: 'Teknisi service AC', isActive: true },
@@ -136,6 +138,58 @@ function createDefaultData() {
 
 function deepClone(value) {
     return JSON.parse(JSON.stringify(value));
+}
+
+function isLocalhostEnv() {
+    // Dashboard admin hanya dibuka di lingkungan lokal agar deploy statis publik tetap aman.
+    return LOCALHOST_HOSTNAMES.has(window.location.hostname);
+}
+
+function canAccessAdmin(role = getCurrentSession()?.role || currentRole) {
+    // Gating admin wajib lolos dua syarat: role memang admin dan host adalah localhost.
+    return role === 'admin' && isLocalhostEnv();
+}
+
+function isAdminView(viewId = '') {
+    return String(viewId || '').startsWith('admin');
+}
+
+function syncAdminAccessUI() {
+    const adminAllowed = canAccessAdmin('admin');
+    const roleAdminCard = document.getElementById('roleAdmin');
+    const loginAdminTab = document.getElementById('loginRoleTab-admin');
+    const roleCards = document.getElementById('roleCards');
+
+    if (roleAdminCard) {
+        roleAdminCard.style.display = adminAllowed ? '' : 'none';
+        roleAdminCard.setAttribute('aria-hidden', String(!adminAllowed));
+    }
+
+    if (loginAdminTab) {
+        loginAdminTab.style.display = adminAllowed ? '' : 'none';
+        loginAdminTab.disabled = !adminAllowed;
+        loginAdminTab.setAttribute('aria-hidden', String(!adminAllowed));
+    }
+
+    if (roleCards) {
+        roleCards.classList.toggle('role-cards--admin-hidden', !adminAllowed);
+    }
+
+    if (!adminAllowed && document.getElementById('loginRole')?.value === 'admin') {
+        switchLoginRole('konsumen');
+    }
+}
+
+async function syncNewUserToRemote(user, role) {
+    // Sinkronisasi ke GitHub wajib lewat backend/serverless function yang memegang secret,
+    // bukan langsung dari browser/frontend statis.
+    const warningMessage = `Sinkronisasi remote untuk ${role} belum dijalankan karena backend aman belum tersedia.`;
+    console.warn(warningMessage, { role, userId: user?.id || null });
+    return {
+        ok: false,
+        skipped: true,
+        message: 'Data lokal tersimpan. Sinkronisasi repo GitHub menunggu backend/serverless yang aman.'
+    };
 }
 
 function escapeHtml(value) {
@@ -421,9 +475,25 @@ function getCurrentUser() {
     return findUserById(session.role, session.userId);
 }
 
+function resetToPublicLanding(message = '') {
+    saveSession(null);
+    currentRole = null;
+    currentView = null;
+    uploadingOrderId = null;
+    uploadProofImage = null;
+    document.getElementById('formLogin')?.reset();
+    switchLoginRole('konsumen');
+    showLanding();
+    if (message) showToast(message, 'warning');
+}
+
 function ensureValidSession(showMessage = false) {
     const session = getCurrentSession();
     if (!session) return false;
+    if (session.role === 'admin' && !canAccessAdmin(session.role)) {
+        resetToPublicLanding(showMessage ? 'Dashboard admin hanya tersedia di localhost.' : '');
+        return false;
+    }
     const user = getCurrentUser();
     if (user) return true;
     saveSession(null);
@@ -443,6 +513,7 @@ function isUsernameTaken(role, username, excludeUserId = '') {
 }
 
 function loginUser(role, username, password) {
+    if (role === 'admin' && !canAccessAdmin(role)) return null;
     const user = getData().users?.[role]?.find((item) => item.username === username && item.password === password);
     if (!user) return null;
     saveSession({ role, userId: user.id, loginAt: new Date().toISOString() });
@@ -468,6 +539,21 @@ function requireRole(role) {
     if (session?.role !== role) {
         showToast(`Akses hanya untuk ${ROLE_LABELS[role] || role}.`, 'warning');
         navigateTo(`${session.role}-home`);
+        return false;
+    }
+    return true;
+}
+
+function requireAdminAccess() {
+    if (!ensureValidSession(true)) return false;
+    const session = getCurrentSession();
+    if (session?.role !== 'admin') {
+        showToast('Akses hanya untuk Admin.', 'warning');
+        navigateTo(`${session.role}-home`);
+        return false;
+    }
+    if (!canAccessAdmin(session.role)) {
+        resetToPublicLanding('Dashboard admin hanya tersedia di localhost.');
         return false;
     }
     return true;
@@ -519,6 +605,7 @@ function showLanding() {
     document.getElementById('appFooter').style.display = 'none';
     document.getElementById('registerPage').style.display = 'none';
     document.getElementById('loginPage').style.display = 'flex';
+    syncAdminAccessUI();
     renderDefaultAccountList();
     renderLandingSessionNotice();
 }
@@ -548,6 +635,10 @@ function switchRegisterTab(tab, element) {
 }
 
 function switchLoginRole(role, element) {
+    if (role === 'admin' && !canAccessAdmin(role)) {
+        role = 'konsumen';
+        element = null;
+    }
     const input = document.getElementById('loginRole');
     if (input) input.value = role;
     document.querySelectorAll('.login-role-tabs .tab').forEach((button) => button.classList.remove('active'));
@@ -561,19 +652,9 @@ function switchLoginRole(role, element) {
 function renderDefaultAccountList() {
     const container = document.getElementById('defaultAccountList');
     if (!container) return;
-    const data = getData();
-    const entries = [
-        data.users.admin[0],
-        data.users.konsumen[0],
-        data.users.teknisi[0]
-    ].filter(Boolean);
-    container.innerHTML = entries.map((user) => `
-        <div class="credential-card">
-            <strong>${escapeHtml(ROLE_LABELS[user.role])}</strong>
-            <span>${escapeHtml(user.username)}</span>
-            <span>${escapeHtml(user.password)}</span>
-        </div>
-    `).join('');
+    // Landing page publik tidak boleh membocorkan kredensial default role apa pun.
+    container.innerHTML = '';
+    container.style.display = 'none';
 }
 
 function renderLandingSessionNotice() {
@@ -628,7 +709,16 @@ function renderAppShell() {
 
 function navigateTo(viewId, prefill = '') {
     if (!ensureValidSession(true)) return;
-    const role = getCurrentSession().role;
+    const session = getCurrentSession();
+    const role = session.role;
+    if (isAdminView(viewId) && role !== 'admin') {
+        showToast('Halaman admin hanya tersedia untuk role Admin di localhost.', 'warning');
+        viewId = `${role}-home`;
+    }
+    if (isAdminView(viewId) && !canAccessAdmin(role)) {
+        resetToPublicLanding('Dashboard admin hanya tersedia di localhost.');
+        return;
+    }
     if (!viewId.startsWith(role)) {
         showToast('Anda tidak dapat membuka halaman role lain.', 'warning');
         viewId = `${role}-home`;
@@ -667,6 +757,11 @@ function getImageCatalogItem(imageCatalogId) {
 
 function serviceImage(service) {
     return service.image || getImageCatalogItem(service.imageCatalogId)?.src || FALLBACK_IMAGE;
+}
+
+function summarizeImageSource(src) {
+    if (!src) return '-';
+    return src.startsWith('data:image/') ? 'Upload localStorage' : src;
 }
 
 function renderCurrentView(prefill = '') {
@@ -869,6 +964,7 @@ function renderTeknisiUpload() {
 }
 
 function renderAdminHome() {
+    if (!requireAdminAccess()) return;
     const data = getData();
     const orders = data.orders || [];
     document.getElementById('adminTotalOrders').textContent = orders.length;
@@ -890,6 +986,7 @@ function renderAdminHome() {
 }
 
 function renderAdminOrders() {
+    if (!requireAdminAccess()) return;
     const data = getData();
     const filter = document.getElementById('adminFilterStatus').value;
     const orders = (data.orders || []).filter((order) => filter === 'all' || order.status === filter);
@@ -915,6 +1012,7 @@ function renderAdminOrders() {
 }
 
 function renderAdminUsers() {
+    if (!requireAdminAccess()) return;
     renderAdminKonsumenTable();
     renderAdminTeknisiTable();
     renderAdminAdminTable();
@@ -924,12 +1022,15 @@ function renderAdminUsers() {
 }
 
 function renderAdminKonsumenTable() {
+    if (!requireAdminAccess()) return;
     const data = getData();
     const body = document.getElementById('adminKonsumenListBody');
+    // Tabel Data Master konsumen harus konsisten dengan tabel admin lain, termasuk kolom password.
     body.innerHTML = data.users.konsumen.length ? data.users.konsumen.map((user) => `
         <tr>
             <td>${escapeHtml(user.name)}</td>
             <td>${escapeHtml(user.username)}</td>
+            <td>${escapeHtml(user.password)}</td>
             <td>${escapeHtml(user.email || '-')}</td>
             <td>${escapeHtml(user.phone || '-')}</td>
             <td>${escapeHtml(user.age || '-')}</td>
@@ -942,16 +1043,19 @@ function renderAdminKonsumenTable() {
                 </div>
             </td>
         </tr>
-    `).join('') : '<tr><td colspan="8" class="empty-state">Tidak ada data</td></tr>';
+    `).join('') : '<tr><td colspan="9" class="empty-state">Tidak ada data</td></tr>';
 }
 
 function renderAdminTeknisiTable() {
+    if (!requireAdminAccess()) return;
     const data = getData();
     const body = document.getElementById('adminTeknisiListBody');
+    // Tabel Data Master teknisi juga menampilkan password agar formatnya konsisten dengan admin/konsumen.
     body.innerHTML = data.users.teknisi.length ? data.users.teknisi.map((user) => `
         <tr>
             <td>${escapeHtml(user.name)}</td>
             <td>${escapeHtml(user.username)}</td>
+            <td>${escapeHtml(user.password)}</td>
             <td>${escapeHtml(user.nik || '-')}</td>
             <td>${escapeHtml(user.age || '-')}</td>
             <td>${escapeHtml(user.specialization || '-')}</td>
@@ -966,11 +1070,13 @@ function renderAdminTeknisiTable() {
                 </div>
             </td>
         </tr>
-    `).join('') : '<tr><td colspan="9" class="empty-state">Tidak ada data</td></tr>';
+    `).join('') : '<tr><td colspan="10" class="empty-state">Tidak ada data</td></tr>';
 }
 
 function renderAdminAdminTable() {
+    if (!requireAdminAccess()) return;
     const body = document.getElementById('adminAdminListBody');
+    // Render tabel admin dipertahankan konsisten agar audit data master seragam antar-role.
     body.innerHTML = getData().users.admin.length ? getData().users.admin.map((user) => `
         <tr>
             <td>${escapeHtml(user.name)}</td>
@@ -989,6 +1095,7 @@ function renderAdminAdminTable() {
 }
 
 function renderAdminServicesTable() {
+    if (!requireAdminAccess()) return;
     const body = document.getElementById('adminServicesListBody');
     body.innerHTML = getServices(true).length ? getServices(true).map((service) => `
         <tr>
@@ -1007,20 +1114,29 @@ function renderAdminServicesTable() {
 }
 
 function renderAdminImageCatalogTable() {
+    if (!requireAdminAccess()) return;
     const body = document.getElementById('adminImageCatalogBody');
+    // Sumber gambar upload disingkat agar tabel admin tetap ringkas walau file disimpan sebagai data URL.
     body.innerHTML = getData().imageCatalog.length ? getData().imageCatalog.map((item) => `
         <tr>
             <td><img src="${escapeHtml(item.src)}" alt="${escapeHtml(item.alt || item.name)}" class="table-thumb"></td>
             <td>${escapeHtml(item.name)}</td>
             <td>${escapeHtml(item.category)}</td>
-            <td>${escapeHtml(item.src)}</td>
+            <td>${escapeHtml(summarizeImageSource(item.src))}</td>
             <td>${renderStatusBadge(item.isActive ? 'Aktif' : 'Nonaktif')}</td>
-            <td><button class="btn btn-outline btn-xs" onclick="toggleImageCatalogItem('${item.id}')">${item.isActive ? 'Nonaktifkan' : 'Aktifkan'}</button></td>
+            <td>
+                <div class="btn-action-group">
+                    <button class="btn btn-outline btn-xs" onclick="openImageCatalogPreview('${item.id}')">Lihat</button>
+                    <button class="btn btn-outline btn-xs" onclick="openEditImageCatalogModal('${item.id}')">Edit</button>
+                    <button class="btn btn-outline btn-xs" onclick="toggleImageCatalogItem('${item.id}')">${item.isActive ? 'Nonaktifkan' : 'Aktifkan'}</button>
+                </div>
+            </td>
         </tr>
     `).join('') : '<tr><td colspan="6" class="empty-state">Belum ada katalog gambar</td></tr>';
 }
 
 function switchUserTab(tab, element) {
+    if (!requireAdminAccess()) return;
     currentUserTab = tab;
     if (element) {
         document.querySelectorAll('#viewAdminUsers .tab').forEach((button) => button.classList.remove('active'));
@@ -1051,7 +1167,106 @@ function openImageViewer(title, images) {
     document.getElementById('modalImageViewer').style.display = 'flex';
 }
 
+function openImageCatalogPreview(imageId) {
+    if (!requireAdminAccess()) return;
+    const item = getData().imageCatalog.find((image) => image.id === imageId);
+    if (!item) return;
+    openImageViewer(`Katalog Gambar - ${item.name}`, [item.src].filter(Boolean));
+}
+
+function updateImageCatalogPreview(image) {
+    const wrapper = document.getElementById('imageCatalogPreview');
+    const imageEl = document.getElementById('imageCatalogPreviewImg');
+    const sourceInput = document.getElementById('imageCatalogFormSrc');
+    if (!wrapper || !imageEl || !sourceInput) return;
+    sourceInput.value = image || '';
+    if (!image) {
+        wrapper.style.display = 'none';
+        imageEl.src = '';
+        return;
+    }
+    wrapper.style.display = 'flex';
+    imageEl.src = image;
+}
+
+function clearImageCatalogImage() {
+    const fileInput = document.getElementById('imageCatalogFormFile');
+    if (fileInput) fileInput.value = '';
+    updateImageCatalogPreview('');
+}
+
+function resetImageCatalogForm() {
+    document.getElementById('imageCatalogModalTitle').textContent = 'Upload Gambar Katalog';
+    document.getElementById('imageCatalogFormId').value = '';
+    document.getElementById('imageCatalogFormName').value = '';
+    document.getElementById('imageCatalogFormCategory').value = '';
+    document.getElementById('imageCatalogFormAlt').value = '';
+    document.getElementById('imageCatalogFormActive').value = 'true';
+    clearImageCatalogImage();
+}
+
+function openAddImageCatalogModal() {
+    if (!requireAdminAccess()) return;
+    resetImageCatalogForm();
+    document.getElementById('modalImageCatalogForm').style.display = 'flex';
+}
+
+function openEditImageCatalogModal(imageId) {
+    if (!requireAdminAccess()) return;
+    const item = getData().imageCatalog.find((image) => image.id === imageId);
+    if (!item) return;
+    document.getElementById('imageCatalogModalTitle').textContent = 'Edit Gambar Katalog';
+    document.getElementById('imageCatalogFormId').value = item.id;
+    document.getElementById('imageCatalogFormName').value = item.name || '';
+    document.getElementById('imageCatalogFormCategory').value = item.category || '';
+    document.getElementById('imageCatalogFormAlt').value = item.alt || '';
+    document.getElementById('imageCatalogFormActive').value = String(item.isActive !== false);
+    document.getElementById('imageCatalogFormFile').value = '';
+    updateImageCatalogPreview(item.src || '');
+    document.getElementById('modalImageCatalogForm').style.display = 'flex';
+}
+
+async function handleImageCatalogUpload(event) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    const dataUrl = await readFileAsDataUrl(file);
+    updateImageCatalogPreview(dataUrl);
+}
+
+function saveImageCatalogItem() {
+    if (!requireAdminAccess()) return;
+    const data = getData();
+    const imageId = document.getElementById('imageCatalogFormId').value;
+    const imageData = {
+        id: imageId || nextId(data.imageCatalog, 'IMG'),
+        name: document.getElementById('imageCatalogFormName').value.trim(),
+        category: document.getElementById('imageCatalogFormCategory').value.trim() || 'general',
+        alt: document.getElementById('imageCatalogFormAlt').value.trim(),
+        src: document.getElementById('imageCatalogFormSrc').value,
+        isActive: document.getElementById('imageCatalogFormActive').value === 'true'
+    };
+
+    if (!imageData.name || !imageData.src) {
+        showToast('Nama gambar dan file gambar wajib diisi.', 'error');
+        return;
+    }
+
+    if (!imageData.alt) {
+        imageData.alt = imageData.name;
+    }
+
+    const existingIndex = data.imageCatalog.findIndex((item) => item.id === imageId);
+    if (existingIndex >= 0) data.imageCatalog[existingIndex] = imageData;
+    else data.imageCatalog.push(imageData);
+
+    saveData(data);
+    closeModal('modalImageCatalogForm');
+    renderAdminUsers();
+    showToast(`Gambar katalog ${imageData.name} disimpan.`, 'success');
+}
+
 function openTeknisiImages(userId) {
+    if (!requireAdminAccess()) return;
     const user = getData().users.teknisi.find((item) => item.id === userId);
     if (!user) return;
     openImageViewer(`Dokumen Teknisi - ${user.name}`, [user.ktpPhoto, user.selfiePhoto].filter(Boolean));
@@ -1075,6 +1290,11 @@ function handleLoginSubmit(event) {
     const role = document.getElementById('loginRole').value;
     const username = document.getElementById('loginUsername').value.trim();
     const password = document.getElementById('loginPassword').value;
+    if (role === 'admin' && !canAccessAdmin(role)) {
+        switchLoginRole('konsumen');
+        showToast('Login admin hanya tersedia saat aplikasi dijalankan di localhost.', 'warning');
+        return false;
+    }
     const user = loginUser(role, username, password);
     if (!user) {
         showToast('Username atau password tidak cocok untuk role ini.', 'error');
@@ -1110,7 +1330,7 @@ function collectRegisterKonsumenForm() {
     };
 }
 
-function handleRegisterKonsumen(event) {
+async function handleRegisterKonsumen(event) {
     event.preventDefault();
     const form = collectRegisterKonsumenForm();
     if (!form.name || !form.username || !form.password || !form.email || !form.phone || !form.address) {
@@ -1132,6 +1352,14 @@ function handleRegisterKonsumen(event) {
     };
     data.users.konsumen.push(user);
     saveData(data);
+    // Hook sinkronisasi remote ini sengaja non-fatal agar registrasi lokal tetap sukses tanpa backend.
+    const syncResult = await syncNewUserToRemote(user, 'konsumen').catch((error) => {
+        console.warn('Sinkronisasi remote konsumen gagal dijalankan.', error);
+        return {
+            ok: false,
+            message: 'Data lokal tersimpan, tetapi sinkronisasi remote belum berhasil dijalankan.'
+        };
+    });
     loginUser('konsumen', user.username, user.password);
     openAppLayout();
     renderAppShell();
@@ -1140,6 +1368,7 @@ function handleRegisterKonsumen(event) {
     draftUploads.regKonUnitImages = [];
     document.getElementById('regKonUnitPreview').innerHTML = '';
     showToast(`Akun konsumen ${user.name} berhasil dibuat.`, 'success');
+    if (syncResult?.ok === false && syncResult.message) showToast(syncResult.message, 'warning');
     return false;
 }
 
@@ -1161,7 +1390,7 @@ function collectRegisterTeknisiForm() {
     };
 }
 
-function handleRegisterTeknisi(event) {
+async function handleRegisterTeknisi(event) {
     event.preventDefault();
     const form = collectRegisterTeknisiForm();
     if (!form.name || !form.username || !form.password || !form.email || !form.phone || !form.nik || !form.birthDate || !form.specialization || !form.address) {
@@ -1189,6 +1418,14 @@ function handleRegisterTeknisi(event) {
     };
     data.users.teknisi.push(user);
     saveData(data);
+    // Hook sinkronisasi remote ini sengaja non-fatal agar registrasi lokal tetap sukses tanpa backend.
+    const syncResult = await syncNewUserToRemote(user, 'teknisi').catch((error) => {
+        console.warn('Sinkronisasi remote teknisi gagal dijalankan.', error);
+        return {
+            ok: false,
+            message: 'Data lokal tersimpan, tetapi sinkronisasi remote belum berhasil dijalankan.'
+        };
+    });
     loginUser('teknisi', user.username, user.password);
     openAppLayout();
     renderAppShell();
@@ -1200,6 +1437,7 @@ function handleRegisterTeknisi(event) {
     document.getElementById('regTekIDPreview').innerHTML = '';
     document.getElementById('regTekSelfiePreview').innerHTML = '';
     showToast(`Akun teknisi ${user.name} berhasil dibuat.`, 'success');
+    if (syncResult?.ok === false && syncResult.message) showToast(syncResult.message, 'warning');
     return false;
 }
 
@@ -1354,6 +1592,7 @@ function getShareLocation(prefix) {
 }
 
 function openEditKonsumen(userId) {
+    if (!requireAdminAccess()) return;
     const user = getData().users.konsumen.find((item) => item.id === userId);
     if (!user) return;
     document.getElementById('editKonsumenId').value = user.id;
@@ -1369,6 +1608,7 @@ function openEditKonsumen(userId) {
 }
 
 function saveEditKonsumen() {
+    if (!requireAdminAccess()) return;
     const data = getData();
     const user = data.users.konsumen.find((item) => item.id === document.getElementById('editKonsumenId').value);
     if (!user) return;
@@ -1400,6 +1640,7 @@ function saveEditKonsumen() {
 }
 
 function openEditTeknisi(userId) {
+    if (!requireAdminAccess()) return;
     const user = getData().users.teknisi.find((item) => item.id === userId);
     if (!user) return;
     populateSpecializationOptions('editTeknisiSpecialization', user.specialization);
@@ -1419,6 +1660,7 @@ function openEditTeknisi(userId) {
 }
 
 function saveEditTeknisi() {
+    if (!requireAdminAccess()) return;
     const data = getData();
     const user = data.users.teknisi.find((item) => item.id === document.getElementById('editTeknisiId').value);
     if (!user) return;
@@ -1452,6 +1694,7 @@ function saveEditTeknisi() {
 }
 
 function openAddAdminModal() {
+    if (!requireAdminAccess()) return;
     document.getElementById('adminModalTitle').textContent = 'Tambah Data Admin';
     document.getElementById('editAdminId').value = '';
     document.getElementById('editAdminName').value = '';
@@ -1463,6 +1706,7 @@ function openAddAdminModal() {
 }
 
 function openEditAdmin(userId) {
+    if (!requireAdminAccess()) return;
     const user = getData().users.admin.find((item) => item.id === userId);
     if (!user) return;
     document.getElementById('adminModalTitle').textContent = 'Edit Data Admin';
@@ -1476,6 +1720,7 @@ function openEditAdmin(userId) {
 }
 
 function saveEditAdmin() {
+    if (!requireAdminAccess()) return;
     const data = getData();
     const editId = document.getElementById('editAdminId').value;
     const username = document.getElementById('editAdminUsername').value.trim();
@@ -1516,6 +1761,7 @@ function saveEditAdmin() {
 }
 
 function deleteUser(role, userId) {
+    if (!requireAdminAccess()) return;
     const data = getData();
     if (role === 'admin' && data.users.admin.length <= 1) {
         showToast('Minimal harus ada satu admin aktif.', 'warning');
@@ -1547,6 +1793,7 @@ function deleteUser(role, userId) {
 }
 
 function openAddServiceModal() {
+    if (!requireAdminAccess()) return;
     document.getElementById('serviceModalTitle').textContent = 'Tambah Layanan';
     document.getElementById('serviceFormId').value = '';
     document.getElementById('serviceFormName').value = '';
@@ -1560,6 +1807,7 @@ function openAddServiceModal() {
 }
 
 function openEditServiceModal(serviceId) {
+    if (!requireAdminAccess()) return;
     const service = getData().services.find((item) => item.id === serviceId);
     if (!service) return;
     document.getElementById('serviceModalTitle').textContent = 'Edit Layanan';
@@ -1614,6 +1862,7 @@ async function handleServiceImageUpload(event) {
 }
 
 function saveService() {
+    if (!requireAdminAccess()) return;
     const data = getData();
     const serviceId = document.getElementById('serviceFormId').value;
     const serviceData = {
@@ -1640,6 +1889,7 @@ function saveService() {
 }
 
 function confirmDeleteService(serviceId) {
+    if (!requireAdminAccess()) return;
     const service = getData().services.find((item) => item.id === serviceId);
     if (!service) return;
     document.getElementById('deleteServiceId').value = serviceId;
@@ -1648,6 +1898,7 @@ function confirmDeleteService(serviceId) {
 }
 
 function deleteService() {
+    if (!requireAdminAccess()) return;
     const serviceId = document.getElementById('deleteServiceId').value;
     const data = getData();
     data.services = data.services.filter((item) => item.id !== serviceId);
@@ -1659,6 +1910,7 @@ function deleteService() {
 }
 
 function toggleImageCatalogItem(imageId) {
+    if (!requireAdminAccess()) return;
     const data = getData();
     const image = data.imageCatalog.find((item) => item.id === imageId);
     if (!image) return;
@@ -1668,6 +1920,7 @@ function toggleImageCatalogItem(imageId) {
 }
 
 function openAssignModal(orderId) {
+    if (!requireAdminAccess()) return;
     const data = getData();
     document.getElementById('assignOrderId').textContent = orderId;
     const select = document.getElementById('assignTeknisi');
@@ -1676,6 +1929,7 @@ function openAssignModal(orderId) {
 }
 
 function assignTeknisi() {
+    if (!requireAdminAccess()) return;
     const data = getData();
     const order = data.orders.find((item) => item.id === document.getElementById('assignOrderId').textContent);
     const teknisiId = document.getElementById('assignTeknisi').value;
@@ -1695,6 +1949,7 @@ function assignTeknisi() {
 }
 
 function openOrderDetail(orderId) {
+    if (!requireAdminAccess()) return;
     const order = getData().orders.find((item) => item.id === orderId);
     if (!order) return;
     const proof = order.proofImage ? `<div class="image-card"><img src="${escapeHtml(order.proofImage)}" alt="Bukti pekerjaan"></div>` : '<p class="text-muted">Belum ada bukti pekerjaan.</p>';
@@ -1866,8 +2121,20 @@ async function runTechnicianKtpOcr() {
 function initDomEvents() {
     document.getElementById('btnLogout').addEventListener('click', () => logoutUser());
     document.getElementById('serviceFormImageFile').addEventListener('change', handleServiceImageUpload);
+    document.getElementById('imageCatalogFormFile').addEventListener('change', handleImageCatalogUpload);
     document.getElementById('formKonsumenProfile').addEventListener('input', () => handleProfileFormInput('konsumen'));
     document.getElementById('formTeknisiProfile').addEventListener('input', () => handleProfileFormInput('teknisi'));
+}
+
+function handleStorageSync(event) {
+    if (event.key !== STORAGE_KEY && event.key !== LEGACY_STORAGE_KEY) return;
+    appData = loadStoredData();
+    if (ensureValidSession(false)) {
+        renderAppShell();
+        if (currentView) renderCurrentView();
+    } else {
+        showLanding();
+    }
 }
 
 function initApp() {
@@ -1883,3 +2150,4 @@ function initApp() {
 }
 
 window.addEventListener('DOMContentLoaded', initApp);
+window.addEventListener('storage', handleStorageSync);
