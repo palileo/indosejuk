@@ -5,10 +5,9 @@
 const SUPABASE_URL = 'https://zqjretruylhumkehtcli.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpxanJldHJ1eWxodW1rZWh0Y2xpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQzMzU1NzksImV4cCI6MjA4OTkxMTU3OX0.k12ed42-tTAYfEsz682d1gUb2s7bpnqFnTuCclcEFa8';
 
-const supabaseClient = window.supabase.createClient(
-    SUPABASE_URL,
-    SUPABASE_ANON_KEY
-);
+const supabaseClient = window.supabase?.createClient
+    ? window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
+    : null;
 
 const STORAGE_KEY = 'indoSejukACData';
 const LEGACY_STORAGE_KEY = 'sejukac_data';
@@ -70,6 +69,8 @@ function createDefaultUsers() {
                 name: 'Admin Indo Sejuk',
                 username: 'admin',
                 password: 'admin123',
+                email: 'admin@indosejuk.local',
+                phone: '089707888800',
                 role: 'admin',
                 status: 'Aktif',
                 joinedAt
@@ -104,6 +105,59 @@ function deepClone(value) {
     return JSON.parse(JSON.stringify(value));
 }
 
+function canUseSupabase() {
+    return Boolean(supabaseClient);
+}
+
+function shouldFallbackToLocalAuth(error) {
+    if (!canUseSupabase()) return true;
+    const message = String(error?.message || error || '').toLowerCase();
+    return [
+        'failed to fetch',
+        'fetch failed',
+        'network request failed',
+        'networkerror',
+        'load failed'
+    ].some((keyword) => message.includes(keyword));
+}
+
+function normalizeEmail(value) {
+    return String(value || '').trim().toLowerCase();
+}
+
+function normalizePhone(value) {
+    const raw = String(value || '').trim();
+    if (!raw) return '';
+
+    let digits = raw.replace(/\D/g, '');
+    if (!digits) return '';
+
+    if (digits.startsWith('62')) {
+        digits = `0${digits.slice(2)}`;
+    } else if (digits.startsWith('8')) {
+        digits = `0${digits}`;
+    }
+
+    return digits;
+}
+
+function normalizeLoginIdentifier(value) {
+    const raw = String(value || '').trim();
+    if (!raw) return '';
+    return raw.includes('@') ? normalizeEmail(raw) : normalizePhone(raw);
+}
+
+function identifiersMatch(left, right) {
+    const leftValue = String(left || '').trim();
+    const rightValue = String(right || '').trim();
+    if (!leftValue || !rightValue) return false;
+
+    const emailMode = leftValue.includes('@') || rightValue.includes('@');
+    return emailMode
+        ? normalizeEmail(leftValue) === normalizeEmail(rightValue)
+        : normalizePhone(leftValue) === normalizePhone(rightValue);
+}
+
 function isLocalhostEnv() {
     return ['localhost', '127.0.0.1', '::1'].includes(window.location.hostname);
 }
@@ -113,6 +167,7 @@ function canAccessAdmin() {
 }
 
 async function getCurrentAuthUser() {
+    if (!canUseSupabase()) return null;
     const { data, error } = await supabaseClient.auth.getUser();
     if (error) {
         console.error('Gagal mengambil auth user:', error);
@@ -144,6 +199,7 @@ function upsertLocalProfile(profile, overrides = {}) {
     if (!role || !getData().users?.[role]) return null;
 
     const data = getData();
+    const existingUser = (data.users[role] || []).find((item) => item.id === profile?.id) || null;
     Object.keys(data.users).forEach((key) => {
         if (key !== role) {
             data.users[key] = (data.users[key] || []).filter((item) => item.id !== profile?.id);
@@ -151,9 +207,11 @@ function upsertLocalProfile(profile, overrides = {}) {
     });
 
     const normalizedUser = normalizeUser({
+        ...(existingUser || {}),
         ...(profile || {}),
         ...overrides,
         role,
+        password: overrides.password ?? profile?.password ?? existingUser?.password ?? '',
         completedJobs: overrides.completedJobs ?? profile?.completedJobs ?? profile?.completed_jobs ?? 0
     }, role, data.users[role].length);
     const existingIndex = data.users[role].findIndex((item) => item.id === normalizedUser.id);
@@ -185,13 +243,27 @@ function applySupabaseSession(profile, overrides = {}) {
     return localUser;
 }
 
+function applyLocalSession(profile, overrides = {}) {
+    const localUser = upsertLocalProfile(profile, overrides);
+    if (!localUser) return null;
+
+    saveSession({
+        role: localUser.role,
+        userId: localUser.id,
+        loginAt: new Date().toISOString(),
+        provider: 'local'
+    });
+    currentRole = localUser.role;
+    return localUser;
+}
+
 function mapProfileToLocalUser(profile, role, index = 0) {
     const existing = getData().users?.[role]?.find((item) => item.id === profile?.id) || {};
     return normalizeUser({
         ...existing,
         ...(profile || {}),
         role,
-        password: '',
+        password: existing.password || '',
         joinedAt: profile?.created_at || existing.joinedAt || new Date().toISOString(),
         completedJobs: profile?.completed_jobs ?? profile?.completedJobs ?? existing.completedJobs ?? 0
     }, role, index);
@@ -205,8 +277,10 @@ function cacheProfilesByRole(role, profiles) {
 }
 
 async function registerKonsumenSupabase(formValues) {
-    const email = formValues.email.trim();
+    if (!canUseSupabase()) throw new Error('Supabase client belum siap.');
+    const email = normalizeEmail(formValues.email);
     const password = formValues.password.trim();
+    const phone = normalizePhone(formValues.phone);
 
     const { data, error } = await supabaseClient.auth.signUp({
         email,
@@ -223,8 +297,8 @@ async function registerKonsumenSupabase(formValues) {
             role: 'konsumen',
             username: formValues.username.trim(),
             name: formValues.name.trim(),
-            email: email,
-            phone: formValues.phone?.trim() || null,
+            email,
+            phone: phone || null,
             address: formValues.address?.trim() || null,
             age: formValues.age ? Number(formValues.age) : null,
             status: 'Aktif'
@@ -236,8 +310,10 @@ async function registerKonsumenSupabase(formValues) {
 }
 
 async function registerTeknisiSupabase(formValues) {
-    const email = formValues.email.trim();
+    if (!canUseSupabase()) throw new Error('Supabase client belum siap.');
+    const email = normalizeEmail(formValues.email);
     const password = formValues.password.trim();
+    const phone = normalizePhone(formValues.phone);
 
     const { data, error } = await supabaseClient.auth.signUp({
         email,
@@ -254,8 +330,8 @@ async function registerTeknisiSupabase(formValues) {
             role: 'teknisi',
             username: formValues.username.trim(),
             name: formValues.name.trim(),
-            email: email,
-            phone: formValues.phone?.trim() || null,
+            email,
+            phone: phone || null,
             nik: formValues.nik?.trim() || null,
             specialization: formValues.specialization?.trim() || null,
             status: 'Aktif',
@@ -268,8 +344,9 @@ async function registerTeknisiSupabase(formValues) {
 }
 
 async function signInSupabase(email, password) {
+    if (!canUseSupabase()) throw new Error('Supabase client belum siap.');
     const { data, error } = await supabaseClient.auth.signInWithPassword({
-        email: email.trim(),
+        email: normalizeEmail(email),
         password: password.trim()
     });
 
@@ -277,7 +354,23 @@ async function signInSupabase(email, password) {
     return data;
 }
 
+function isEmailIdentifier(identifier) {
+    return String(identifier || '').includes('@');
+}
+
+async function findProfileByIdentifier(role, identifier) {
+    const normalized = normalizeLoginIdentifier(identifier);
+    if (!normalized) return null;
+    if (!canUseSupabase()) return null;
+
+    const profiles = await fetchProfilesByRole(role);
+    return (profiles || []).find((profile) => (
+        identifiersMatch(profile?.email, normalized) || identifiersMatch(profile?.phone, normalized)
+    )) || null;
+}
+
 async function fetchProfilesByRole(role) {
+    if (!canUseSupabase()) throw new Error('Supabase client belum siap.');
     const { data, error } = await supabaseClient
         .from('profiles')
         .select('*')
@@ -306,48 +399,88 @@ function showTeknisiDashboard() {
     navigateTo('teknisi-home');
 }
 
+function showDashboardForRole(role) {
+    if (role === 'admin') {
+        showAdminDashboard();
+        return;
+    }
+    if (role === 'konsumen') {
+        showKonsumenDashboard();
+        return;
+    }
+    if (role === 'teknisi') {
+        showTeknisiDashboard();
+    }
+}
+
 async function handleSupabaseLogin(email, password) {
+    if (!canUseSupabase()) throw new Error('Supabase client belum siap.');
     await signInSupabase(email, password);
 
     const profile = await fetchCurrentProfile();
     if (!profile) throw new Error('Profile user tidak ditemukan');
+
+    const localOverrides = {
+        password: password.trim(),
+        email: normalizeEmail(profile.email || email),
+        phone: normalizePhone(profile.phone)
+    };
 
     if (profile.role === 'admin') {
         if (!canAccessAdmin()) {
             await supabaseClient.auth.signOut();
             saveSession(null);
             currentRole = null;
-            alert('Admin hanya bisa diakses di localhost');
+            showToast('Admin hanya bisa diakses di localhost.', 'warning');
             return null;
         }
-        const localUser = applySupabaseSession(profile, { password: '' });
-        showAdminDashboard();
+        const localUser = applySupabaseSession(profile, localOverrides);
+        showDashboardForRole('admin');
         return localUser;
     }
 
     if (profile.role === 'konsumen') {
-        const localUser = applySupabaseSession(profile, { password: '' });
-        showKonsumenDashboard();
+        const localUser = applySupabaseSession(profile, localOverrides);
+        showDashboardForRole('konsumen');
         return localUser;
     }
 
     if (profile.role === 'teknisi') {
-        const localUser = applySupabaseSession(profile, { password: '' });
-        showTeknisiDashboard();
+        const localUser = applySupabaseSession(profile, localOverrides);
+        showDashboardForRole('teknisi');
         return localUser;
     }
 
     throw new Error(`Role user tidak dikenali: ${profile.role}`);
 }
 
+async function handleProfileLogin(role, identifier, password) {
+    const localUser = loginUser(role, identifier, password);
+    if (localUser) {
+        showDashboardForRole(localUser.role);
+        return localUser;
+    }
+
+    const profile = await findProfileByIdentifier(role, identifier);
+    if (!profile) throw new Error('Email atau nomor telepon tidak cocok.');
+    if (!profile.email) throw new Error('Profile belum memiliki email untuk login Supabase.');
+
+    const authenticatedUser = await handleSupabaseLogin(profile.email, password);
+    if (authenticatedUser && authenticatedUser.role !== role) {
+        await logoutSupabase();
+        saveSession(null);
+        currentRole = null;
+        throw new Error(`Akun ini terdaftar sebagai ${authenticatedUser.role}, bukan ${role}.`);
+    }
+
+    return authenticatedUser;
+}
+
 async function loadAdminMasterData() {
+    if (!canUseSupabase()) return false;
     const konsumen = await fetchProfilesByRole('konsumen');
     const teknisi = await fetchProfilesByRole('teknisi');
     const admin = await fetchProfilesByRole('admin');
-
-    console.log('Konsumen:', konsumen);
-    console.log('Teknisi:', teknisi);
-    console.log('Admin:', admin);
 
     cacheProfilesByRole('konsumen', konsumen);
     cacheProfilesByRole('teknisi', teknisi);
@@ -356,6 +489,7 @@ async function loadAdminMasterData() {
     renderAdminKonsumenTable(konsumen);
     renderAdminTeknisiTable(teknisi);
     renderAdminAdminTable(admin);
+    return true;
 }
 
 function hideAdminForPublic() {
@@ -532,9 +666,9 @@ function normalizeUser(user, role, index = 0) {
         role,
         name: user?.name || user?.nama || defaults.name || '',
         username: user?.username || slugify(user?.name || defaults.name || `${role}-${index + 1}`),
-        password: user?.password ?? defaults.password ?? `${role}123`,
-        email: user?.email || '',
-        phone: user?.phone || user?.telepon || '',
+        password: user?.password ?? defaults.password ?? '',
+        email: normalizeEmail(user?.email || defaults.email || ''),
+        phone: normalizePhone(user?.phone || user?.telepon || defaults.phone || ''),
         address: user?.address || user?.alamat || '',
         birthDate: user?.birthDate || user?.tanggalLahir || '',
         age: calculateAge(user?.birthDate || user?.tanggalLahir || '') || user?.age || '',
@@ -732,11 +866,17 @@ function isUsernameTaken(role, username, excludeUserId = '') {
 
 function loginUser(role, username, password) {
     if (role === 'admin' && !canAccessAdmin(role)) return null;
-    const user = getData().users?.[role]?.find((item) => item.username === username && item.password === password);
+    const rawIdentifier = String(username || '').trim();
+    const normalizedIdentifier = normalizeLoginIdentifier(rawIdentifier);
+    const user = getData().users?.[role]?.find((item) => {
+        if (String(item.password || '') !== String(password || '')) return false;
+
+        return item.username === rawIdentifier
+            || identifiersMatch(item.email, normalizedIdentifier)
+            || identifiersMatch(item.phone, normalizedIdentifier);
+    });
     if (!user) return null;
-    saveSession({ role, userId: user.id, loginAt: new Date().toISOString() });
-    currentRole = role;
-    return user;
+    return applyLocalSession(user, { role });
 }
 
 async function logoutUser(showMessage = true) {
@@ -1512,22 +1652,23 @@ function showToast(message, type = 'success') {
 
 async function handleLoginSubmit(event) {
     event.preventDefault();
-    const email = document.getElementById('loginEmail').value.trim();
+    const role = document.getElementById('loginRole').value;
+    const identifier = document.getElementById('loginIdentifier').value.trim();
     const password = document.getElementById('loginPassword').value;
 
-    if (!email || !password) {
-        showToast('Email dan password wajib diisi.', 'error');
+    if (!identifier || !password) {
+        showToast('Email/nomor telepon dan password wajib diisi.', 'error');
         return false;
     }
 
     try {
-        const user = await handleSupabaseLogin(email, password);
+        const user = await handleProfileLogin(role, identifier, password);
         if (user) {
             showToast(`Login berhasil. Selamat datang, ${user.name}.`, 'success');
         }
     } catch (error) {
-        console.error('Login Supabase gagal:', error);
-        showToast(error?.message || 'Login gagal. Periksa email dan password Anda.', 'error');
+        console.error('Login identifier/password gagal:', error);
+        showToast(error?.message || 'Login gagal. Periksa email/nomor telepon dan password Anda.', 'error');
     }
 
     return false;
@@ -1545,8 +1686,8 @@ function collectRegisterKonsumenForm() {
         name: document.getElementById('regKonName').value.trim(),
         username: document.getElementById('regKonUsername').value.trim(),
         password: document.getElementById('regKonPassword').value,
-        email: document.getElementById('regKonEmail').value.trim(),
-        phone: document.getElementById('regKonPhone').value.trim(),
+        email: normalizeEmail(document.getElementById('regKonEmail').value),
+        phone: normalizePhone(document.getElementById('regKonPhone').value),
         district: document.getElementById('regKonKecamatan').value,
         birthDate: document.getElementById('regKonBirthDate').value,
         age: document.getElementById('regKonAge').value,
@@ -1568,25 +1709,30 @@ async function handleRegisterKonsumen(event) {
         return false;
     }
 
+    const localPayload = {
+        id: nextId(getData().users.konsumen, 'K'),
+        role: 'konsumen',
+        username: form.username,
+        name: form.name,
+        email: form.email,
+        phone: form.phone,
+        address: form.address,
+        age: form.age ? Number(form.age) : null,
+        status: 'Aktif',
+        birthDate: form.birthDate,
+        district: form.district,
+        lat: form.lat,
+        lng: form.lng,
+        unitImages: deepClone(draftUploads.regKonUnitImages),
+        joinedAt: new Date().toISOString(),
+        password: form.password
+    };
+
     try {
         const authUser = await registerKonsumenSupabase(form);
         const user = applySupabaseSession({
-            id: authUser.id,
-            role: 'konsumen',
-            username: form.username,
-            name: form.name,
-            email: form.email,
-            phone: form.phone,
-            address: form.address,
-            age: form.age ? Number(form.age) : null,
-            status: 'Aktif',
-            birthDate: form.birthDate,
-            district: form.district,
-            lat: form.lat,
-            lng: form.lng,
-            unitImages: deepClone(draftUploads.regKonUnitImages),
-            joinedAt: new Date().toISOString(),
-            password: form.password
+            ...localPayload,
+            id: authUser.id
         });
 
         document.getElementById('formRegKonsumen').reset();
@@ -1596,7 +1742,17 @@ async function handleRegisterKonsumen(event) {
         showToast(`Akun konsumen ${user?.name || form.name} berhasil dibuat.`, 'success');
     } catch (error) {
         console.error('Registrasi konsumen Supabase gagal:', error);
-        showToast(error?.message || 'Registrasi konsumen gagal.', 'error');
+        if (!shouldFallbackToLocalAuth(error)) {
+            showToast(error?.message || 'Registrasi konsumen gagal.', 'error');
+            return false;
+        }
+
+        const user = applyLocalSession(localPayload);
+        document.getElementById('formRegKonsumen').reset();
+        draftUploads.regKonUnitImages = [];
+        document.getElementById('regKonUnitPreview').innerHTML = '';
+        showKonsumenDashboard();
+        showToast(`Akun konsumen ${user?.name || form.name} tersimpan lokal. Sinkronisasi cloud akan aktif saat Supabase siap.`, 'warning');
     }
 
     return false;
@@ -1607,8 +1763,8 @@ function collectRegisterTeknisiForm() {
         name: document.getElementById('regTekName').value.trim(),
         username: document.getElementById('regTekUsername').value.trim(),
         password: document.getElementById('regTekPassword').value,
-        email: document.getElementById('regTekEmail').value.trim(),
-        phone: document.getElementById('regTekPhone').value.trim(),
+        email: normalizeEmail(document.getElementById('regTekEmail').value),
+        phone: normalizePhone(document.getElementById('regTekPhone').value),
         nik: document.getElementById('regTekNIK').value.trim(),
         birthDate: document.getElementById('regTekBirthDate').value,
         age: document.getElementById('regTekAge').value,
@@ -1636,29 +1792,34 @@ async function handleRegisterTeknisi(event) {
         return false;
     }
 
+    const localPayload = {
+        id: nextId(getData().users.teknisi, 'T'),
+        role: 'teknisi',
+        username: form.username,
+        name: form.name,
+        email: form.email,
+        phone: form.phone,
+        nik: form.nik,
+        specialization: form.specialization,
+        status: 'Aktif',
+        completedJobs: 0,
+        birthDate: form.birthDate,
+        age: form.age ? Number(form.age) : null,
+        experience: form.experience,
+        address: form.address,
+        lat: form.lat,
+        lng: form.lng,
+        ktpPhoto: draftUploads.regTekKtpPhoto,
+        selfiePhoto: draftUploads.regTekSelfiePhoto,
+        joinedAt: new Date().toISOString(),
+        password: form.password
+    };
+
     try {
         const authUser = await registerTeknisiSupabase(form);
         const user = applySupabaseSession({
-            id: authUser.id,
-            role: 'teknisi',
-            username: form.username,
-            name: form.name,
-            email: form.email,
-            phone: form.phone,
-            nik: form.nik,
-            specialization: form.specialization,
-            status: 'Aktif',
-            completedJobs: 0,
-            birthDate: form.birthDate,
-            age: form.age ? Number(form.age) : null,
-            experience: form.experience,
-            address: form.address,
-            lat: form.lat,
-            lng: form.lng,
-            ktpPhoto: draftUploads.regTekKtpPhoto,
-            selfiePhoto: draftUploads.regTekSelfiePhoto,
-            joinedAt: new Date().toISOString(),
-            password: form.password
+            ...localPayload,
+            id: authUser.id
         });
 
         document.getElementById('formRegTeknisi').reset();
@@ -1671,15 +1832,34 @@ async function handleRegisterTeknisi(event) {
         showToast(`Akun teknisi ${user?.name || form.name} berhasil dibuat.`, 'success');
     } catch (error) {
         console.error('Registrasi teknisi Supabase gagal:', error);
-        showToast(error?.message || 'Registrasi teknisi gagal.', 'error');
+        if (!shouldFallbackToLocalAuth(error)) {
+            showToast(error?.message || 'Registrasi teknisi gagal.', 'error');
+            return false;
+        }
+
+        const user = applyLocalSession(localPayload);
+        document.getElementById('formRegTeknisi').reset();
+        draftUploads.regTekKtpPhoto = '';
+        draftUploads.regTekSelfiePhoto = '';
+        draftUploads.ocrLastResult = null;
+        document.getElementById('regTekIDPreview').innerHTML = '';
+        document.getElementById('regTekSelfiePreview').innerHTML = '';
+        showTeknisiDashboard();
+        showToast(`Akun teknisi ${user?.name || form.name} tersimpan lokal. Sinkronisasi cloud akan aktif saat Supabase siap.`, 'warning');
     }
 
     return false;
 }
 
 async function createOrderSupabase(orderValues) {
-    const user = await getCurrentAuthUser();
+    const user = getCurrentUser();
     if (!user) throw new Error('User belum login');
+    if (!canUseSupabase()) {
+        return {
+            synced: false,
+            reason: 'Supabase client belum siap.'
+        };
+    }
 
     const { error } = await supabaseClient
         .from('orders')
@@ -1698,12 +1878,25 @@ async function createOrderSupabase(orderValues) {
             status: 'Menunggu'
         });
 
-    if (error) throw error;
+    if (error) {
+        return {
+            synced: false,
+            reason: error.message || 'Gagal sinkron ke Supabase.'
+        };
+    }
+
+    return {
+        synced: true
+    };
 }
 
 async function handleOrderSubmit(event) {
     event.preventDefault();
     const user = getCurrentUser();
+    if (!user) {
+        showToast('Session Anda sudah berakhir. Silakan login kembali.', 'warning');
+        return false;
+    }
     const service = getServices(false).find((item) => item.id === document.getElementById('orderService').value);
     if (!service) {
         showToast('Pilih layanan terlebih dahulu.', 'error');
@@ -1721,7 +1914,7 @@ async function handleOrderSubmit(event) {
         preferredDate: document.getElementById('orderDate').value,
         address: document.getElementById('orderAddress').value.trim(),
         notes: document.getElementById('orderNotes').value.trim(),
-        phone: document.getElementById('orderPhone').value.trim(),
+        phone: normalizePhone(document.getElementById('orderPhone').value),
         konsumenId: user.id,
         konsumenName: user.name,
         teknisiId: null,
@@ -1730,27 +1923,35 @@ async function handleOrderSubmit(event) {
         status: 'Menunggu',
         createdAt: new Date().toISOString()
     };
-    try {
-        await createOrderSupabase({
-            service_id: service.id,
-            service_name: service.name,
-            price: service.price,
-            brand: order.brand,
-            pk: order.pk,
-            refrigerant: order.refrigerant,
-            preferred_date: order.preferredDate,
-            address: order.address,
-            notes: order.notes,
-            phone: order.phone
-        });
-        data.orders.push(order);
-        saveData(data);
-        document.getElementById('formOrder').reset();
-        navigateTo('konsumen-home');
-        showToast(`Pesanan ${order.id} berhasil dibuat.`, 'success');
-    } catch (error) {
+    const remoteResult = await createOrderSupabase({
+        service_id: service.id,
+        service_name: service.name,
+        price: service.price,
+        brand: order.brand,
+        pk: order.pk,
+        refrigerant: order.refrigerant,
+        preferred_date: order.preferredDate,
+        address: order.address,
+        notes: order.notes,
+        phone: order.phone
+    }).catch((error) => {
         console.error('Gagal menyimpan order ke Supabase:', error);
-        showToast(error?.message || 'Pesanan gagal disimpan.', 'error');
+        return {
+            synced: false,
+            reason: error?.message || 'Sinkronisasi cloud gagal.'
+        };
+    });
+
+    data.orders.push({
+        ...order,
+        syncStatus: remoteResult?.synced ? 'synced' : 'local-only'
+    });
+    saveData(data);
+    document.getElementById('formOrder').reset();
+    navigateTo('konsumen-home');
+    showToast(`Pesanan ${order.id} berhasil dibuat.`, 'success');
+    if (remoteResult && !remoteResult.synced) {
+        showToast(`Pesanan disimpan lokal. Sinkronisasi cloud tertunda: ${remoteResult.reason}`, 'warning');
     }
 
     return false;
@@ -1781,8 +1982,8 @@ function saveProfile(role) {
             name: document.getElementById('profileKonsumenName').value.trim(),
             username,
             password: document.getElementById('profileKonsumenPassword').value,
-            email: document.getElementById('profileKonsumenEmail').value.trim(),
-            phone: document.getElementById('profileKonsumenPhone').value.trim(),
+            email: normalizeEmail(document.getElementById('profileKonsumenEmail').value),
+            phone: normalizePhone(document.getElementById('profileKonsumenPhone').value),
             birthDate: document.getElementById('profileKonsumenBirthDate').value,
             address: document.getElementById('profileKonsumenAddress').value.trim()
         });
@@ -1799,8 +2000,8 @@ function saveProfile(role) {
             name: document.getElementById('profileTeknisiName').value.trim(),
             username,
             password: document.getElementById('profileTeknisiPassword').value,
-            email: document.getElementById('profileTeknisiEmail').value.trim(),
-            phone: document.getElementById('profileTeknisiPhone').value.trim(),
+            email: normalizeEmail(document.getElementById('profileTeknisiEmail').value),
+            phone: normalizePhone(document.getElementById('profileTeknisiPhone').value),
             nik: document.getElementById('profileTeknisiNIK').value.trim(),
             birthDate: document.getElementById('profileTeknisiBirthDate').value,
             specialization: document.getElementById('profileTeknisiSpecialization').value,
@@ -1899,8 +2100,8 @@ function saveEditKonsumen() {
         name: document.getElementById('editKonsumenName').value.trim(),
         username,
         password: document.getElementById('editKonsumenPassword').value,
-        email: document.getElementById('editKonsumenEmail').value.trim(),
-        phone: document.getElementById('editKonsumenPhone').value.trim(),
+        email: normalizeEmail(document.getElementById('editKonsumenEmail').value),
+        phone: normalizePhone(document.getElementById('editKonsumenPhone').value),
         birthDate: document.getElementById('editKonsumenBirthDate').value,
         address: document.getElementById('editKonsumenAddress').value.trim()
     });
@@ -1951,8 +2152,8 @@ function saveEditTeknisi() {
         name: document.getElementById('editTeknisiName').value.trim(),
         username,
         password: document.getElementById('editTeknisiPassword').value,
-        email: document.getElementById('editTeknisiEmail').value.trim(),
-        phone: document.getElementById('editTeknisiPhone').value.trim(),
+        email: normalizeEmail(document.getElementById('editTeknisiEmail').value),
+        phone: normalizePhone(document.getElementById('editTeknisiPhone').value),
         nik: document.getElementById('editTeknisiNIK').value.trim(),
         birthDate: document.getElementById('editTeknisiBirthDate').value,
         specialization: document.getElementById('editTeknisiSpecialization').value,
@@ -2397,11 +2598,11 @@ async function runTechnicianKtpOcr() {
 }
 
 function initDomEvents() {
-    document.getElementById('btnLogout').addEventListener('click', () => logoutUser());
-    document.getElementById('serviceFormImageFile').addEventListener('change', handleServiceImageUpload);
-    document.getElementById('imageCatalogFormFile').addEventListener('change', handleImageCatalogUpload);
-    document.getElementById('formKonsumenProfile').addEventListener('input', () => handleProfileFormInput('konsumen'));
-    document.getElementById('formTeknisiProfile').addEventListener('input', () => handleProfileFormInput('teknisi'));
+    document.getElementById('btnLogout')?.addEventListener('click', () => logoutUser());
+    document.getElementById('serviceFormImageFile')?.addEventListener('change', handleServiceImageUpload);
+    document.getElementById('imageCatalogFormFile')?.addEventListener('change', handleImageCatalogUpload);
+    document.getElementById('formKonsumenProfile')?.addEventListener('input', () => handleProfileFormInput('konsumen'));
+    document.getElementById('formTeknisiProfile')?.addEventListener('input', () => handleProfileFormInput('teknisi'));
 }
 
 function handleStorageSync(event) {
@@ -2419,14 +2620,6 @@ function purgeLegacyKonsumenTeknisiCache() {
     const data = getData();
     if (data.appSettings?.konsumenTeknisiPurgedAt) return;
 
-    data.users.konsumen = [];
-    data.users.teknisi = [];
-    data.orders = [];
-
-    if (['konsumen', 'teknisi'].includes(data.currentSession?.role)) {
-        data.currentSession = null;
-    }
-
     data.appSettings = {
         ...(data.appSettings || {}),
         konsumenTeknisiPurgedAt: new Date().toISOString()
@@ -2436,6 +2629,7 @@ function purgeLegacyKonsumenTeknisiCache() {
 }
 
 async function logoutSupabase() {
+    if (!canUseSupabase()) return;
     const { error } = await supabaseClient.auth.signOut();
     if (error) {
         console.error('Gagal logout:', error);
@@ -2443,6 +2637,7 @@ async function logoutSupabase() {
 }
 
 async function restoreSession() {
+    if (!canUseSupabase()) return false;
     const { data, error } = await supabaseClient.auth.getSession();
     if (error) {
         console.error(error);
@@ -2455,20 +2650,20 @@ async function restoreSession() {
     if (!profile) return false;
 
     if (profile.role === 'admin' && canAccessAdmin()) {
-        applySupabaseSession(profile, { password: '' });
-        showAdminDashboard();
+        applySupabaseSession(profile);
+        showDashboardForRole('admin');
         return true;
     }
 
     if (profile.role === 'konsumen') {
-        applySupabaseSession(profile, { password: '' });
-        showKonsumenDashboard();
+        applySupabaseSession(profile);
+        showDashboardForRole('konsumen');
         return true;
     }
 
     if (profile.role === 'teknisi') {
-        applySupabaseSession(profile, { password: '' });
-        showTeknisiDashboard();
+        applySupabaseSession(profile);
+        showDashboardForRole('teknisi');
         return true;
     }
 
