@@ -125,7 +125,7 @@
             <div class="card form-card login-form-card">
                 <div class="page-header login-header">
                     <h2>Masuk ke Dashboard</h2>
-                    <p id="loginRoleDescription">Gunakan email dan password akun Anda. Role akan ditentukan otomatis dari profil Supabase yang aktif.</p>
+                    <p id="loginRoleDescription">Gunakan email, username, atau nomor telepon beserta password akun Anda. Role akan diverifikasi dari profil Supabase yang sah.</p>
                 </div>
                 <div class="tabs login-role-tabs">
                     <button type="button" class="tab active" id="loginRoleTab-konsumen" aria-selected="true" onclick="switchLoginRole('konsumen', this)">Konsumen</button>
@@ -139,9 +139,9 @@
                     <input type="hidden" id="loginRole" value="konsumen">
                     <div class="form-grid login-form-grid">
                         <div class="form-group full-width">
-                            <label for="loginIdentifier" id="loginIdentifierLabel">Email atau No. Telepon <span class="required">*</span></label>
-                            <input type="text" id="loginIdentifier" autocomplete="username" inputmode="email" required placeholder="Masukkan email atau nomor telepon Anda">
-                            <p class="text-muted text-sm login-identifier-help" id="loginIdentifierHelp">Konsumen bisa masuk memakai email atau nomor telepon yang terdaftar.</p>
+                            <label for="loginIdentifier" id="loginIdentifierLabel">Email, Username, atau No. Telepon <span class="required">*</span></label>
+                            <input type="text" id="loginIdentifier" autocomplete="username" inputmode="email" required placeholder="Masukkan email, username, atau nomor telepon Anda">
+                            <p class="text-muted text-sm login-identifier-help" id="loginIdentifierHelp">Anda bisa masuk memakai email, username, atau nomor telepon yang terdaftar.</p>
                         </div>
                         <div class="form-group full-width">
                             <label for="loginPassword">Password <span class="required">*</span></label>
@@ -153,17 +153,6 @@
                         <button type="submit" class="btn btn-primary btn-lg btn-glow">Masuk</button>
                     </div>
                 </form>
-                <div class="verification-help-card" id="verificationHelpCard" hidden>
-                    <div class="verification-help-copy">
-                        <h3>Email verifikasi belum masuk?</h3>
-                        <p id="verificationHelpText">Jika link verifikasi sebelumnya kedaluwarsa, Anda bisa mengirim ulang verifikasi ke email ini.</p>
-                        <p class="verification-help-email">Target email: <strong id="verificationHelpEmail">-</strong></p>
-                    </div>
-                    <div class="verification-help-actions">
-                        <button type="button" class="btn btn-outline btn-sm" id="btnResendVerification">Kirim Ulang Email Verifikasi</button>
-                        <p class="verification-help-status" id="verificationHelpStatus"></p>
-                    </div>
-                </div>
                 <div class="credential-grid" id="defaultAccountList"></div>
                 <div class="landing-session-notice" id="landingSessionNotice" style="display:none;"></div>
             </div>
@@ -420,7 +409,7 @@
                             </div>
                         </div>
                         <div class="upload-preview-grid" id="regKonUnitPreview"></div>
-                        <p class="text-muted text-sm upload-helper-note">Jika sesi login langsung aktif, foto akan dikirim ke Supabase Storage saat pendaftaran selesai. Jika project menahan sesi sampai email terverifikasi, upload final dilakukan setelah login terkonfirmasi.</p>
+                        <p class="text-muted text-sm upload-helper-note">Foto unit akan dikirim aman ke Supabase Storage selama proses pendaftaran, lalu akun tetap menunggu verifikasi manual admin sebelum dashboard aktif bisa dipakai.</p>
                     </div>
 
                     <div class="form-actions">
@@ -450,8 +439,8 @@
                             <input type="password" id="regTekPassword" required placeholder="Password akun">
                         </div>
                         <div class="form-group">
-                            <label for="regTekEmail">Email <span class="required">*</span></label>
-                            <input type="email" id="regTekEmail" required placeholder="email@contoh.com">
+                            <label for="regTekEmail">Email <span class="text-muted">(Opsional)</span></label>
+                            <input type="email" id="regTekEmail" placeholder="email@contoh.com">
                         </div>
                         <div class="form-group">
                             <label for="regTekPhone">No. Telepon / WhatsApp <span class="required">*</span></label>
@@ -535,7 +524,7 @@
                             </div>
                         </div>
                         <div class="upload-preview-grid" id="regTekIDPreview" role="list"></div>
-                        <p class="text-muted text-sm upload-helper-note">Dokumen sensitif hanya dikirim ke Supabase Storage lewat sesi login yang sah. Jika email confirmation menunda sesi, dokumen perlu dilanjutkan setelah login terverifikasi.</p>
+                        <p class="text-muted text-sm upload-helper-note">Dokumen sensitif dikirim aman ke Supabase Storage selama proses pendaftaran, lalu akun akan menunggu verifikasi manual admin sebelum bisa dipakai login aktif.</p>
                         <div class="ocr-panel" id="ocrPanel" data-ocr-panel="true">
                             <div class="ocr-status" id="ocrStatus" aria-live="polite">OCR siap digunakan setelah foto KTP diunggah.</div>
                             <div class="ocr-progress" id="ocrProgress" aria-live="polite"></div>
@@ -853,9 +842,12 @@
                     <div class="card-subtle profile-security-card">
                         <div>
                             <h3>Keamanan Akun</h3>
-                            <p class="text-muted text-sm">Ubah sandi lewat verifikasi aman Supabase. Jika akun Anda punya email pemulihan, kode akan dikirim ke sana.</p>
+                            <p class="text-muted text-sm">Perubahan sandi dan email verifikasi diproses terpisah dari verifikasi admin akun. Jika akun belum punya email verifikasi yang valid, Anda akan diminta menambahkannya terlebih dahulu.</p>
                         </div>
-                        <button type="button" class="btn btn-outline btn-sm" onclick="openChangePasswordModal('profile')">Ubah Sandi</button>
+                        <div class="btn-action-group">
+                            <button type="button" class="btn btn-outline btn-sm" onclick="openSensitiveEmailModal()">Kelola Email Verifikasi</button>
+                            <button type="button" class="btn btn-outline btn-sm" onclick="openChangePasswordModal('profile')">Ubah Sandi</button>
+                        </div>
                     </div>
                 </div>
             </section>
@@ -1033,9 +1025,12 @@
                     <div class="card-subtle profile-security-card">
                         <div>
                             <h3>Keamanan Akun</h3>
-                            <p class="text-muted text-sm">Ubah sandi lewat verifikasi aman Supabase. Kode verifikasi akan dikirim ke email akun yang aktif.</p>
+                            <p class="text-muted text-sm">Perubahan sandi dan email verifikasi diproses terpisah dari verifikasi admin akun. Jika akun belum punya email verifikasi yang valid, Anda akan diminta menambahkannya terlebih dahulu.</p>
                         </div>
-                        <button type="button" class="btn btn-outline btn-sm" onclick="openChangePasswordModal('profile')">Ubah Sandi</button>
+                        <div class="btn-action-group">
+                            <button type="button" class="btn btn-outline btn-sm" onclick="openSensitiveEmailModal()">Kelola Email Verifikasi</button>
+                            <button type="button" class="btn btn-outline btn-sm" onclick="openChangePasswordModal('profile')">Ubah Sandi</button>
+                        </div>
                     </div>
                 </div>
             </section>
@@ -1272,6 +1267,7 @@
 
                 <div class="card" id="adminUserKonsumenCard">
                     <div class="card-header"><h3>Daftar Konsumen</h3></div>
+                    <p class="text-muted text-sm">Akun baru default berstatus Menunggu Verifikasi sampai admin approve.</p>
                     <div class="table-responsive">
                         <table class="data-table">
                             <thead>
@@ -1283,12 +1279,13 @@
                                     <th>Usia</th>
                                     <th>Alamat</th>
                                     <th>Status</th>
+                                    <th>Verifikasi Admin</th>
                                     <th>Total Pesanan</th>
                                     <th>Aksi</th>
                                 </tr>
                             </thead>
                             <tbody id="adminKonsumenListBody">
-                                <tr><td colspan="9" class="empty-state">Tidak ada data</td></tr>
+                                <tr><td colspan="10" class="empty-state">Tidak ada data</td></tr>
                             </tbody>
                         </table>
                     </div>
@@ -1296,6 +1293,7 @@
 
                 <div class="card" id="adminUserTeknisiCard" style="display:none;">
                     <div class="card-header"><h3>Daftar Teknisi</h3></div>
+                    <p class="text-muted text-sm">Admin dapat approve, tolak, atau nonaktifkan teknisi tanpa bergantung pada verifikasi email register.</p>
                     <div class="table-responsive">
                         <table class="data-table">
                             <thead>
@@ -1307,12 +1305,13 @@
                                     <th>NIK</th>
                                     <th>Spesialisasi</th>
                                     <th>Status</th>
+                                    <th>Verifikasi Admin</th>
                                     <th>Tugas Selesai</th>
                                     <th>Aksi</th>
                                 </tr>
                             </thead>
                             <tbody id="adminTeknisiListBody">
-                                <tr><td colspan="9" class="empty-state">Tidak ada data</td></tr>
+                                <tr><td colspan="10" class="empty-state">Tidak ada data</td></tr>
                             </tbody>
                         </table>
                     </div>
@@ -1495,6 +1494,15 @@
                             <label for="editKonsumenAge">Usia</label>
                             <input type="number" id="editKonsumenAge" readonly>
                         </div>
+                        <div class="form-group">
+                            <label for="editKonsumenStatus">Status</label>
+                            <select id="editKonsumenStatus">
+                                <option value="Menunggu Verifikasi">Menunggu Verifikasi</option>
+                                <option value="Aktif">Aktif</option>
+                                <option value="Ditolak">Ditolak</option>
+                                <option value="Nonaktif">Nonaktif</option>
+                            </select>
+                        </div>
                         <div class="form-group full-width">
                             <label for="editKonsumenAddress">Alamat</label>
                             <textarea id="editKonsumenAddress" rows="3"></textarea>
@@ -1563,7 +1571,9 @@
                         <div class="form-group">
                             <label for="editTeknisiStatus">Status</label>
                             <select id="editTeknisiStatus">
+                                <option value="Menunggu Verifikasi">Menunggu Verifikasi</option>
                                 <option value="Aktif">Aktif</option>
+                                <option value="Ditolak">Ditolak</option>
                                 <option value="Nonaktif">Nonaktif</option>
                             </select>
                         </div>
@@ -1768,16 +1778,44 @@
             </div>
             <form id="formPasswordReset" onsubmit="return handlePasswordResetRequest(event)">
                 <div class="modal-body">
-                    <p class="text-muted" id="passwordResetIntro">Masukkan email akun Anda untuk menerima tautan reset password yang aman.</p>
+                    <p class="text-muted" id="passwordResetIntro">Masukkan email, username, atau nomor telepon akun Anda. Jika akun memiliki email verifikasi aktif, instruksi reset akan dikirim secara aman.</p>
                     <div class="form-group">
-                        <label for="passwordResetIdentifier" id="passwordResetIdentifierLabel">Email</label>
+                        <label for="passwordResetIdentifier" id="passwordResetIdentifierLabel">Email, Username, atau No. Telepon</label>
                         <input type="text" id="passwordResetIdentifier" autocomplete="username" placeholder="email@contoh.com">
                     </div>
-                    <p class="text-muted text-sm" id="passwordResetHelp">Jika akun ditemukan dan memiliki kanal pemulihan yang aktif, tautan reset akan dikirim. Untuk akun konsumen tanpa email, hubungi CS agar sandi direset manual.</p>
+                    <p class="text-muted text-sm" id="passwordResetHelp">Jika akun ditemukan dan memiliki email verifikasi aktif, instruksi reset akan dikirim. Akun tanpa email verifikasi yang aktif perlu menambahkan email terlebih dahulu setelah login atau menghubungi admin/CS.</p>
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-outline" onclick="closeModal('modalPasswordReset')">Tutup</button>
-                    <button type="submit" class="btn btn-primary">Kirim Tautan Reset</button>
+                    <button type="submit" class="btn btn-primary">Kirim Instruksi Reset</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="modalSensitiveEmail" style="display:none;">
+        <div class="modal">
+            <div class="modal-header">
+                <h3 id="sensitiveEmailTitle">Kelola Email Verifikasi</h3>
+                <button type="button" class="modal-close" onclick="closeModal('modalSensitiveEmail')">&times;</button>
+            </div>
+            <form id="formSensitiveEmail" onsubmit="return handleSensitiveEmailSubmit(event)">
+                <div class="modal-body">
+                    <p class="text-muted" id="sensitiveEmailIntro">Tambahkan atau ubah email verifikasi untuk perubahan sandi dan data akun sensitif.</p>
+                    <div class="form-group">
+                        <label for="sensitiveEmailCurrent">Email verifikasi saat ini</label>
+                        <input type="email" id="sensitiveEmailCurrent" readonly placeholder="Belum ada email verifikasi aktif">
+                    </div>
+                    <div class="form-group">
+                        <label for="sensitiveEmailNext">Email verifikasi baru <span class="required">*</span></label>
+                        <input type="email" id="sensitiveEmailNext" required placeholder="email@contoh.com">
+                    </div>
+                    <p class="text-muted text-sm" id="sensitiveEmailHelp">Perubahan email verifikasi akan memakai jalur aman Supabase. Jika project masih mengharuskan konfirmasi ke email lama yang tidak lagi bisa diakses, admin perlu membantu aktivasi email pertama lewat backend.</p>
+                    <p class="text-muted text-sm" id="sensitiveEmailStatus">Belum ada permintaan perubahan email.</p>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline" onclick="closeModal('modalSensitiveEmail')">Batal</button>
+                    <button type="submit" class="btn btn-primary" id="btnSubmitSensitiveEmail">Kirim Verifikasi Email</button>
                 </div>
             </form>
         </div>
@@ -1793,7 +1831,7 @@
                 <div class="modal-body">
                     <p class="text-muted" id="changePasswordIntro">Masukkan sandi baru Anda. Untuk sesi login biasa, kirim kode verifikasi terlebih dahulu.</p>
                     <div class="card-subtle" id="changePasswordVerificationCard">
-                        <p class="text-muted text-sm" id="changePasswordVerificationHelp">Klik tombol di bawah untuk mengirim kode verifikasi ganti sandi lewat Supabase Auth ke kanal pemulihan akun yang aktif.</p>
+                        <p class="text-muted text-sm" id="changePasswordVerificationHelp">Klik tombol di bawah untuk mengirim kode verifikasi ganti sandi lewat Supabase Auth ke email verifikasi akun yang aktif.</p>
                         <div class="form-actions">
                             <button type="button" class="btn btn-outline btn-sm" id="btnSendPasswordChangeCode">Kirim Kode Verifikasi</button>
                         </div>
@@ -1825,6 +1863,9 @@
 
     <script>
         window.INDOSEJUK_RUNTIME_CONFIG = Object.assign({
+            auth: {
+                emailDomain: 'auth.indosejuk.local'
+            },
             storage: {
                 publicBucket: 'app-public-uploads',
                 privateBucket: 'app-private-documents'

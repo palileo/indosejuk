@@ -18,9 +18,12 @@ const SERVICE_WORKER_URL = './sw.js';
 const DEFAULT_ADMIN_WHATSAPP = '08970788800';
 const PROFILE_STATUS_PENDING = 'Menunggu Verifikasi';
 const PROFILE_STATUS_ACTIVE = 'Aktif';
+const PROFILE_STATUS_REJECTED = 'Ditolak';
+const PROFILE_STATUS_DISABLED = 'Nonaktif';
 const PROFILE_SCHEMA_DRIFT_CACHE_KEY = 'indoSejukProfileSchemaDrift';
 const PROFILE_SCHEMA_DRIFT_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
-const PENDING_VERIFICATION_EMAIL_KEY = 'indoSejukPendingVerificationEmail';
+const DEFAULT_AUTH_EMAIL_DOMAIN = 'auth.indosejuk.local';
+const SYNTHETIC_AUTH_EMAIL_SUFFIX = '.indosejuk.local';
 const DEFAULT_PUBLIC_UPLOAD_BUCKET = 'app-public-uploads';
 const DEFAULT_PRIVATE_DOCUMENT_BUCKET = 'app-private-documents';
 const MAX_IMAGE_UPLOAD_BYTES = 8 * 1024 * 1024;
@@ -69,13 +72,16 @@ const OPTIONAL_ORDER_COLUMNS = new Set([
     'proof_image_url'
 ]);
 const REMOTE_SYNC_FUNCTION_NAME = 'sync-user-to-github';
-const RESEND_VERIFICATION_COOLDOWN_MS = 60 * 1000;
-const PASSWORD_RESET_GENERIC_SUCCESS_MESSAGE = 'Jika akun ditemukan dan memiliki kanal pemulihan yang aktif, tautan reset sudah dikirim. Untuk akun konsumen tanpa email, hubungi CS agar sandi direset manual.';
+const PASSWORD_RESET_GENERIC_SUCCESS_MESSAGE = 'Jika akun ditemukan dan memiliki email verifikasi aktif, instruksi reset sudah dikirim.';
 
 const appRuntimeConfig = (() => {
     const source = window.INDOSEJUK_RUNTIME_CONFIG || {};
     const storage = source.storage || {};
+    const auth = source.auth || {};
     return {
+        auth: {
+            emailDomain: String(auth.emailDomain || DEFAULT_AUTH_EMAIL_DOMAIN).trim().toLowerCase() || DEFAULT_AUTH_EMAIL_DOMAIN
+        },
         storage: {
             publicBucket: String(storage.publicBucket || DEFAULT_PUBLIC_UPLOAD_BUCKET).trim() || DEFAULT_PUBLIC_UPLOAD_BUCKET,
             privateBucket: String(storage.privateBucket || DEFAULT_PRIVATE_DOCUMENT_BUCKET).trim() || DEFAULT_PRIVATE_DOCUMENT_BUCKET
@@ -130,18 +136,16 @@ const runtimeState = {
     serviceWorkerRegistrationPromise: null,
     connectionBannerTimer: null,
     activeViewRenderToken: 0,
-    resendVerificationInFlight: false,
-    resendVerificationCooldownUntil: 0,
-    resendVerificationTimer: null,
-    pendingVerificationEmail: '',
     signedImageUrlCache: {},
     uploadLocks: {},
     storageIssues: {},
+    registrationSessionActive: false,
     changePasswordMode: 'profile',
     changePasswordSubmitting: false,
     changePasswordCodeSending: false,
     changePasswordCodeSent: false,
-    passwordRecoveryActive: false
+    passwordRecoveryActive: false,
+    sensitiveEmailSubmitting: false
 };
 
 const ROLE_LABELS = {
@@ -507,8 +511,65 @@ function formatDisplayPhone(value) {
     return normalized || '-';
 }
 
+function getAuthEmailDomain() {
+    return appRuntimeConfig.auth.emailDomain || DEFAULT_AUTH_EMAIL_DOMAIN;
+}
+
+function isSyntheticAuthEmail(value) {
+    const normalized = normalizeEmail(value);
+    return Boolean(normalized) && (
+        normalized.endsWith(SYNTHETIC_AUTH_EMAIL_SUFFIX)
+        || normalized.endsWith(`@${getAuthEmailDomain()}`)
+    );
+}
+
+function normalizeProfileStatus(value) {
+    const normalized = String(value || '').trim().toLowerCase();
+    if (!normalized) return PROFILE_STATUS_PENDING;
+    if (normalized === PROFILE_STATUS_ACTIVE.toLowerCase()) return PROFILE_STATUS_ACTIVE;
+    if (normalized === PROFILE_STATUS_PENDING.toLowerCase()) return PROFILE_STATUS_PENDING;
+    if (normalized === PROFILE_STATUS_REJECTED.toLowerCase()) return PROFILE_STATUS_REJECTED;
+    if (normalized === PROFILE_STATUS_DISABLED.toLowerCase()) return PROFILE_STATUS_DISABLED;
+    return String(value || '').trim();
+}
+
 function isProfileApproved(profile) {
-    return String(profile?.status || '').trim().toLowerCase() === PROFILE_STATUS_ACTIVE.toLowerCase();
+    return normalizeProfileStatus(profile?.status) === PROFILE_STATUS_ACTIVE;
+}
+
+function isProfilePending(profile) {
+    return normalizeProfileStatus(profile?.status) === PROFILE_STATUS_PENDING;
+}
+
+function isProfileRejected(profile) {
+    return normalizeProfileStatus(profile?.status) === PROFILE_STATUS_REJECTED;
+}
+
+function isProfileDisabled(profile) {
+    return [PROFILE_STATUS_DISABLED, PROFILE_STATUS_REJECTED].includes(normalizeProfileStatus(profile?.status));
+}
+
+function getUsableVerificationEmail(profile = remoteState.profile, authUser = remoteState.user) {
+    const authEmail = normalizeEmail(authUser?.email || profile?.authEmail || profile?.auth_email || '');
+    if (authEmail && !isSyntheticAuthEmail(authEmail)) return authEmail;
+
+    const publicEmail = normalizeEmail(profile?.email || authUser?.user_metadata?.contact_email || '');
+    if (publicEmail && !isSyntheticAuthEmail(publicEmail)) return publicEmail;
+
+    return '';
+}
+
+function getProfileAccessBlockedMessage(profile = {}) {
+    if (isProfilePending(profile)) {
+        return 'Akun Anda masih Menunggu Verifikasi admin. Silakan tunggu persetujuan sebelum memakai dashboard aktif.';
+    }
+    if (isProfileRejected(profile)) {
+        return 'Akun Anda ditolak oleh admin. Hubungi admin atau CS Indo Sejuk AC untuk informasi lebih lanjut.';
+    }
+    if (normalizeProfileStatus(profile?.status) === PROFILE_STATUS_DISABLED) {
+        return 'Akun Anda sedang Nonaktif. Hubungi admin atau CS Indo Sejuk AC bila membutuhkan bantuan.';
+    }
+    return '';
 }
 
 function getMapsLink(lat, lng) {
@@ -574,8 +635,8 @@ function buildRegistrationWhatsAppMessage(role, formValues = {}) {
     const roleLabel = ROLE_LABELS[role] || role;
     const registeredAt = formValues.registeredAt || new Date().toISOString();
     const mapsLink = formValues.lat && formValues.lng ? getMapsLink(formValues.lat, formValues.lng) : '';
-    const emailVerificationStatus = formValues.emailVerificationStatus || 'Menunggu konfirmasi email';
-    const profileStatus = formValues.profileStatus || PROFILE_STATUS_ACTIVE;
+    const emailVerificationStatus = formValues.emailVerificationStatus || 'Tidak dipakai untuk aktivasi register';
+    const profileStatus = formValues.profileStatus || PROFILE_STATUS_PENDING;
 
     const commonLines = [
         `Pendaftaran ${roleLabel} baru Indo Sejuk AC.`,
@@ -589,7 +650,7 @@ function buildRegistrationWhatsAppMessage(role, formValues = {}) {
         `Lokasi teks: ${formValues.locationText || '-'}`,
         mapsLink ? `Google Maps: ${mapsLink}` : '',
         `Waktu pendaftaran: ${formatDateTime(registeredAt)}`,
-        `Status email: ${emailVerificationStatus}`,
+        `Status email verifikasi: ${emailVerificationStatus}`,
         `Status profile: ${profileStatus}`
     ];
 
@@ -775,40 +836,38 @@ function isEmailIdentifier(value) {
     return String(value || '').includes('@');
 }
 
-function normalizeLoginIdentifier(value, role = '') {
+function looksLikePhoneIdentifier(value) {
     const raw = String(value || '').trim();
     if (!raw) return '';
-    if (role === 'konsumen' && !isEmailIdentifier(raw)) {
-        return normalizePhone(raw);
-    }
-    return normalizeEmail(raw);
+    if (isEmailIdentifier(raw)) return false;
+    const digitsOnly = raw.replace(/\D/g, '');
+    if (digitsOnly.length < 8) return false;
+    return /^[+\d\s().-]+$/.test(raw);
+}
+
+function normalizeLoginIdentifier(value) {
+    const raw = String(value || '').trim();
+    if (!raw) return '';
+    if (isEmailIdentifier(raw)) return normalizeEmail(raw);
+    if (looksLikePhoneIdentifier(raw)) return normalizePhone(raw);
+    return raw.toLowerCase();
 }
 
 function getLoginUiConfig(role = 'konsumen') {
-    if (role === 'konsumen') {
-        return {
-            label: 'Email atau No. Telepon',
-            placeholder: 'Masukkan email atau nomor telepon Anda',
-            inputMode: 'email',
-            description: 'Konsumen bisa login memakai email atau nomor telepon. Role akan ditentukan otomatis dari profil Supabase yang aktif.',
-            help: 'Konsumen bisa masuk memakai email atau nomor telepon yang terdaftar.',
-            resetLabel: 'Email atau No. Telepon',
-            resetPlaceholder: 'Masukkan email atau nomor telepon konsumen',
-            resetIntro: 'Masukkan email atau nomor telepon akun konsumen untuk meminta reset sandi.',
-            resetHelp: 'Jika akun ditemukan dan memiliki email pemulihan yang aktif, tautan reset akan dikirim. Untuk akun konsumen tanpa email, hubungi CS agar sandi direset manual.'
-        };
-    }
-
     return {
-        label: 'Email',
-        placeholder: 'Masukkan email Anda',
+        label: 'Email, Username, atau No. Telepon',
+        placeholder: role === 'admin'
+            ? 'Masukkan email, username, atau nomor telepon admin'
+            : 'Masukkan email, username, atau nomor telepon Anda',
         inputMode: 'email',
-        description: 'Gunakan email dan password akun Anda. Role akan ditentukan otomatis dari profil Supabase yang aktif.',
-        help: 'Login memakai email akun yang terdaftar.',
-        resetLabel: 'Email',
-        resetPlaceholder: 'email@contoh.com',
-        resetIntro: 'Masukkan email akun Anda untuk menerima tautan reset password yang aman.',
-        resetHelp: 'Jika akun ditemukan dan memiliki kanal pemulihan yang aktif, tautan reset akan dikirim ke email tersebut.'
+        description: role === 'admin'
+            ? 'Gunakan email, username, atau nomor telepon admin. Role final tetap diverifikasi dari profil Supabase dan admin hanya aktif di localhost.'
+            : 'Gunakan email, username, atau nomor telepon beserta password akun Anda. Role final akan diverifikasi dari profil Supabase yang sah.',
+        help: 'Login menerima email, username, atau nomor telepon yang terdaftar.',
+        resetLabel: 'Email, Username, atau No. Telepon',
+        resetPlaceholder: 'Masukkan email, username, atau nomor telepon akun',
+        resetIntro: 'Masukkan email, username, atau nomor telepon akun Anda untuk meminta reset sandi dengan aman.',
+        resetHelp: 'Jika akun ditemukan dan memiliki email verifikasi aktif, instruksi reset akan dikirim tanpa membocorkan status akun.'
     };
 }
 
@@ -1577,7 +1636,7 @@ function normalizeUser(user, role, index = 0) {
         address: user?.address || user?.alamat || '',
         birthDate: user?.birthDate || user?.tanggalLahir || '',
         age: calculateAge(user?.birthDate || user?.tanggalLahir || '') || user?.age || '',
-        status: user?.status || 'Aktif',
+        status: normalizeProfileStatus(user?.status || PROFILE_STATUS_ACTIVE),
         joinedAt: user?.joinedAt || user?.joined || defaults.joinedAt || new Date().toISOString()
     };
 
@@ -1780,7 +1839,6 @@ function showLanding() {
     syncConnectionStatusBanner();
     renderDefaultAccountList();
     renderLandingSessionNotice();
-    syncResendVerificationUI();
 }
 
 function openAppLayout() {
@@ -1800,7 +1858,6 @@ function showRegisterPage() {
     setBodyAppMode('register');
     syncInstallPromptUI();
     syncConnectionStatusBanner();
-    syncResendVerificationUI();
     safeScrollTop({ force: true, behavior: 'auto' });
 }
 
@@ -2338,7 +2395,9 @@ async function handleTekDocUpload(event, type) {
 }
 
 async function finalizeSignupUploadsAfterSession(role) {
-    const profile = await requireAuthenticatedProfile(false);
+    const profile = runtimeState.registrationSessionActive
+        ? (remoteState.profile || await fetchCurrentProfileStrict().catch(() => null))
+        : await requireAuthenticatedProfile(false);
     if (!profile) return null;
 
     if (role === 'konsumen' && draftUploads.regKonUnitFiles.length) {
@@ -2451,6 +2510,7 @@ function openEditKonsumen(userId) {
     document.getElementById('editKonsumenPhone').value = user.phone || '';
     document.getElementById('editKonsumenBirthDate').value = user.birthDate || '';
     document.getElementById('editKonsumenAge').value = user.age || '';
+    document.getElementById('editKonsumenStatus').value = user.status || PROFILE_STATUS_PENDING;
     document.getElementById('editKonsumenAddress').value = user.address || '';
     document.getElementById('modalEditKonsumen').style.display = 'flex';
 }
@@ -2466,6 +2526,7 @@ async function saveEditKonsumen() {
         return;
     }
     try {
+        const nextStatus = normalizeProfileStatus(document.getElementById('editKonsumenStatus').value);
         await updateProfileByAdmin(user.id, validateProfilePayloadForRole('konsumen', {
             id: user.id,
             role: 'konsumen',
@@ -2480,7 +2541,9 @@ async function saveEditKonsumen() {
             location_text: user.locationText,
             lat: user.lat,
             lng: user.lng,
-            status: user.status
+            status: nextStatus,
+            verified_at: nextStatus === PROFILE_STATUS_ACTIVE ? (user.verifiedAt || new Date().toISOString()) : user.verifiedAt,
+            verified_by: nextStatus === PROFILE_STATUS_ACTIVE ? (user.verifiedBy || remoteState.profile?.id || '') : user.verifiedBy
         }));
         await loadAdminMasterData();
         closeModal('modalEditKonsumen');
@@ -2508,7 +2571,7 @@ function openEditTeknisi(userId) {
     document.getElementById('editTeknisiBirthDate').value = user.birthDate || '';
     document.getElementById('editTeknisiAge').value = user.age || '';
     document.getElementById('editTeknisiExperience').value = user.experience || 0;
-    document.getElementById('editTeknisiStatus').value = user.status || 'Aktif';
+    document.getElementById('editTeknisiStatus').value = user.status || PROFILE_STATUS_PENDING;
     document.getElementById('editTeknisiAddress').value = user.address || '';
     document.getElementById('modalEditTeknisi').style.display = 'flex';
 }
@@ -2524,6 +2587,7 @@ async function saveEditTeknisi() {
         return;
     }
     try {
+        const nextStatus = normalizeProfileStatus(document.getElementById('editTeknisiStatus').value);
         await updateProfileByAdmin(user.id, validateProfilePayloadForRole('teknisi', {
             id: user.id,
             role: 'teknisi',
@@ -2540,7 +2604,9 @@ async function saveEditTeknisi() {
             location_text: user.locationText,
             lat: user.lat,
             lng: user.lng,
-            status: document.getElementById('editTeknisiStatus').value
+            status: nextStatus,
+            verified_at: nextStatus === PROFILE_STATUS_ACTIVE ? (user.verifiedAt || new Date().toISOString()) : user.verifiedAt,
+            verified_by: nextStatus === PROFILE_STATUS_ACTIVE ? (user.verifiedBy || remoteState.profile?.id || '') : user.verifiedBy
         }));
         await loadAdminMasterData();
         closeModal('modalEditTeknisi');
@@ -3237,162 +3303,29 @@ function toUserFacingError(error, fallback = 'Terjadi kesalahan.') {
     const normalized = message.toLowerCase();
     const missingColumn = extractMissingColumnName(error);
 
-    if (normalized.includes('invalid login credentials')) return 'Email atau password salah.';
-    if (normalized.includes('nomor telepon atau password salah')) return 'Nomor telepon atau password salah.';
-    if (normalized.includes('email not confirmed')) return 'Email belum dikonfirmasi. Cek inbox Anda lalu login kembali.';
+    if (normalized.includes('invalid login credentials')) return 'Login gagal. Periksa identifier dan password Anda.';
+    if (normalized.includes('email, username, atau no. telepon')) return 'Masukkan email, username, atau nomor telepon yang valid.';
+    if (normalized.includes('email not confirmed')) return 'Alur register tidak lagi memakai konfirmasi email. Jika ini muncul, cek deployment auth/backend terbaru.';
     if (normalized.includes('user already registered')) return 'Email sudah terdaftar. Silakan login langsung.';
     if (normalized.includes('email rate limit exceeded') || normalized.includes('over_email_send_rate_limit')) return 'Tunggu sebentar sebelum meminta email verifikasi lagi.';
     if (normalized.includes('429')) return 'Terlalu banyak permintaan. Tunggu sebentar lalu coba lagi.';
     if (normalized.includes('duplicate key') && normalized.includes('username')) return 'Username sudah digunakan akun lain.';
-    if (normalized.includes('duplicate key') && normalized.includes('phone')) return 'Nomor telepon konsumen sudah digunakan akun lain.';
+    if (normalized.includes('duplicate key') && normalized.includes('phone')) return 'Nomor telepon sudah digunakan akun lain pada role yang sama.';
     if (normalized.includes('violates row-level security')) return 'Policy Supabase untuk profile/order belum sesuai. Jalankan SQL final di README lalu coba lagi.';
     if (normalized.includes('mime') || normalized.includes('content type')) return 'Format file belum sesuai. Gunakan JPG, PNG, WEBP, HEIC, atau HEIF.';
     if (normalized.includes('payload too large') || normalized.includes('file too large')) return 'Ukuran file terlalu besar. Maksimal 8 MB per gambar.';
     if (normalized.includes('bucket storage "') || normalized.includes('bucket not found')) return 'Konfigurasi bucket storage belum cocok. Jalankan migrasi storage Supabase atau sesuaikan `window.INDOSEJUK_RUNTIME_CONFIG.storage` agar nama bucket sinkron.';
     if (normalized.includes('password should be at least')) return `Password minimal ${PASSWORD_MIN_LENGTH} karakter.`;
     if (normalized.includes('same password')) return 'Sandi baru harus berbeda dari sandi sebelumnya.';
-    if (normalized.includes('reauthentication') || normalized.includes('nonce')) return 'Kode verifikasi ganti sandi tidak valid atau sudah kedaluwarsa. Kirim ulang kode lalu coba lagi.';
+    if (normalized.includes('reauthentication') || normalized.includes('nonce')) return 'Kode verifikasi perubahan sandi tidak valid atau sudah kedaluwarsa. Kirim ulang kode lalu coba lagi.';
+    if (normalized.includes('menunggu verifikasi')) return 'Akun Anda masih Menunggu Verifikasi admin.';
+    if (normalized.includes('nonaktif')) return 'Akun Anda sedang Nonaktif.';
+    if (normalized.includes('ditolak')) return 'Akun Anda ditolak oleh admin.';
     if (missingColumn && OPTIONAL_PROFILE_COLUMN_SET.has(missingColumn)) {
         return 'Struktur profile Supabase sedang menyesuaikan schema. Aplikasi akan lanjut memakai fallback aman dan data inti tetap bisa dipakai.';
     }
-    if (normalized.includes('menunggu verifikasi admin')) return 'Status profile lama masih pending. Setelah email confirmed, app akan mengaktifkan profile publik otomatis.';
 
     return message || fallback;
-}
-
-function setPendingVerificationEmail(email = '') {
-    const normalized = isEmailIdentifier(email) ? normalizeEmail(email) : '';
-    runtimeState.pendingVerificationEmail = normalized;
-    try {
-        if (normalized) {
-            localStorage.setItem(PENDING_VERIFICATION_EMAIL_KEY, normalized);
-        } else {
-            localStorage.removeItem(PENDING_VERIFICATION_EMAIL_KEY);
-        }
-    } catch (_) {}
-}
-
-function hydratePendingVerificationEmail() {
-    try {
-        const stored = localStorage.getItem(PENDING_VERIFICATION_EMAIL_KEY);
-        if (stored) runtimeState.pendingVerificationEmail = normalizeEmail(stored);
-    } catch (_) {}
-}
-
-function scheduleResendVerificationUiRefresh() {
-    window.clearTimeout(runtimeState.resendVerificationTimer);
-    const remaining = runtimeState.resendVerificationCooldownUntil - Date.now();
-    if (remaining <= 0) {
-        runtimeState.resendVerificationTimer = null;
-        syncResendVerificationUI();
-        return;
-    }
-    runtimeState.resendVerificationTimer = window.setTimeout(() => {
-        scheduleResendVerificationUiRefresh();
-    }, Math.min(1000, remaining));
-}
-
-function syncResendVerificationUI(options = {}) {
-    const card = document.getElementById('verificationHelpCard');
-    const emailNode = document.getElementById('verificationHelpEmail');
-    const textNode = document.getElementById('verificationHelpText');
-    const statusNode = document.getElementById('verificationHelpStatus');
-    const actionButton = document.getElementById('btnResendVerification');
-    if (!card || !emailNode || !textNode || !statusNode || !actionButton) return;
-
-    const typedValue = String(document.getElementById('loginIdentifier')?.value || '').trim();
-    const typedEmail = isEmailIdentifier(typedValue) ? normalizeEmail(typedValue) : '';
-    const emailCandidate = String(options.email || runtimeState.pendingVerificationEmail || typedEmail).trim();
-    const email = isEmailIdentifier(emailCandidate) ? normalizeEmail(emailCandidate) : '';
-    const loginPageVisible = document.getElementById('loginPage')?.style.display !== 'none';
-    const shouldShow = Boolean(email) && loginPageVisible;
-    const remainingMs = Math.max(0, runtimeState.resendVerificationCooldownUntil - Date.now());
-
-    card.hidden = !shouldShow;
-    if (!shouldShow) {
-        statusNode.textContent = '';
-        return;
-    }
-
-    emailNode.textContent = email;
-    textNode.textContent = options.message || 'Jika link verifikasi sebelumnya kedaluwarsa atau email belum masuk, kirim ulang verifikasi ke alamat ini.';
-    actionButton.disabled = runtimeState.resendVerificationInFlight || remainingMs > 0;
-    actionButton.dataset.email = email;
-    statusNode.textContent = runtimeState.resendVerificationInFlight
-        ? 'Mengirim ulang email verifikasi...'
-        : remainingMs > 0
-            ? `Tunggu ${Math.ceil(remainingMs / 1000)} detik sebelum kirim ulang lagi.`
-            : 'Email verifikasi akan dikirim lewat jalur resmi Supabase Auth.';
-}
-
-async function resendSignupVerificationEmail(email) {
-    if (!canUseSupabase()) throw new Error('Supabase client belum siap.');
-    const normalizedEmail = normalizeEmail(email);
-    if (!normalizedEmail) throw new Error('Email verifikasi belum tersedia.');
-
-    if (typeof supabaseClient.auth.resend === 'function') {
-        const { error } = await supabaseClient.auth.resend({
-            type: 'signup',
-            email: normalizedEmail,
-            options: {
-                emailRedirectTo: getAppBaseUrl()
-            }
-        });
-        if (error) throw error;
-        return { ok: true, via: 'client' };
-    }
-
-    const { data, error } = await supabaseClient.functions.invoke('resend-signup-verification', {
-        body: {
-            email: normalizedEmail,
-            redirectTo: getAppBaseUrl()
-        }
-    });
-    if (error) throw error;
-    return {
-        ok: true,
-        via: 'edge-function',
-        data
-    };
-}
-
-async function handleResendVerificationEmail() {
-    const button = document.getElementById('btnResendVerification');
-    if (runtimeState.resendVerificationInFlight) return false;
-    if ((runtimeState.resendVerificationCooldownUntil - Date.now()) > 0) {
-        syncResendVerificationUI();
-        return false;
-    }
-
-    const email = normalizeEmail(button?.dataset?.email || document.getElementById('loginIdentifier')?.value || runtimeState.pendingVerificationEmail);
-    if (!email) {
-        showToast('Masukkan email yang belum terverifikasi terlebih dahulu.', 'warning');
-        return false;
-    }
-
-    runtimeState.resendVerificationInFlight = true;
-    syncResendVerificationUI({ email });
-
-    try {
-        await resendSignupVerificationEmail(email);
-        setPendingVerificationEmail(email);
-        runtimeState.resendVerificationCooldownUntil = Date.now() + RESEND_VERIFICATION_COOLDOWN_MS;
-        scheduleResendVerificationUiRefresh();
-        syncResendVerificationUI({
-            email,
-            message: 'Email verifikasi baru sedang dikirim. Cek inbox dan folder spam Anda.'
-        });
-        showToast(`Email verifikasi baru dikirim ke ${email}.`, 'success');
-    } catch (error) {
-        console.error('Gagal kirim ulang email verifikasi:', error);
-        showToast(toUserFacingError(error, 'Gagal mengirim ulang email verifikasi.'), 'error');
-        syncResendVerificationUI({ email });
-    } finally {
-        runtimeState.resendVerificationInFlight = false;
-        syncResendVerificationUI({ email });
-    }
-
-    return false;
 }
 
 function getPasswordResetRedirectUrl() {
@@ -3425,34 +3358,20 @@ function openPasswordResetModal() {
 async function requestPasswordReset(identifier, role = 'konsumen') {
     if (!canUseSupabase()) throw new Error('Supabase client belum siap.');
 
-    const normalizedIdentifier = normalizeLoginIdentifier(identifier, role);
+    const normalizedIdentifier = normalizeLoginIdentifier(identifier);
     if (!normalizedIdentifier) {
-        throw new Error(role === 'konsumen'
-            ? 'Masukkan email atau nomor telepon terlebih dahulu.'
-            : 'Masukkan email terlebih dahulu.');
+        throw new Error('Masukkan email, username, atau nomor telepon terlebih dahulu.');
     }
 
-    if (role === 'konsumen' && !isEmailIdentifier(normalizedIdentifier)) {
-        const { data, error } = await supabaseClient.functions.invoke('request-password-reset', {
-            body: {
-                role,
-                identifier: normalizedIdentifier,
-                redirectTo: getPasswordResetRedirectUrl()
-            }
-        });
-        if (error) throw error;
-        return data || { ok: true };
-    }
-
-    if (!isEmailIdentifier(normalizedIdentifier)) {
-        throw new Error('Email pemulihan harus diisi untuk role ini.');
-    }
-
-    const { error } = await supabaseClient.auth.resetPasswordForEmail(normalizeEmail(normalizedIdentifier), {
-        redirectTo: getPasswordResetRedirectUrl()
+    const { data, error } = await supabaseClient.functions.invoke('request-password-reset', {
+        body: {
+            role,
+            identifier: normalizedIdentifier,
+            redirectTo: getPasswordResetRedirectUrl()
+        }
     });
     if (error) throw error;
-    return { ok: true };
+    return data || { ok: true };
 }
 
 async function handlePasswordResetRequest(event) {
@@ -3498,7 +3417,7 @@ function resetChangePasswordForm(options = {}) {
     if (verificationCard) verificationCard.hidden = isRecoveryMode;
     if (nonceGroup) nonceGroup.hidden = isRecoveryMode;
     if (verificationHelp) {
-        verificationHelp.textContent = 'Klik tombol di bawah untuk mengirim kode verifikasi ganti sandi lewat Supabase Auth ke kanal pemulihan akun yang aktif.';
+        verificationHelp.textContent = 'Klik tombol di bawah untuk mengirim kode verifikasi ganti sandi lewat Supabase Auth ke email verifikasi akun yang aktif.';
     }
     if (status) {
         status.textContent = isRecoveryMode
@@ -3512,7 +3431,103 @@ function resetChangePasswordForm(options = {}) {
     }
 }
 
+function resetSensitiveEmailModalState() {
+    document.getElementById('formSensitiveEmail')?.reset();
+    runtimeState.sensitiveEmailSubmitting = false;
+    const profile = remoteState.profile;
+    const currentEmail = getUsableVerificationEmail(profile, remoteState.user);
+    const title = document.getElementById('sensitiveEmailTitle');
+    const intro = document.getElementById('sensitiveEmailIntro');
+    const currentInput = document.getElementById('sensitiveEmailCurrent');
+    const nextInput = document.getElementById('sensitiveEmailNext');
+    const help = document.getElementById('sensitiveEmailHelp');
+    const status = document.getElementById('sensitiveEmailStatus');
+    const submitButton = document.getElementById('btnSubmitSensitiveEmail');
+
+    if (title) title.textContent = currentEmail ? 'Ubah Email Verifikasi' : 'Tambahkan Email Verifikasi';
+    if (intro) {
+        intro.textContent = currentEmail
+            ? 'Masukkan email verifikasi baru. Perubahan data sensitif tetap dipisahkan dari verifikasi admin akun.'
+            : 'Akun ini belum punya email verifikasi yang valid. Tambahkan email terlebih dahulu sebelum mengubah sandi atau data akun sensitif.';
+    }
+    if (currentInput) currentInput.value = currentEmail;
+    if (nextInput) nextInput.value = '';
+    if (help) {
+        help.textContent = currentEmail
+            ? 'Supabase akan mengirim verifikasi perubahan email sesuai konfigurasi keamanan project.'
+            : 'Jika project masih mengharuskan konfirmasi ke email lama sintetis yang tidak bisa diakses user, admin perlu membantu aktivasi email pertama lewat backend atau pengaturan auth.';
+    }
+    if (status) status.textContent = currentEmail
+        ? 'Belum ada permintaan perubahan email.'
+        : 'Belum ada email verifikasi aktif pada akun ini.';
+    if (submitButton) submitButton.disabled = false;
+}
+
+function openSensitiveEmailModal() {
+    resetSensitiveEmailModalState();
+    const modal = document.getElementById('modalSensitiveEmail');
+    if (modal) modal.style.display = 'flex';
+}
+
+async function handleSensitiveEmailSubmit(event) {
+    event.preventDefault();
+    if (runtimeState.sensitiveEmailSubmitting) return false;
+    if (!canUseSupabase()) {
+        showToast('Supabase client belum siap.', 'error');
+        return false;
+    }
+
+    const nextEmail = normalizeEmail(document.getElementById('sensitiveEmailNext')?.value || '');
+    const status = document.getElementById('sensitiveEmailStatus');
+    const submitButton = document.getElementById('btnSubmitSensitiveEmail');
+    const hadUsableEmail = Boolean(getUsableVerificationEmail(remoteState.profile, remoteState.user));
+
+    if (!nextEmail) {
+        showToast('Masukkan email verifikasi yang valid.', 'warning');
+        return false;
+    }
+
+    runtimeState.sensitiveEmailSubmitting = true;
+    if (submitButton) submitButton.disabled = true;
+    if (status) status.textContent = 'Mengirim permintaan verifikasi email...';
+
+    try {
+        const { error } = await supabaseClient.auth.updateUser(
+            { email: nextEmail },
+            { emailRedirectTo: getAppBaseUrl() }
+        );
+        if (error) throw error;
+
+        if (status) {
+            status.textContent = hadUsableEmail
+                ? `Konfirmasi perubahan email dikirim ke ${nextEmail}. Selesaikan verifikasi dari email tersebut.`
+                : `Permintaan aktivasi email verifikasi dikirim ke ${nextEmail}. Jika project masih meminta konfirmasi ke email lama sintetis, admin perlu membantu aktivasi email pertama.`;
+        }
+        showToast(
+            hadUsableEmail
+                ? `Verifikasi perubahan email dikirim ke ${nextEmail}.`
+                : `Permintaan aktivasi email verifikasi dikirim ke ${nextEmail}.`,
+            'success'
+        );
+        closeModal('modalSensitiveEmail');
+    } catch (error) {
+        console.error('Gagal memulai perubahan email verifikasi:', error);
+        if (status) status.textContent = toUserFacingError(error, 'Gagal memulai perubahan email verifikasi.');
+        showToast(toUserFacingError(error, 'Gagal memulai perubahan email verifikasi.'), 'error');
+    } finally {
+        runtimeState.sensitiveEmailSubmitting = false;
+        if (submitButton) submitButton.disabled = false;
+    }
+
+    return false;
+}
+
 function openChangePasswordModal(mode = 'profile') {
+    if (mode !== 'recovery' && !getUsableVerificationEmail(remoteState.profile, remoteState.user)) {
+        openSensitiveEmailModal();
+        showToast('Tambahkan email verifikasi yang valid terlebih dahulu sebelum mengubah sandi.', 'warning');
+        return;
+    }
     resetChangePasswordForm({ mode });
     const modal = document.getElementById('modalChangePassword');
     if (modal) modal.style.display = 'flex';
@@ -3540,6 +3555,15 @@ async function sendPasswordChangeVerificationCode() {
         return false;
     }
 
+    const profile = await requireAuthenticatedProfile(false);
+    if (!profile) return false;
+    const verificationEmail = getUsableVerificationEmail(profile, remoteState.user);
+    if (!verificationEmail) {
+        openSensitiveEmailModal();
+        showToast('Akun ini belum punya email verifikasi yang aktif. Tambahkan email valid terlebih dahulu.', 'warning');
+        return false;
+    }
+
     const sendButton = document.getElementById('btnSendPasswordChangeCode');
     const status = document.getElementById('changePasswordStatus');
     runtimeState.changePasswordCodeSending = true;
@@ -3556,8 +3580,8 @@ async function sendPasswordChangeVerificationCode() {
         const { error } = await supabaseClient.auth.reauthenticate();
         if (error) throw error;
         runtimeState.changePasswordCodeSent = true;
-        if (status) status.textContent = 'Kode verifikasi sudah dikirim. Cek email/kanal pemulihan akun Anda lalu masukkan kode tersebut di kolom verifikasi.';
-        showToast('Kode verifikasi ganti sandi sudah dikirim.', 'success');
+        if (status) status.textContent = `Kode verifikasi sudah dikirim ke ${verificationEmail}. Cek inbox email tersebut lalu masukkan kode di kolom verifikasi.`;
+        showToast(`Kode verifikasi ganti sandi dikirim ke ${verificationEmail}.`, 'success');
     } catch (error) {
         console.error('Gagal mengirim kode verifikasi ganti sandi:', error);
         if (status) status.textContent = toUserFacingError(error, 'Gagal mengirim kode verifikasi ganti sandi.');
@@ -3940,7 +3964,7 @@ function sanitizeProfileRecord(profile) {
         authEmail: normalizeEmail(profile.auth_email || profile.authEmail || profile.email),
         phone: normalizePhone(profile.phone),
         address: String(profile.address || '').trim(),
-        status: String(profile.status || 'Aktif').trim(),
+        status: normalizeProfileStatus(profile.status || PROFILE_STATUS_PENDING),
         age: profile.age ?? (calculateAge(profile.birth_date || profile.birthDate) || ''),
         birth_date: profile.birth_date || profile.birthDate || '',
         birthDate: profile.birth_date || profile.birthDate || '',
@@ -4181,7 +4205,6 @@ function getCurrentUser() {
 function applySupabaseSession(profile) {
     remoteState.profile = sanitizeProfileRecord(profile);
     currentRole = remoteState.profile?.role || null;
-    setPendingVerificationEmail('');
     return remoteState.profile;
 }
 
@@ -4255,7 +4278,9 @@ function extractPendingProfileSeed(user) {
         nik: String(metadata.nik || '').trim(),
         specialization: String(metadata.specialization || '').trim(),
         experience: metadata.experience || '',
-        status: String(metadata.status || PROFILE_STATUS_ACTIVE).trim()
+        status: normalizeProfileStatus(metadata.status || PROFILE_STATUS_PENDING),
+        verified_at: metadata.verified_at || metadata.verifiedAt || '',
+        verified_by: metadata.verified_by || metadata.verifiedBy || ''
     };
 }
 
@@ -4302,7 +4327,7 @@ function validateProfilePayloadForRole(role, payload = {}, options = {}) {
         location_text: String(payload.location_text || payload.locationText || '').trim(),
         lat: payload.lat || '',
         lng: payload.lng || '',
-        status: String(payload.status || PROFILE_STATUS_ACTIVE).trim(),
+        status: normalizeProfileStatus(payload.status || (normalizedRole === 'admin' ? PROFILE_STATUS_ACTIVE : PROFILE_STATUS_PENDING)),
         verified_at: payload.verified_at || payload.verifiedAt || '',
         verified_by: payload.verified_by || payload.verifiedBy || '',
         completed_jobs: payload.completed_jobs ?? payload.completedJobs,
@@ -4318,7 +4343,7 @@ function validateProfilePayloadForRole(role, payload = {}, options = {}) {
     if (!cleanPayload.username) throw new Error('Username wajib diisi.');
     if (!cleanPayload.name) throw new Error('Nama wajib diisi.');
     if (!cleanPayload.auth_email) throw new Error('Email auth wajib tersedia untuk profile.');
-    if (normalizedRole !== 'konsumen' && !cleanPayload.email) throw new Error('Email wajib diisi.');
+    if (normalizedRole === 'admin' && !cleanPayload.email) throw new Error('Email admin wajib diisi.');
 
     const result = {
         id: cleanPayload.id,
@@ -4377,8 +4402,13 @@ function buildAuthenticatedProfilePayload(role, options = {}) {
         metadataSeed,
         options.formPayload
     );
-
-    const shouldActivatePublicProfile = normalizedRole !== 'admin';
+    const nextStatus = normalizeProfileStatus(
+        mergedDraft.status
+        || options.formPayload?.status
+        || normalizedExisting.status
+        || metadataSeed.status
+        || (normalizedRole === 'admin' ? PROFILE_STATUS_ACTIVE : PROFILE_STATUS_PENDING)
+    );
 
     return validateProfilePayloadForRole(normalizedRole, {
         ...mergedDraft,
@@ -4386,11 +4416,9 @@ function buildAuthenticatedProfilePayload(role, options = {}) {
         email: mergedDraft.email || options.formPayload?.email,
         auth_email: authUser?.email || mergedDraft.auth_email || mergedDraft.authEmail || options.formPayload?.auth_email || options.formPayload?.authEmail,
         role: normalizedRole,
-        status: shouldActivatePublicProfile
-            ? PROFILE_STATUS_ACTIVE
-            : (mergedDraft.status || PROFILE_STATUS_ACTIVE),
-        verified_at: shouldActivatePublicProfile
-            ? (normalizedExisting.verifiedAt || mergedDraft.verified_at || mergedDraft.verifiedAt || new Date().toISOString())
+        status: nextStatus,
+        verified_at: nextStatus === PROFILE_STATUS_ACTIVE
+            ? (normalizedExisting.verifiedAt || mergedDraft.verified_at || mergedDraft.verifiedAt || '')
             : (mergedDraft.verified_at || mergedDraft.verifiedAt || ''),
         verified_by: normalizedExisting.verifiedBy || mergedDraft.verified_by || mergedDraft.verifiedBy || '',
         completed_jobs: normalizedExisting.completed_jobs ?? normalizedExisting.completedJobs ?? mergedDraft.completed_jobs ?? mergedDraft.completedJobs
@@ -4473,8 +4501,9 @@ async function createMissingProfileForAuthenticatedUser(userInput = null) {
         id: user.id,
         email: metadataSeed.email,
         auth_email: metadataSeed.auth_email || user.email,
-        status: metadataSeed.role === 'admin' ? metadataSeed.status : PROFILE_STATUS_ACTIVE,
-        verified_at: metadataSeed.role === 'admin' ? '' : new Date().toISOString()
+        status: metadataSeed.status || (metadataSeed.role === 'admin' ? PROFILE_STATUS_ACTIVE : PROFILE_STATUS_PENDING),
+        verified_at: metadataSeed.verified_at || '',
+        verified_by: metadataSeed.verified_by || ''
     });
 
     logApp('auth', 'Membuat profile yang belum tersedia dari metadata auth', {
@@ -4514,12 +4543,58 @@ async function ensureProfileAfterAuth(role, formPayload = {}, options = {}) {
     return profile;
 }
 
-async function ensureApprovedPublicProfile(profile) {
-    if (!profile || profile.role === 'admin' || isProfileApproved(profile)) return profile;
-    return ensureProfileAfterAuth(profile.role, {}, {
-        existingProfile: profile,
-        reason: 'auto-activate-confirmed-public-profile'
+async function syncProfileAuthSnapshot(profile, options = {}) {
+    if (!profile) return null;
+
+    const authUser = options.authUser || remoteState.user || await getSupabaseUser();
+    if (!authUser) return profile;
+
+    const nextAuthEmail = normalizeEmail(authUser.email || profile.authEmail || profile.auth_email || '');
+    const nextPublicEmail = isSyntheticAuthEmail(nextAuthEmail)
+        ? normalizeEmail(profile.email || authUser.user_metadata?.contact_email || '')
+        : normalizeEmail(nextAuthEmail || authUser.user_metadata?.contact_email || profile.email);
+
+    const currentAuthEmail = normalizeEmail(profile.authEmail || profile.auth_email || '');
+    const currentPublicEmail = normalizeEmail(profile.email || '');
+    if (nextAuthEmail === currentAuthEmail && nextPublicEmail === currentPublicEmail) {
+        return profile;
+    }
+
+    const payload = validateProfilePayloadForRole(profile.role, {
+        ...profile,
+        email: nextPublicEmail,
+        auth_email: nextAuthEmail,
+        status: profile.status,
+        verified_at: profile.verifiedAt,
+        verified_by: profile.verifiedBy
+    }, {
+        allowAdmin: isAdminProfile(profile)
     });
+
+    return upsertOwnProfile(payload);
+}
+
+async function assertProfileAccess(profile, options = {}) {
+    if (!profile || profile.role === 'admin' || isProfileApproved(profile)) return profile;
+
+    const message = getProfileAccessBlockedMessage(profile) || 'Akun Anda belum dapat mengakses dashboard aktif.';
+
+    if (options.signOut !== false && canUseSupabase()) {
+        try {
+            await supabaseClient.auth.signOut();
+        } catch (_) {}
+    }
+
+    clearRemoteSessionState({ preserveView: false });
+
+    if (!options.silent) {
+        showToast(message, 'warning');
+    }
+    if (options.redirectToLanding !== false) {
+        showLanding();
+    }
+
+    throw new Error(message);
 }
 
 async function requireAuthenticatedProfile(showMessage = true) {
@@ -4541,7 +4616,11 @@ async function requireAuthenticatedProfile(showMessage = true) {
 
     try {
         const rawProfile = await fetchCurrentProfileStrict();
-        const profile = await ensureApprovedPublicProfile(rawProfile);
+        const syncedProfile = await syncProfileAuthSnapshot(rawProfile).catch(() => rawProfile);
+        const profile = await assertProfileAccess(syncedProfile, {
+            silent: !showMessage,
+            redirectToLanding: false
+        });
         if (isAdminProfile(profile) && !canAccessAdmin(profile)) {
             await forceExitAdminOnPublicHost({
                 message: getAdminAccessDeniedMessage(),
@@ -4714,7 +4793,11 @@ async function bootstrapSessionFromSupabase(options = {}) {
     }
 
     const rawProfile = await fetchCurrentProfileStrict();
-    const profile = await ensureApprovedPublicProfile(rawProfile);
+    const syncedProfile = await syncProfileAuthSnapshot(rawProfile).catch(() => rawProfile);
+    const profile = await assertProfileAccess(syncedProfile, {
+        silent: Boolean(options.silentGuard),
+        redirectToLanding: false
+    });
     if (isAdminProfile(profile) && !canAccessAdmin(profile)) {
         await forceExitAdminOnPublicHost({
             message: getAdminAccessDeniedMessage(),
@@ -4765,7 +4848,7 @@ async function bootstrapAuthState() {
                     return;
                 }
 
-                if (event === 'SIGNED_IN' && authSignInInProgress) {
+                if (event === 'SIGNED_IN' && (authSignInInProgress || runtimeState.registrationSessionActive)) {
                     return;
                 }
 
@@ -4850,35 +4933,11 @@ async function logoutUser(showMessage = true) {
     resetToPublicLanding(showMessage ? 'Anda berhasil logout.' : '');
 }
 
-async function signInConsumerWithPhoneOrEmail(identifier, password) {
-    const normalizedIdentifier = normalizeLoginIdentifier(identifier, 'konsumen');
-    const normalizedPassword = String(password || '').trim();
-    if (!normalizedIdentifier || !normalizedPassword) {
-        throw new Error('Nomor telepon atau password salah.');
-    }
-
-    if (isEmailIdentifier(normalizedIdentifier)) {
-        const { error } = await supabaseClient.auth.signInWithPassword({
-            email: normalizeEmail(normalizedIdentifier),
-            password: normalizedPassword
-        });
-        if (error) throw error;
-        return true;
-    }
-
-    const { data, error } = await supabaseClient.functions.invoke('consumer-password-login', {
-        body: {
-            identifier: normalizedIdentifier,
-            password: normalizedPassword
-        }
-    });
-    if (error) throw error;
-
-    const session = data?.session;
+async function applyResolvedAuthSession(session) {
     const accessToken = session?.access_token || session?.accessToken;
     const refreshToken = session?.refresh_token || session?.refreshToken;
     if (!accessToken || !refreshToken) {
-        throw new Error('Session login konsumen tidak valid.');
+        throw new Error('Session login tidak valid.');
     }
 
     const { error: sessionError } = await supabaseClient.auth.setSession({
@@ -4886,7 +4945,46 @@ async function signInConsumerWithPhoneOrEmail(identifier, password) {
         refresh_token: refreshToken
     });
     if (sessionError) throw sessionError;
-    return true;
+}
+
+async function signInWithResolvedIdentifier(identifier, password, requestedRole = 'konsumen') {
+    const normalizedIdentifier = normalizeLoginIdentifier(identifier);
+    const normalizedPassword = String(password || '').trim();
+    if (!normalizedIdentifier || !normalizedPassword) {
+        throw new Error('Login gagal. Periksa identifier dan password Anda.');
+    }
+
+    const { data, error } = await supabaseClient.functions.invoke('profile-password-login', {
+        body: {
+            identifier: normalizedIdentifier,
+            password: normalizedPassword,
+            requestedRole
+        }
+    });
+    if (error) throw error;
+    await applyResolvedAuthSession(data?.session);
+    return data || { ok: true };
+}
+
+async function loadAccessibleProfileFromSession(options = {}) {
+    const rawProfile = await fetchCurrentProfileStrict();
+    const syncedProfile = await syncProfileAuthSnapshot(rawProfile).catch(() => rawProfile);
+    const profile = await assertProfileAccess(syncedProfile, {
+        silent: Boolean(options.silent),
+        redirectToLanding: false
+    });
+    if (isAdminProfile(profile) && !canAccessAdmin(profile)) {
+        await forceExitAdminOnPublicHost({ message: getAdminAccessDeniedMessage() });
+        return null;
+    }
+
+    applySupabaseSession(profile);
+    if (profile.role === 'admin') {
+        await loadAdminMasterData();
+    } else {
+        remoteState.currentOrders = await fetchOrdersForRole(profile);
+    }
+    return profile;
 }
 
 async function handleSupabaseLogin(identifier, password, role = 'konsumen') {
@@ -4895,30 +4993,9 @@ async function handleSupabaseLogin(identifier, password, role = 'konsumen') {
     authSignInInProgress = true;
 
     try {
-        if (role === 'konsumen') {
-            await signInConsumerWithPhoneOrEmail(identifier, password);
-        } else {
-            const { error } = await supabaseClient.auth.signInWithPassword({
-                email: normalizeEmail(identifier),
-                password: String(password || '').trim()
-            });
-            if (error) throw error;
-        }
-
-        const rawProfile = await fetchCurrentProfileStrict();
-        const profile = await ensureApprovedPublicProfile(rawProfile);
-        if (isAdminProfile(profile) && !canAccessAdmin(profile)) {
-            await forceExitAdminOnPublicHost({ message: getAdminAccessDeniedMessage() });
-            return null;
-        }
-        applySupabaseSession(profile);
-
-        if (profile.role === 'admin') {
-            await loadAdminMasterData();
-        } else {
-            remoteState.currentOrders = await fetchOrdersForRole(profile);
-        }
-
+        await signInWithResolvedIdentifier(identifier, password, role);
+        const profile = await loadAccessibleProfileFromSession({ silent: true });
+        if (!profile) return null;
         await redirectUserByRole(profile);
         return profile;
     } finally {
@@ -4934,17 +5011,13 @@ async function handleLoginSubmit(event) {
     const password = document.getElementById('loginPassword').value;
 
     if (!identifier || !password) {
-        showToast(selectedRole === 'konsumen'
-            ? 'Email/nomor telepon dan password wajib diisi.'
-            : 'Email dan password wajib diisi.', 'error');
+        showToast('Email, username, atau nomor telepon beserta password wajib diisi.', 'error');
         return false;
     }
 
     try {
         const profile = await handleSupabaseLogin(identifier, password, selectedRole);
         if (!profile) return false;
-        setPendingVerificationEmail('');
-        syncResendVerificationUI();
         if (selectedRole && selectedRole !== profile.role) {
             showToast(`Akun Anda terdaftar sebagai ${ROLE_LABELS[profile.role] || profile.role}. Dashboard disesuaikan otomatis.`, 'warning');
         } else {
@@ -4952,129 +5025,112 @@ async function handleLoginSubmit(event) {
         }
     } catch (error) {
         console.error('Login Supabase gagal:', error);
-        if (String(error?.message || '').toLowerCase().includes('email not confirmed')) {
-            setPendingVerificationEmail(identifier);
-            syncResendVerificationUI({
-                email: identifier,
-                message: 'Akun ini belum terverifikasi email. Anda bisa kirim ulang email verifikasi dari tombol di bawah.'
-            });
-        }
-        showToast(toUserFacingError(error, selectedRole === 'konsumen'
-            ? 'Login gagal. Periksa email/nomor telepon dan password Anda.'
-            : 'Login gagal. Periksa email dan password Anda.'), 'error');
+        showToast(toUserFacingError(error, 'Login gagal. Periksa identifier dan password Anda.'), 'error');
     }
 
     return false;
 }
 
-async function registerKonsumenSupabase(formValues) {
+async function registerPublicAccountSupabase(role, formValues) {
     if (!canUseSupabase()) throw new Error('Supabase client belum siap.');
 
-    const email = normalizeEmail(formValues.email);
     const password = String(formValues.password || '').trim();
     if (!password) throw new Error('Password wajib diisi.');
+    if (!formValues.phone) throw new Error('Nomor telepon wajib diisi.');
 
     const usernameTaken = await isUsernameTakenRemote(formValues.username);
-    if (usernameTaken) throw new Error('Username konsumen sudah digunakan.');
+    if (usernameTaken) throw new Error(`Username ${ROLE_LABELS[role] || role} sudah digunakan.`);
 
-    if (!formValues.phone) throw new Error('Nomor telepon konsumen wajib diisi.');
-
-    if (!email) {
-        const { data, error } = await supabaseClient.functions.invoke('register-consumer-account', {
-            body: {
-                username: formValues.username,
-                name: formValues.name,
-                password,
-                phone: formValues.phone,
-                address: formValues.address,
-                age: formValues.age,
-                birth_date: formValues.birthDate,
-                district: formValues.district,
-                location_text: formValues.locationText,
-                lat: formValues.lat,
-                lng: formValues.lng,
-                status: PROFILE_STATUS_ACTIVE
-            }
-        });
-        if (error) throw error;
-        return {
-            user: data?.user || null,
-            session: null,
-            needsPhoneLogin: true
-        };
-    }
-
-    const { data, error } = await supabaseClient.auth.signUp({
-        email,
-        password,
-        options: {
-            emailRedirectTo: getAppBaseUrl(),
-            data: {
-                role: 'konsumen',
-                username: formValues.username,
-                name: formValues.name,
-                contact_email: email,
-                auth_email: email,
-                phone: formValues.phone,
-                address: formValues.address,
-                age: formValues.age,
-                birth_date: formValues.birthDate,
-                district: formValues.district,
-                location_text: formValues.locationText,
-                lat: formValues.lat,
-                lng: formValues.lng,
-                status: PROFILE_STATUS_ACTIVE
-            }
+    const { data, error } = await supabaseClient.functions.invoke('register-public-account', {
+        body: {
+            role,
+            username: formValues.username,
+            name: formValues.name,
+            password,
+            email: formValues.email,
+            phone: formValues.phone,
+            address: formValues.address,
+            age: formValues.age,
+            birth_date: formValues.birthDate,
+            district: formValues.district || '',
+            location_text: formValues.locationText,
+            lat: formValues.lat,
+            lng: formValues.lng,
+            nik: formValues.nik || '',
+            specialization: formValues.specialization || '',
+            experience: formValues.experience ?? '',
+            status: PROFILE_STATUS_PENDING
         }
     });
-
     if (error) throw error;
-    if (!data.user) throw new Error('User auth tidak berhasil dibuat.');
-
-    return data;
+    return data || {};
 }
 
-async function registerTeknisiSupabase(formValues) {
-    if (!canUseSupabase()) throw new Error('Supabase client belum siap.');
-
-    const email = normalizeEmail(formValues.email);
+async function finalizePendingRegistration(role, formValues, authResult) {
+    const authEmail = normalizeEmail(authResult?.auth_email || authResult?.user?.email);
     const password = String(formValues.password || '').trim();
-    if (!password) throw new Error('Password wajib diisi.');
+    if (!authEmail || !password) {
+        throw new Error('Data auth hasil register belum lengkap.');
+    }
 
-    const usernameTaken = await isUsernameTakenRemote(formValues.username);
-    if (usernameTaken) throw new Error('Username teknisi sudah digunakan.');
+    runtimeState.registrationSessionActive = true;
+    authSignInInProgress = true;
+    let sessionOpened = false;
 
-    const { data, error } = await supabaseClient.auth.signUp({
-        email,
-        password,
-        options: {
-            emailRedirectTo: getAppBaseUrl(),
-            data: {
-                role: 'teknisi',
-                username: formValues.username,
-                name: formValues.name,
-                contact_email: email,
-                auth_email: email,
-                phone: formValues.phone,
-                address: formValues.address,
-                age: formValues.age,
-                birth_date: formValues.birthDate,
-                district: formValues.district || '',
-                nik: formValues.nik,
-                specialization: formValues.specialization,
-                experience: formValues.experience,
-                location_text: formValues.locationText,
-                lat: formValues.lat,
-                lng: formValues.lng,
-                status: PROFILE_STATUS_ACTIVE
-            }
+    try {
+        const { error } = await supabaseClient.auth.signInWithPassword({
+            email: authEmail,
+            password
+        });
+        if (error) throw error;
+
+        sessionOpened = true;
+        authSignInInProgress = false;
+
+        await ensureProfileAfterAuth(role, {
+            ...formValues,
+            auth_email: authEmail,
+            status: PROFILE_STATUS_PENDING,
+            verified_at: '',
+            verified_by: ''
+        });
+
+        try {
+            await finalizeSignupUploadsAfterSession(role);
+        } catch (uploadError) {
+            console.warn(`Upload draft ${role} setelah register belum berhasil:`, uploadError);
+            showToast('Akun berhasil dibuat, tetapi ada dokumen/foto yang belum sempat tersimpan. Anda bisa melengkapinya lagi setelah akun aktif.', 'warning');
         }
-    });
+    } finally {
+        authSignInInProgress = false;
+        if (sessionOpened) {
+            await logoutSupabase().catch(() => {});
+        }
+        runtimeState.registrationSessionActive = false;
+        clearRemoteSessionState({ preserveView: false });
+    }
+}
 
-    if (error) throw error;
-    if (!data.user) throw new Error('User auth tidak berhasil dibuat.');
+function resetRegisterKonsumenUi() {
+    document.getElementById('formRegKonsumen')?.reset();
+    clearImagePreviewState('register-konsumen-unit');
+    document.getElementById('regKonLocationResult').style.display = 'none';
+}
 
-    return data;
+function resetRegisterTeknisiUi() {
+    document.getElementById('formRegTeknisi')?.reset();
+    clearImagePreviewState('register-teknisi-ktp');
+    clearImagePreviewState('register-teknisi-selfie');
+    document.getElementById('regTekLocationResult').style.display = 'none';
+}
+
+function primeLoginAfterRegistration(role, formValues = {}) {
+    showLoginPage();
+    switchLoginRole(role);
+    const loginIdentifier = document.getElementById('loginIdentifier');
+    if (loginIdentifier) {
+        loginIdentifier.value = formValues.email || formValues.username || formValues.phone || '';
+    }
 }
 
 async function handleRegisterKonsumen(event) {
@@ -5094,59 +5150,19 @@ async function handleRegisterKonsumen(event) {
     }
 
     try {
-        const authResult = await registerKonsumenSupabase(form);
-        const registeredWithEmail = Boolean(form.email);
-        const hasSession = Boolean(authResult.session);
+        const authResult = await registerPublicAccountSupabase('konsumen', form);
+        await finalizePendingRegistration('konsumen', form, authResult);
+
         notifyAdminNewRegistration('konsumen', {
             ...form,
             registeredAt: new Date().toISOString(),
-            emailVerificationStatus: registeredWithEmail
-                ? (hasSession ? 'Session aktif; email confirmation tidak menahan login' : 'Menunggu konfirmasi email')
-                : 'Email opsional tidak dipakai; login telepon aktif',
-            profileStatus: registeredWithEmail && !hasSession
-                ? `${PROFILE_STATUS_ACTIVE} otomatis setelah email confirmed`
-                : PROFILE_STATUS_ACTIVE
+            emailVerificationStatus: 'Tidak dipakai untuk aktivasi register',
+            profileStatus: PROFILE_STATUS_PENDING
         }, waPopup);
 
-        if (hasSession) {
-            await ensureProfileAfterAuth('konsumen', form);
-            try {
-                await finalizeSignupUploadsAfterSession('konsumen');
-            } catch (uploadError) {
-                console.warn('Upload draft konsumen setelah signup belum berhasil:', uploadError);
-                showToast('Akun berhasil dibuat, tetapi foto unit belum sempat tersimpan. Anda bisa upload ulang setelah login.', 'warning');
-            }
-            await logoutSupabase();
-            document.getElementById('formRegKonsumen').reset();
-            clearImagePreviewState('register-konsumen-unit');
-            document.getElementById('regKonLocationResult').style.display = 'none';
-            resetToPublicLanding(`Pendaftaran konsumen ${form.name} berhasil. Profile publik aktif dan siap dipakai login.`);
-            document.getElementById('loginIdentifier').value = form.email || form.phone;
-            return false;
-        }
-
-        if (!registeredWithEmail && authResult.needsPhoneLogin) {
-            document.getElementById('formRegKonsumen').reset();
-            clearImagePreviewState('register-konsumen-unit');
-            document.getElementById('regKonLocationResult').style.display = 'none';
-            showLoginPage();
-            switchLoginRole('konsumen');
-            document.getElementById('loginIdentifier').value = form.phone;
-            showToast('Pendaftaran konsumen berhasil. Karena email tidak diisi, akun langsung aktif dan bisa login memakai nomor telepon.', 'success');
-            return false;
-        }
-
-        document.getElementById('formRegKonsumen').reset();
-        clearImagePreviewState('register-konsumen-unit');
-        document.getElementById('regKonLocationResult').style.display = 'none';
-        document.getElementById('loginIdentifier').value = form.email;
-        setPendingVerificationEmail(form.email);
-        showLoginPage();
-        syncResendVerificationUI({
-            email: form.email,
-            message: 'Pendaftaran sudah dibuat. Jika email verifikasi timeout, kirim ulang dari sini. Foto unit baru bisa dikirim ke Storage saat sesi login terverifikasi sudah aktif.'
-        });
-        showToast('Pendaftaran konsumen berhasil dikirim. Cek email Anda; setelah email confirmed, profile publik aktif otomatis dan login langsung bisa dipakai.', 'success');
+        resetRegisterKonsumenUi();
+        primeLoginAfterRegistration('konsumen', form);
+        showToast('Pendaftaran konsumen berhasil dibuat. Status akun sekarang Menunggu Verifikasi admin.', 'success');
     } catch (error) {
         closePreparedPopup(waPopup);
         console.error('Registrasi konsumen gagal:', error);
@@ -5166,7 +5182,7 @@ async function handleRegisterTeknisi(event) {
         return false;
     }
     const waPopup = prepareWhatsAppPopup();
-    if (!form.name || !form.username || !form.password || !form.email || !form.phone || !form.nik || !form.birthDate || !form.specialization || !form.address) {
+    if (!form.name || !form.username || !form.password || !form.phone || !form.nik || !form.birthDate || !form.specialization || !form.address) {
         closePreparedPopup(waPopup);
         showToast('Lengkapi data wajib teknisi.', 'error');
         return false;
@@ -5178,47 +5194,21 @@ async function handleRegisterTeknisi(event) {
     }
 
     try {
-        const authResult = await registerTeknisiSupabase(form);
-        const hasSession = Boolean(authResult.session);
+        const authResult = await registerPublicAccountSupabase('teknisi', form);
+        await finalizePendingRegistration('teknisi', form, authResult);
+
         notifyAdminNewRegistration('teknisi', {
             ...form,
             registeredAt: new Date().toISOString(),
-            emailVerificationStatus: hasSession ? 'Session aktif; email confirmation tidak menahan login' : 'Menunggu konfirmasi email',
-            profileStatus: hasSession ? PROFILE_STATUS_ACTIVE : `${PROFILE_STATUS_ACTIVE} otomatis setelah email confirmed`,
+            emailVerificationStatus: 'Tidak dipakai untuk aktivasi register',
+            profileStatus: PROFILE_STATUS_PENDING,
             ktpUploaded: Boolean(draftUploads.regTekKtpPhoto),
             selfieUploaded: Boolean(draftUploads.regTekSelfiePhoto)
         }, waPopup);
 
-        if (hasSession) {
-            await ensureProfileAfterAuth('teknisi', form);
-            try {
-                await finalizeSignupUploadsAfterSession('teknisi');
-            } catch (uploadError) {
-                console.warn('Upload draft teknisi setelah signup belum berhasil:', uploadError);
-                showToast('Akun berhasil dibuat, tetapi dokumen teknisi belum sempat tersimpan. Upload ulang tersedia setelah login.', 'warning');
-            }
-            await logoutSupabase();
-            document.getElementById('formRegTeknisi').reset();
-            clearImagePreviewState('register-teknisi-ktp');
-            clearImagePreviewState('register-teknisi-selfie');
-            document.getElementById('regTekLocationResult').style.display = 'none';
-            resetToPublicLanding(`Pendaftaran teknisi ${form.name} berhasil. Profile publik aktif dan siap dipakai login.`);
-            document.getElementById('loginIdentifier').value = form.email;
-            return false;
-        }
-
-        document.getElementById('formRegTeknisi').reset();
-        clearImagePreviewState('register-teknisi-ktp');
-        clearImagePreviewState('register-teknisi-selfie');
-        document.getElementById('regTekLocationResult').style.display = 'none';
-        document.getElementById('loginIdentifier').value = form.email;
-        setPendingVerificationEmail(form.email);
-        showLoginPage();
-        syncResendVerificationUI({
-            email: form.email,
-            message: 'Pendaftaran teknisi sudah dibuat. Jika email verifikasi timeout, kirim ulang dari sini. Dokumen sensitif baru diunggah ke Storage saat sesi login terverifikasi aktif.'
-        });
-        showToast('Pendaftaran teknisi berhasil dikirim. Cek email Anda; setelah email confirmed, profile publik aktif otomatis dan login langsung bisa dipakai.', 'success');
+        resetRegisterTeknisiUi();
+        primeLoginAfterRegistration('teknisi', form);
+        showToast('Pendaftaran teknisi berhasil dibuat. Status akun sekarang Menunggu Verifikasi admin.', 'success');
     } catch (error) {
         closePreparedPopup(waPopup);
         console.error('Registrasi teknisi gagal:', error);
@@ -5655,29 +5645,46 @@ async function updateProfileByAdmin(userId, payload = {}) {
     return sanitizeProfileRecord(data);
 }
 
-async function verifyPublicUser(role, userId) {
+async function setPublicUserStatus(role, userId, status) {
     if (!requireAdminAccess()) return;
+
+    const normalizedStatus = normalizeProfileStatus(status);
+    const payload = {
+        status: normalizedStatus
+    };
+    if (normalizedStatus === PROFILE_STATUS_ACTIVE) {
+        payload.verified_at = new Date().toISOString();
+        payload.verified_by = remoteState.profile?.id || null;
+    }
+
     try {
-        await updateProfileByAdmin(userId, {
-            status: PROFILE_STATUS_ACTIVE,
-            verified_at: new Date().toISOString(),
-            verified_by: remoteState.profile?.id || null
-        });
+        await updateProfileByAdmin(userId, payload);
         await loadAdminMasterData();
         renderAdminKonsumenTable(remoteState.adminProfiles.konsumen);
         renderAdminTeknisiTable(remoteState.adminProfiles.teknisi);
         await renderAdminHome();
-        showToast(`Akun ${ROLE_LABELS[role] || role} berhasil diverifikasi.`, 'success');
+        showToast(`Status akun ${ROLE_LABELS[role] || role} diperbarui menjadi ${normalizedStatus}.`, 'success');
     } catch (error) {
-        console.error('Gagal verifikasi user:', error);
-        showToast(toUserFacingError(error, 'Verifikasi user gagal.'), 'error');
+        console.error('Gagal memperbarui status user:', error);
+        showToast(toUserFacingError(error, 'Perubahan status user gagal.'), 'error');
     }
+}
+
+async function verifyPublicUser(role, userId) {
+    return setPublicUserStatus(role, userId, PROFILE_STATUS_ACTIVE);
 }
 
 function renderAdminUserActions(user, role) {
     if (role === 'admin') return '-';
-    if (isProfileApproved(user)) return '<span class="text-muted">Terverifikasi</span>';
-    return `<button class="btn btn-primary btn-xs" onclick="verifyPublicUser('${role}', '${user.id}')">Verifikasi</button>`;
+    const editTarget = role === 'konsumen' ? 'openEditKonsumen' : 'openEditTeknisi';
+    const approveButton = `<button class="btn btn-primary btn-xs" onclick="verifyPublicUser('${role}', '${user.id}')">Approve</button>`;
+    const rejectButton = `<button class="btn btn-outline btn-xs" onclick="setPublicUserStatus('${role}', '${user.id}', '${PROFILE_STATUS_REJECTED}')">Tolak</button>`;
+    const disableButton = `<button class="btn btn-outline btn-xs" onclick="setPublicUserStatus('${role}', '${user.id}', '${PROFILE_STATUS_DISABLED}')">Nonaktifkan</button>`;
+    const editButton = `<button class="btn btn-outline btn-xs" onclick="${editTarget}('${user.id}')">Detail</button>`;
+
+    if (isProfilePending(user)) return `${approveButton} ${rejectButton} ${editButton}`;
+    if (isProfileApproved(user)) return `${disableButton} ${editButton}`;
+    return `${approveButton} ${editButton}`;
 }
 
 function renderAdminKonsumenTable(users = []) {
@@ -5685,7 +5692,14 @@ function renderAdminKonsumenTable(users = []) {
     const body = document.getElementById('adminKonsumenListBody');
     const orders = remoteState.adminOrders;
 
-    body.innerHTML = users.length ? users.map((user) => `
+    const sortedUsers = [...users].sort((left, right) => {
+        const leftPending = isProfilePending(left) ? 0 : 1;
+        const rightPending = isProfilePending(right) ? 0 : 1;
+        if (leftPending !== rightPending) return leftPending - rightPending;
+        return String(right.joinedAt || '').localeCompare(String(left.joinedAt || ''));
+    });
+
+    body.innerHTML = sortedUsers.length ? sortedUsers.map((user) => `
         <tr>
             ${tableCell('Nama', escapeHtml(user.name))}
             ${tableCell('Username', escapeHtml(user.username || '-'))}
@@ -5694,10 +5708,11 @@ function renderAdminKonsumenTable(users = []) {
             ${tableCell('Usia', escapeHtml(user.age || '-'))}
             ${tableCell('Alamat', escapeHtml(user.address || '-'))}
             ${tableCell('Status', renderStatusBadge(user.status || PROFILE_STATUS_PENDING))}
+            ${tableCell('Verifikasi Admin', escapeHtml(formatVerificationInfo(user)))}
             ${tableCell('Total Pesanan', String(orders.filter((order) => order.konsumenId === user.id).length))}
             ${tableCell('Aksi', renderAdminUserActions(user, 'konsumen'))}
         </tr>
-    `).join('') : '<tr><td colspan="9" class="empty-state">Tidak ada data</td></tr>';
+    `).join('') : '<tr><td colspan="10" class="empty-state">Tidak ada data</td></tr>';
 }
 
 function renderAdminTeknisiTable(users = []) {
@@ -5705,7 +5720,14 @@ function renderAdminTeknisiTable(users = []) {
     const body = document.getElementById('adminTeknisiListBody');
     const orders = remoteState.adminOrders;
 
-    body.innerHTML = users.length ? users.map((user) => `
+    const sortedUsers = [...users].sort((left, right) => {
+        const leftPending = isProfilePending(left) ? 0 : 1;
+        const rightPending = isProfilePending(right) ? 0 : 1;
+        if (leftPending !== rightPending) return leftPending - rightPending;
+        return String(right.joinedAt || '').localeCompare(String(left.joinedAt || ''));
+    });
+
+    body.innerHTML = sortedUsers.length ? sortedUsers.map((user) => `
         <tr>
             ${tableCell('Nama', escapeHtml(user.name))}
             ${tableCell('Username', escapeHtml(user.username || '-'))}
@@ -5714,10 +5736,11 @@ function renderAdminTeknisiTable(users = []) {
             ${tableCell('NIK', escapeHtml(user.nik || '-'))}
             ${tableCell('Spesialisasi', escapeHtml(user.specialization || '-'))}
             ${tableCell('Status', renderStatusBadge(user.status || PROFILE_STATUS_PENDING))}
+            ${tableCell('Verifikasi Admin', escapeHtml(formatVerificationInfo(user)))}
             ${tableCell('Tugas Selesai', String(orders.filter((order) => order.teknisiId === user.id && order.status === 'Selesai').length))}
             ${tableCell('Aksi', renderAdminUserActions(user, 'teknisi'))}
         </tr>
-    `).join('') : '<tr><td colspan="9" class="empty-state">Tidak ada data</td></tr>';
+    `).join('') : '<tr><td colspan="10" class="empty-state">Tidak ada data</td></tr>';
 }
 
 function renderAdminAdminTable(users = []) {
@@ -5891,10 +5914,6 @@ function initDomEvents() {
     document.getElementById('imageCatalogFormFile')?.addEventListener('change', handleImageCatalogUpload);
     document.getElementById('formKonsumenProfile')?.addEventListener('input', () => handleProfileFormInput('konsumen'));
     document.getElementById('formTeknisiProfile')?.addEventListener('input', () => handleProfileFormInput('teknisi'));
-    document.getElementById('loginIdentifier')?.addEventListener('input', debounce(() => syncResendVerificationUI(), 120));
-    document.getElementById('btnResendVerification')?.addEventListener('click', () => {
-        void handleResendVerificationEmail();
-    });
     document.getElementById('btnSendPasswordChangeCode')?.addEventListener('click', () => {
         void sendPasswordChangeVerificationCode();
     });
@@ -5911,12 +5930,8 @@ function initDomEvents() {
 }
 
 function handleStorageSync(event) {
-    if (event.key !== STORAGE_KEY && event.key !== LEGACY_STORAGE_KEY && event.key !== PENDING_VERIFICATION_EMAIL_KEY) return;
+    if (event.key !== STORAGE_KEY && event.key !== LEGACY_STORAGE_KEY) return;
     appData = loadStoredData();
-    if (event.key === PENDING_VERIFICATION_EMAIL_KEY) {
-        hydratePendingVerificationEmail();
-        syncResendVerificationUI();
-    }
     if (remoteState.profile && currentView) {
         renderAppShell();
         syncActiveNavState();
@@ -5953,7 +5968,6 @@ async function initApp() {
     saveData(appData);
     purgeLegacyKonsumenTeknisiCache();
     hydrateMissingProfileColumnsCache();
-    hydratePendingVerificationEmail();
     runtimeState.passwordRecoveryActive = hasPasswordRecoveryContext();
     populateSpecializationOptions('regTekSpecialization', 'Semua Layanan');
     syncAdminAccessUI();

@@ -11,10 +11,6 @@ const corsHeaders = {
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") || "";
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
-const AUTH_EMAIL_DOMAIN = (Deno.env.get("AUTH_EMAIL_DOMAIN") || "auth.indosejuk.local").trim().toLowerCase();
-
-const genericMessage =
-  "Jika akun ditemukan dan memiliki email verifikasi aktif, instruksi reset sudah dikirim.";
 
 const supabaseAdmin = SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY
   ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
@@ -54,14 +50,6 @@ function looksLikePhone(value: string) {
   if (!value || value.includes("@")) return false;
   const digits = value.replace(/\D/g, "");
   return digits.length >= 8 && /^[+\d\s().-]+$/.test(value);
-}
-
-function isSyntheticAuthEmail(value: string) {
-  const normalized = normalizeEmail(value);
-  return Boolean(normalized) && (
-    normalized.endsWith(`@${AUTH_EMAIL_DOMAIN}`)
-    || normalized.endsWith(".indosejuk.local")
-  );
 }
 
 type Candidate = {
@@ -109,11 +97,13 @@ function resolveCandidate(candidates: Candidate[], requestedRole: string) {
   const uniqueCandidates = Array.from(
     new Map(candidates.map((candidate) => [candidate.id, candidate])).values(),
   );
+
   if (uniqueCandidates.length === 1) return uniqueCandidates[0];
 
   const requestedMatches = requestedRole
     ? uniqueCandidates.filter((candidate) => candidate.role === requestedRole)
     : [];
+
   if (requestedMatches.length === 1) return requestedMatches[0];
   return null;
 }
@@ -130,17 +120,16 @@ serve(async (req) => {
   if (!supabaseAdmin || !supabaseAuth) {
     return jsonResponse(500, {
       ok: false,
-      message: "Konfigurasi Supabase untuk reset password belum lengkap.",
+      message: "Konfigurasi Supabase untuk login belum lengkap.",
     });
   }
 
   const body = await req.json().catch(() => ({}));
   const identifier = String(body?.identifier || "").trim();
-  const requestedRole = String(body?.role || "").trim().toLowerCase();
-  const redirectTo = String(body?.redirectTo || "").trim();
-
-  if (!identifier) {
-    return jsonResponse(400, { ok: false, message: "Identifier reset password wajib diisi." });
+  const password = String(body?.password || "").trim();
+  const requestedRole = String(body?.requestedRole || "").trim().toLowerCase();
+  if (!identifier || !password) {
+    return jsonResponse(401, { ok: false, message: "Login gagal. Periksa identifier dan password Anda." });
   }
 
   try {
@@ -148,25 +137,30 @@ serve(async (req) => {
     const resolved = resolveCandidate(candidates, requestedRole);
     const authEmail = normalizeEmail(resolved?.auth_email || resolved?.email);
 
-    if (resolved && authEmail && !isSyntheticAuthEmail(authEmail)) {
-      const { error } = await supabaseAuth.auth.resetPasswordForEmail(authEmail, {
-        redirectTo: redirectTo || undefined,
-      });
-      if (error) {
-        console.error("Gagal memicu reset password email:", error);
-        return jsonResponse(500, { ok: false, message: "Reset password sementara tidak dapat diproses." });
-      }
+    if (!resolved || !authEmail) {
+      return jsonResponse(401, { ok: false, message: "Login gagal. Periksa identifier dan password Anda." });
+    }
+
+    const { data, error } = await supabaseAuth.auth.signInWithPassword({
+      email: authEmail,
+      password,
+    });
+
+    if (error || !data.session) {
+      return jsonResponse(401, { ok: false, message: "Login gagal. Periksa identifier dan password Anda." });
     }
 
     return jsonResponse(200, {
       ok: true,
-      message: genericMessage,
+      session: data.session,
+      user: data.user,
+      resolved_role: resolved.role,
     });
   } catch (error) {
-    console.error("Gagal memproses request password reset:", error);
+    console.error("Gagal memproses login multi-identifier:", error);
     return jsonResponse(500, {
       ok: false,
-      message: "Reset password sementara tidak dapat diproses.",
+      message: "Login sementara tidak dapat diproses.",
     });
   }
 });

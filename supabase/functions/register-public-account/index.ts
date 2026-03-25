@@ -10,9 +10,8 @@ const corsHeaders = {
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
-const CONSUMER_AUTH_EMAIL_DOMAIN = (Deno.env.get("CONSUMER_AUTH_EMAIL_DOMAIN") || "consumer-login.indosejuk.local")
-  .trim()
-  .toLowerCase();
+const AUTH_EMAIL_DOMAIN = (Deno.env.get("AUTH_EMAIL_DOMAIN") || "auth.indosejuk.local").trim().toLowerCase();
+const PROFILE_STATUS_PENDING = "Menunggu Verifikasi";
 
 const supabaseAdmin = SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY
   ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
@@ -27,6 +26,10 @@ function jsonResponse(status: number, payload: Record<string, unknown>) {
   });
 }
 
+function normalizeEmail(value: unknown) {
+  return String(value || "").trim().toLowerCase();
+}
+
 function normalizePhone(value: unknown) {
   let digits = String(value || "").trim().replace(/\D/g, "");
   if (!digits) return "";
@@ -36,6 +39,27 @@ function normalizePhone(value: unknown) {
     digits = `0${digits}`;
   }
   return digits;
+}
+
+async function isUsernameTaken(username: string) {
+  const { count, error } = await supabaseAdmin!
+    .from("profiles")
+    .select("id", { count: "exact", head: true })
+    .ilike("username", username);
+
+  if (error) throw error;
+  return (count || 0) > 0;
+}
+
+async function isPhoneTaken(role: string, phone: string) {
+  const { count, error } = await supabaseAdmin!
+    .from("profiles")
+    .select("id", { count: "exact", head: true })
+    .eq("role", role)
+    .eq("phone", phone);
+
+  if (error) throw error;
+  return (count || 0) > 0;
 }
 
 serve(async (req) => {
@@ -55,48 +79,49 @@ serve(async (req) => {
   }
 
   const body = await req.json().catch(() => ({}));
+  const role = String(body?.role || "").trim().toLowerCase();
   const username = String(body?.username || "").trim();
   const name = String(body?.name || "").trim();
   const password = String(body?.password || "").trim();
+  const publicEmail = normalizeEmail(body?.email);
   const phone = normalizePhone(body?.phone);
 
+  if (!["konsumen", "teknisi"].includes(role)) {
+    return jsonResponse(400, { ok: false, message: "Role register tidak valid." });
+  }
   if (!username || !name || !password || !phone) {
-    return jsonResponse(400, { ok: false, message: "Data konsumen wajib belum lengkap." });
+    return jsonResponse(400, { ok: false, message: "Data akun wajib belum lengkap." });
+  }
+  if (role === "teknisi") {
+    const nik = String(body?.nik || "").trim();
+    const birthDate = String(body?.birth_date || "").trim();
+    const specialization = String(body?.specialization || "").trim();
+    const address = String(body?.address || "").trim();
+    if (!nik || !birthDate || !specialization || !address) {
+      return jsonResponse(400, { ok: false, message: "Data teknisi wajib belum lengkap." });
+    }
   }
 
-  const syntheticEmail = `${phone}@${CONSUMER_AUTH_EMAIL_DOMAIN}`;
+  const authEmail = publicEmail || `${role}.${phone}@${AUTH_EMAIL_DOMAIN}`;
 
   try {
-    const [usernameCheck, phoneCheck] = await Promise.all([
-      supabaseAdmin
-        .from("profiles")
-        .select("id", { count: "exact", head: true })
-        .eq("username", username),
-      supabaseAdmin
-        .from("profiles")
-        .select("id", { count: "exact", head: true })
-        .eq("role", "konsumen")
-        .eq("phone", phone),
-    ]);
-
-    if (usernameCheck.error) throw usernameCheck.error;
-    if (phoneCheck.error) throw phoneCheck.error;
-
-    if ((usernameCheck.count || 0) > 0) {
-      return jsonResponse(409, { ok: false, message: "Username konsumen sudah digunakan." });
+    if (await isUsernameTaken(username)) {
+      return jsonResponse(409, { ok: false, message: `Username ${role} sudah digunakan.` });
     }
-    if ((phoneCheck.count || 0) > 0) {
-      return jsonResponse(409, { ok: false, message: "Nomor telepon konsumen sudah digunakan." });
+    if (await isPhoneTaken(role, phone)) {
+      return jsonResponse(409, { ok: false, message: `Nomor telepon ${role} sudah digunakan.` });
     }
 
     const { data, error } = await supabaseAdmin.auth.admin.createUser({
-      email: syntheticEmail,
+      email: authEmail,
       password,
       email_confirm: true,
       user_metadata: {
-        role: "konsumen",
+        role,
         username,
         name,
+        contact_email: publicEmail,
+        auth_email: authEmail,
         phone,
         address: String(body?.address || "").trim(),
         age: body?.age ?? null,
@@ -105,34 +130,38 @@ serve(async (req) => {
         location_text: String(body?.location_text || "").trim(),
         lat: String(body?.lat || "").trim(),
         lng: String(body?.lng || "").trim(),
-        status: String(body?.status || "Aktif").trim(),
-        contact_email: "",
-        auth_email: syntheticEmail,
+        nik: String(body?.nik || "").trim(),
+        specialization: String(body?.specialization || "").trim(),
+        experience: body?.experience ?? null,
+        status: PROFILE_STATUS_PENDING,
       },
     });
 
     if (error) {
       return jsonResponse(400, {
         ok: false,
-        message: error.message || "Pendaftaran konsumen tanpa email gagal.",
+        message: error.message || "Pendaftaran akun belum dapat diproses.",
       });
     }
 
     return jsonResponse(200, {
       ok: true,
-      message: "Akun konsumen berhasil dibuat tanpa email publik.",
+      message: "Akun berhasil dibuat dan menunggu verifikasi admin.",
       user: data.user
         ? {
             id: data.user.id,
-            auth_email: syntheticEmail,
+            email: publicEmail,
+            auth_email: authEmail,
+            role,
           }
         : null,
+      auth_email: authEmail,
     });
   } catch (error) {
-    console.error("Gagal membuat akun konsumen tanpa email:", error);
+    console.error("Gagal membuat akun publik:", error);
     return jsonResponse(500, {
       ok: false,
-      message: "Pendaftaran konsumen tanpa email belum dapat diproses.",
+      message: "Pendaftaran akun belum dapat diproses.",
     });
   }
 });
