@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Indo Sejuk AC
 
 Website statis Indo Sejuk AC yang berjalan di GitHub Pages dan memakai Supabase sebagai source of truth untuk:
@@ -439,3 +440,8 @@ with check (public.is_admin());
 - Jika trigger belum dipasang, login bisa sukses tetapi `profiles` tidak ditemukan.
 - Jika `is_username_available()` belum dipasang, validasi username pre-check akan melewati RPC dan tetap mengandalkan unique index di database.
 - `proof_image_data` menyimpan data URL. Untuk produksi jangka panjang, lebih baik pindah ke Supabase Storage.
+=======
+# indosejuk
+
+https://palileo.github.io/indosejuk/
+>>>>>>> 1c3cfffb91a65cb88843273c29170c5aa7c6ee6d
