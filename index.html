@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="Indo Sejuk AC - layanan service AC profesional dengan login lokal untuk konsumen, teknisi, dan admin.">
+    <meta name="description" content="Indo Sejuk AC - layanan service AC profesional dengan login Supabase untuk konsumen, teknisi, dan admin.">
     <title>Indo Sejuk AC - Solusi AC Sejuk & Terpercaya di Banyumas</title>
     <link rel="stylesheet" href="style.css">
 </head>
@@ -110,7 +110,7 @@
             <div class="card form-card login-form-card">
                 <div class="page-header login-header">
                     <h2>Masuk ke Dashboard</h2>
-                    <p>Gunakan username dan password lokal sesuai role akun Anda.</p>
+                    <p>Gunakan email dan password akun Anda. Role akan ditentukan otomatis dari profil Supabase yang aktif.</p>
                 </div>
                 <div class="tabs login-role-tabs">
                     <button class="tab active" id="loginRoleTab-konsumen" onclick="switchLoginRole('konsumen', this)">Konsumen</button>
@@ -121,8 +121,8 @@
                     <input type="hidden" id="loginRole" value="konsumen">
                     <div class="form-grid login-form-grid">
                         <div class="form-group full-width">
-                            <label for="loginUsername">Username <span class="required">*</span></label>
-                            <input type="text" id="loginUsername" autocomplete="username" required placeholder="Masukkan username">
+                            <label for="loginIdentifier">Email <span class="required">*</span></label>
+                            <input type="email" id="loginIdentifier" autocomplete="username" required placeholder="Masukkan email Anda">
                         </div>
                         <div class="form-group full-width">
                             <label for="loginPassword">Password <span class="required">*</span></label>
@@ -651,7 +651,7 @@
             <section class="view" id="viewKonsumenProfile" style="display:none;">
                 <div class="page-header">
                     <h2>Profil Konsumen</h2>
-                    <p>Perubahan profil tersimpan otomatis ke localStorage.</p>
+                    <p>Perubahan profil tersinkron otomatis ke Supabase.</p>
                 </div>
                 <div class="card form-card">
                     <form id="formKonsumenProfile">
@@ -663,10 +663,6 @@
                             <div class="form-group">
                                 <label for="profileKonsumenUsername">Username</label>
                                 <input type="text" id="profileKonsumenUsername">
-                            </div>
-                            <div class="form-group">
-                                <label for="profileKonsumenPassword">Password</label>
-                                <input type="text" id="profileKonsumenPassword">
                             </div>
                             <div class="form-group">
                                 <label for="profileKonsumenEmail">Email</label>
@@ -816,7 +812,7 @@
             <section class="view" id="viewTeknisiProfile" style="display:none;">
                 <div class="page-header">
                     <h2>Profil Teknisi</h2>
-                    <p>Perubahan profil teknisi tersimpan otomatis secara lokal.</p>
+                    <p>Perubahan profil teknisi tersinkron otomatis ke Supabase.</p>
                 </div>
                 <div class="card form-card">
                     <form id="formTeknisiProfile">
@@ -828,10 +824,6 @@
                             <div class="form-group">
                                 <label for="profileTeknisiUsername">Username</label>
                                 <input type="text" id="profileTeknisiUsername">
-                            </div>
-                            <div class="form-group">
-                                <label for="profileTeknisiPassword">Password</label>
-                                <input type="text" id="profileTeknisiPassword">
                             </div>
                             <div class="form-group">
                                 <label for="profileTeknisiEmail">Email</label>
@@ -1089,7 +1081,7 @@
             <section class="view" id="viewAdminUsers" style="display:none;">
                 <div class="page-header">
                     <h2>Manajemen User</h2>
-                    <p>Daftar konsumen dan teknisi terdaftar di Indo Sejuk AC Banyumas</p>
+                    <p>Data profile dan order dibaca langsung dari Supabase.</p>
                 </div>
 
                 <div class="tabs">
@@ -1108,17 +1100,15 @@
                                 <tr>
                                     <th>Nama</th>
                                     <th>Username</th>
-                                    <th>Password</th>
                                     <th>Email</th>
                                     <th>Telepon</th>
                                     <th>Usia</th>
                                     <th>Alamat</th>
                                     <th>Total Pesanan</th>
-                                    <th>Aksi</th>
                                 </tr>
                             </thead>
                             <tbody id="adminKonsumenListBody">
-                                <tr><td colspan="9" class="empty-state">Tidak ada data</td></tr>
+                                <tr><td colspan="7" class="empty-state">Tidak ada data</td></tr>
                             </tbody>
                         </table>
                     </div>
@@ -1132,42 +1122,37 @@
                                 <tr>
                                     <th>Nama</th>
                                     <th>Username</th>
-                                    <th>Password</th>
-                                    <th>NIK</th>
-                                    <th>Usia</th>
-                                    <th>Spesialisasi</th>
+                                    <th>Email</th>
                                     <th>Telepon</th>
+                                    <th>NIK</th>
+                                    <th>Spesialisasi</th>
                                     <th>Status</th>
                                     <th>Tugas Selesai</th>
-                                    <th>Aksi</th>
                                 </tr>
                             </thead>
                             <tbody id="adminTeknisiListBody">
-                                <tr><td colspan="10" class="empty-state">Tidak ada data</td></tr>
+                                <tr><td colspan="8" class="empty-state">Tidak ada data</td></tr>
                             </tbody>
                         </table>
                     </div>
                 </div>
 
                 <div class="card" id="adminUserAdminCard" style="display:none;">
-                    <div class="card-header card-header-space-between">
-                        <h3>Data Admin</h3>
-                        <button class="btn btn-primary btn-sm" onclick="openAddAdminModal()">Tambah Admin</button>
-                    </div>
+                    <div class="card-header"><h3>Data Admin</h3></div>
+                    <p class="text-muted">Admin dibuat manual di Supabase dan diverifikasi dari tabel <code>profiles</code>.</p>
                     <div class="table-responsive">
                         <table class="data-table">
                             <thead>
                                 <tr>
                                     <th>Nama</th>
                                     <th>Username</th>
-                                    <th>Password</th>
-                                    <th>Role</th>
+                                    <th>Email</th>
                                     <th>Status</th>
-                                    <th>Aksi</th>
+                                    <th>Role</th>
                                 </tr>
                             </thead>
                             <tbody id="adminAdminListBody">
-                                <tr><td colspan="6" class="empty-state">Tidak ada data admin</td></tr>
+                                <tr><td colspan="5" class="empty-state">Tidak ada data admin</td></tr>
                             </tbody>
                         </table>
                     </div>
@@ -1592,6 +1577,7 @@
     <!-- Toast Notification -->
     <div class="toast-container" id="toastContainer"></div>
 
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script src="app.js"></script>
 </body>
 </html>
