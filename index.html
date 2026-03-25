@@ -73,7 +73,7 @@
                     </div>
                     <h3>Konsumen</h3>
                     <p>Pesan layanan service AC untuk rumah atau kantor Anda</p>
-                    <div class="role-card-arrow">→</div>
+                    <div class="role-card-arrow">â†’</div>
                 </div>
 
                 <div class="role-card" data-role="teknisi" id="roleTeknisi">
@@ -88,7 +88,7 @@
                     </div>
                     <h3>Teknisi</h3>
                     <p>Kelola pekerjaan service dan update status tugas</p>
-                    <div class="role-card-arrow">→</div>
+                    <div class="role-card-arrow">â†’</div>
                 </div>
 
                 <div class="role-card role-card--admin" data-role="admin" id="roleAdmin">
@@ -103,18 +103,14 @@
                     </div>
                     <h3>Admin</h3>
                     <p>Pantau seluruh operasional dan kelola bisnis</p>
-                    <div class="role-card-arrow">→</div>
+                    <div class="role-card-arrow">â†’</div>
                 </div>
             </div>
 
             <div class="card form-card login-form-card">
                 <div class="page-header login-header">
                     <h2>Masuk ke Dashboard</h2>
-<<<<<<< HEAD
                     <p>Gunakan email dan password akun Anda. Role akan ditentukan otomatis dari profil Supabase yang aktif.</p>
-=======
-                    <p>Gunakan email atau nomor telepon dan password akun Anda. Role akan mengikuti profil yang tersimpan.</p>
->>>>>>> 1c3cfffb91a65cb88843273c29170c5aa7c6ee6d
                 </div>
                 <div class="tabs login-role-tabs">
                     <button class="tab active" id="loginRoleTab-konsumen" onclick="switchLoginRole('konsumen', this)">Konsumen</button>
@@ -125,13 +121,8 @@
                     <input type="hidden" id="loginRole" value="konsumen">
                     <div class="form-grid login-form-grid">
                         <div class="form-group full-width">
-<<<<<<< HEAD
                             <label for="loginIdentifier">Email <span class="required">*</span></label>
                             <input type="email" id="loginIdentifier" autocomplete="username" required placeholder="Masukkan email Anda">
-=======
-                            <label for="loginIdentifier">Email atau Nomor Telepon <span class="required">*</span></label>
-                            <input type="text" id="loginIdentifier" autocomplete="username" required placeholder="Masukkan email atau nomor telepon">
->>>>>>> 1c3cfffb91a65cb88843273c29170c5aa7c6ee6d
                         </div>
                         <div class="form-group full-width">
                             <label for="loginPassword">Password <span class="required">*</span></label>
@@ -151,7 +142,7 @@
             </div>
 
             <div class="login-footer-text">
-                <p>📍 Banyumas, Jawa Tengah &nbsp;|&nbsp; 📞 0897-0788-800</p>
+                <p>ðŸ“ Banyumas, Jawa Tengah &nbsp;|&nbsp; ðŸ“ž 0897-0788-800</p>
             </div>
         </div>
     </section>
@@ -184,7 +175,7 @@
             <!-- === FORM DAFTAR KONSUMEN === -->
             <div class="register-form-card" id="regFormKonsumen">
                 <form id="formRegKonsumen" onsubmit="return handleRegisterKonsumen(event)">
-                    <h3 class="reg-form-title">📋 Data Diri Konsumen</h3>
+                    <h3 class="reg-form-title">ðŸ“‹ Data Diri Konsumen</h3>
                     <div class="reg-form-grid">
                         <div class="form-group">
                             <label for="regKonName">Nama Lengkap <span class="required">*</span></label>
@@ -244,7 +235,7 @@
 
                     <!-- Share Location -->
                     <div class="sharelok-section">
-                        <h4>📍 Share Lokasi (Sharelok)</h4>
+                        <h4>ðŸ“ Share Lokasi (Sharelok)</h4>
                         <p class="text-muted text-sm">Bagikan lokasi Anda agar teknisi lebih mudah menemukan alamat</p>
                         <div class="sharelok-row">
                             <button type="button" class="btn btn-info" onclick="getShareLocation('regKon')">
@@ -252,9 +243,9 @@
                                 Ambil Lokasi GPS
                             </button>
                             <div class="sharelok-result" id="regKonLocationResult" style="display:none;">
-                                <span class="sharelok-badge">✅ Lokasi berhasil diambil</span>
+                                <span class="sharelok-badge">âœ… Lokasi berhasil diambil</span>
                                 <span class="sharelok-coords" id="regKonCoords"></span>
-                                <a id="regKonMapLink" href="#" target="_blank" class="sharelok-map-link">Lihat di Google Maps ↗</a>
+                                <a id="regKonMapLink" href="#" target="_blank" class="sharelok-map-link">Lihat di Google Maps â†—</a>
                             </div>
                         </div>
                         <input type="hidden" id="regKonLat">
@@ -263,7 +254,7 @@
 
                     <!-- Upload Foto Unit AC -->
                     <div class="upload-section">
-                        <h4>📷 Foto Unit AC (Opsional)</h4>
+                        <h4>ðŸ“· Foto Unit AC (Opsional)</h4>
                         <p class="text-muted text-sm">Upload foto AC Anda agar teknisi bisa mempersiapkan peralatan yang tepat</p>
                         <div class="upload-options">
                             <div class="upload-option">
@@ -296,7 +287,7 @@
             <!-- === FORM DAFTAR TEKNISI === -->
             <div class="register-form-card" id="regFormTeknisi" style="display:none;">
                 <form id="formRegTeknisi" onsubmit="return handleRegisterTeknisi(event)">
-                    <h3 class="reg-form-title">🔧 Data Diri Teknisi</h3>
+                    <h3 class="reg-form-title">ðŸ”§ Data Diri Teknisi</h3>
                     <div class="reg-form-grid">
                         <div class="form-group">
                             <label for="regTekName">Nama Lengkap <span class="required">*</span></label>
@@ -349,7 +340,7 @@
 
                     <!-- Share Location -->
                     <div class="sharelok-section">
-                        <h4>📍 Share Lokasi Domisili (Sharelok)</h4>
+                        <h4>ðŸ“ Share Lokasi Domisili (Sharelok)</h4>
                         <p class="text-muted text-sm">Lokasi akan membantu penugasan berdasarkan area terdekat</p>
                         <div class="sharelok-row">
                             <button type="button" class="btn btn-info" onclick="getShareLocation('regTek')">
@@ -357,9 +348,9 @@
                                 Ambil Lokasi GPS
                             </button>
                             <div class="sharelok-result" id="regTekLocationResult" style="display:none;">
-                                <span class="sharelok-badge">✅ Lokasi berhasil diambil</span>
+                                <span class="sharelok-badge">âœ… Lokasi berhasil diambil</span>
                                 <span class="sharelok-coords" id="regTekCoords"></span>
-                                <a id="regTekMapLink" href="#" target="_blank" class="sharelok-map-link">Lihat di Google Maps ↗</a>
+                                <a id="regTekMapLink" href="#" target="_blank" class="sharelok-map-link">Lihat di Google Maps â†—</a>
                             </div>
                         </div>
                         <input type="hidden" id="regTekLat">
@@ -368,7 +359,7 @@
 
                     <!-- Upload KTP -->
                     <div class="upload-section">
-                        <h4>🪪 Upload Foto KTP <span class="required">*</span></h4>
+                        <h4>ðŸªª Upload Foto KTP <span class="required">*</span></h4>
                         <p class="text-muted text-sm">Foto KTP yang jelas untuk verifikasi identitas dan OCR.</p>
                         <div class="upload-section-header-actions">
                             <button type="button" class="btn btn-outline btn-sm" id="btnScanKtp" onclick="runTechnicianKtpOcr()">Scan KTP / OCR</button>
@@ -402,7 +393,7 @@
 
                     <!-- Upload Foto Diri -->
                     <div class="upload-section">
-                        <h4>🤳 Upload Foto Diri <span class="required">*</span></h4>
+                        <h4>ðŸ¤³ Upload Foto Diri <span class="required">*</span></h4>
                         <p class="text-muted text-sm">Foto setengah badan yang jelas untuk profil teknisi (untuk kepercayaan konsumen)</p>
                         <div class="upload-options">
                             <div class="upload-option">
@@ -539,7 +530,7 @@
             <!-- Konsumen: Order Form -->
             <section class="view" id="viewKonsumenOrder" style="display:none;">
                 <div class="page-header">
-                    <button class="btn-back" onclick="navigateTo('konsumen-home')">← Kembali</button>
+                    <button class="btn-back" onclick="navigateTo('konsumen-home')">â† Kembali</button>
                     <h2>Pesan Layanan Service AC</h2>
                     <p>Isi formulir di bawah ini untuk memesan layanan service AC</p>
                 </div>
@@ -711,7 +702,7 @@
                 </div>
                 <div class="card form-card">
                     <div class="upload-section">
-                        <h4>📷 Pilih Metode Upload</h4>
+                        <h4>ðŸ“· Pilih Metode Upload</h4>
                         <div class="upload-options">
                             <div class="upload-option">
                                 <label class="upload-option-btn" for="konUnitCamera">
@@ -879,7 +870,7 @@
             <!-- Teknisi: Upload Bukti -->
             <section class="view" id="viewTeknisiUpload" style="display:none;">
                 <div class="page-header">
-                    <button class="btn-back" onclick="navigateTo('teknisi-home')">← Kembali</button>
+                    <button class="btn-back" onclick="navigateTo('teknisi-home')">â† Kembali</button>
                     <h2>Upload Bukti Pekerjaan</h2>
                     <p>Unggah foto sebagai bukti penyelesaian pekerjaan</p>
                 </div>
@@ -912,7 +903,7 @@
                 <div class="card form-card">
                     <!-- Upload KTP -->
                     <div class="upload-section">
-                        <h4>🪪 Foto KTP / Identitas</h4>
+                        <h4>ðŸªª Foto KTP / Identitas</h4>
                         <p class="text-muted text-sm">Upload foto KTP yang jelas untuk verifikasi identitas</p>
                         <div class="upload-options">
                             <div class="upload-option">
@@ -935,7 +926,7 @@
 
                     <!-- Upload Foto Diri -->
                     <div class="upload-section" style="margin-top:1.5rem;">
-                        <h4>🤳 Foto Diri</h4>
+                        <h4>ðŸ¤³ Foto Diri</h4>
                         <p class="text-muted text-sm">Foto setengah badan untuk profil teknisi (meningkatkan kepercayaan konsumen)</p>
                         <div class="upload-options">
                             <div class="upload-option">
@@ -1228,12 +1219,12 @@
             <div class="footer-info">
                 <div class="footer-col">
                     <h5>Kontak</h5>
-                    <p>📞 0897-0788-800</p>
-                    <p>📧 info@sejukac.com</p>
+                    <p>ðŸ“ž 0897-0788-800</p>
+                    <p>ðŸ“§ info@sejukac.com</p>
                 </div>
                 <div class="footer-col">
                     <h5>Alamat</h5>
-                    <p>📍 Banyumas, Jawa Tengah</p>
+                    <p>ðŸ“ Banyumas, Jawa Tengah</p>
                     <p>Indonesia</p>
                 </div>
             </div>
