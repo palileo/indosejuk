@@ -501,9 +501,14 @@
                         <div class="ocr-panel">
                             <div class="ocr-status" id="ocrStatus">OCR siap digunakan setelah foto KTP diunggah.</div>
                             <div class="ocr-progress" id="ocrProgress"></div>
+                            <p class="text-muted text-sm ocr-helper-text">OCR akan mengisi otomatis hanya untuk field yang masih kosong. Anda tetap bisa edit manual kapan saja.</p>
                             <div class="ocr-preview-card" id="ocrPreviewCard" style="display:none;">
                                 <h5>Preview Ekstraksi OCR</h5>
                                 <div class="ocr-result-list" id="ocrResultList"></div>
+                                <div class="ocr-preview-actions">
+                                    <button type="button" class="btn btn-outline btn-sm" onclick="applyLatestTechnicianOcrResult(false)">Gunakan hasil OCR</button>
+                                    <button type="button" class="btn btn-outline btn-sm" onclick="applyLatestTechnicianOcrResult(true)">Terapkan ulang OCR</button>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -1415,12 +1420,12 @@
                             <input type="text" id="editKonsumenUsername">
                         </div>
                         <div class="form-group">
-                            <label for="editKonsumenPassword">Password</label>
-                            <input type="text" id="editKonsumenPassword">
+                            <label for="editKonsumenPassword">Password Auth</label>
+                            <input type="text" id="editKonsumenPassword" readonly placeholder="Dikelola di Supabase Auth">
                         </div>
                         <div class="form-group">
-                            <label for="editKonsumenEmail">Email</label>
-                            <input type="email" id="editKonsumenEmail">
+                            <label for="editKonsumenEmail">Email Auth</label>
+                            <input type="email" id="editKonsumenEmail" readonly>
                         </div>
                         <div class="form-group">
                             <label for="editKonsumenPhone">Telepon</label>
@@ -1465,12 +1470,12 @@
                             <input type="text" id="editTeknisiUsername">
                         </div>
                         <div class="form-group">
-                            <label for="editTeknisiPassword">Password</label>
-                            <input type="text" id="editTeknisiPassword">
+                            <label for="editTeknisiPassword">Password Auth</label>
+                            <input type="text" id="editTeknisiPassword" readonly placeholder="Dikelola di Supabase Auth">
                         </div>
                         <div class="form-group">
-                            <label for="editTeknisiEmail">Email</label>
-                            <input type="email" id="editTeknisiEmail">
+                            <label for="editTeknisiEmail">Email Auth</label>
+                            <input type="email" id="editTeknisiEmail" readonly>
                         </div>
                         <div class="form-group">
                             <label for="editTeknisiPhone">Telepon</label>
@@ -1537,8 +1542,8 @@
                         <input type="text" id="editAdminUsername">
                     </div>
                     <div class="form-group">
-                        <label for="editAdminPassword">Password</label>
-                        <input type="text" id="editAdminPassword">
+                        <label for="editAdminPassword">Password Auth</label>
+                        <input type="text" id="editAdminPassword" readonly placeholder="Kelola langsung di Supabase Auth">
                     </div>
                     <div class="form-group">
                         <label for="editAdminRole">Role</label>
