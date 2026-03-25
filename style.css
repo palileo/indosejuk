@@ -231,11 +231,22 @@ body {
 }
 
 .role-cards.role-cards--admin-hidden {
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
     max-width: 600px;
+}
+
+.is-hidden[hidden] {
+    display: none !important;
 }
 
 .role-card.is-hidden {
     display: none !important;
+}
+
+.admin-localhost-hint {
+    margin-top: 8px;
+    font-size: 0.9rem;
+    opacity: 0.8;
 }
 
 .role-card {

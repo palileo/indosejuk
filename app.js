@@ -27,6 +27,7 @@ let uploadingOrderId = null;
 let uploadProofImage = null;
 let appData = null;
 let authBootstrapPromise = null;
+let authSignInInProgress = false;
 
 const remoteState = {
     session: null,
@@ -326,10 +327,6 @@ function isLocalhostEnv() {
     return ['localhost', '127.0.0.1', '::1'].includes(window.location.hostname);
 }
 
-function canAccessAdmin() {
-    return true;
-}
-
 async function getCurrentAuthUser() {
     if (!canUseSupabase()) return null;
     const { data, error } = await supabaseClient.auth.getUser();
@@ -531,150 +528,6 @@ async function findProfileByIdentifier(role, identifier) {
     return (profiles || []).find((profile) => identifiersMatch(profile?.email, normalized)) || null;
 }
 
-async function fetchProfilesByRole(role) {
-    if (!canUseSupabase()) throw new Error('Supabase client belum siap.');
-    const { data, error } = await supabaseClient
-        .from('profiles')
-        .select('*')
-        .eq('role', role)
-        .order('created_at', { ascending: false });
-
-    if (error) throw error;
-    return data;
-}
-
-function showAdminDashboard() {
-    openAppLayout();
-    renderAppShell();
-    navigateTo('admin-home');
-}
-
-function showKonsumenDashboard() {
-    openAppLayout();
-    renderAppShell();
-    navigateTo('konsumen-home');
-}
-
-function showTeknisiDashboard() {
-    openAppLayout();
-    renderAppShell();
-    navigateTo('teknisi-home');
-}
-
-function showDashboardForRole(role) {
-    if (role === 'admin') {
-        showAdminDashboard();
-        return;
-    }
-    if (role === 'konsumen') {
-        showKonsumenDashboard();
-        return;
-    }
-    if (role === 'teknisi') {
-        showTeknisiDashboard();
-    }
-}
-
-async function handleSupabaseLogin(email, password) {
-    if (!canUseSupabase()) throw new Error('Supabase client belum siap.');
-    await signInSupabase(email, password);
-
-    const profile = await fetchCurrentProfile();
-    if (!profile) throw new Error('Profile user tidak ditemukan');
-
-    const localOverrides = {
-        password: password.trim(),
-        email: normalizeEmail(profile.email || email),
-        phone: normalizePhone(profile.phone)
-    };
-
-    if (profile.role === 'admin') {
-        if (!canAccessAdmin()) {
-            await supabaseClient.auth.signOut();
-            saveSession(null);
-            currentRole = null;
-            showToast('Akses admin memerlukan profile admin yang valid.', 'warning');
-            return null;
-        }
-        const localUser = applySupabaseSession(profile, localOverrides);
-        showDashboardForRole('admin');
-        return localUser;
-    }
-
-    if (profile.role === 'konsumen') {
-        const localUser = applySupabaseSession(profile, localOverrides);
-        showDashboardForRole('konsumen');
-        return localUser;
-    }
-
-    if (profile.role === 'teknisi') {
-        const localUser = applySupabaseSession(profile, localOverrides);
-        showDashboardForRole('teknisi');
-        return localUser;
-    }
-
-    throw new Error(`Role user tidak dikenali: ${profile.role}`);
-}
-
-async function handleProfileLogin(role, identifier, password) {
-    const profile = await handleSupabaseLogin(identifier, password);
-    if (!profile) throw new Error('Email tidak cocok.');
-
-    const authenticatedUser = profile;
-    if (authenticatedUser && authenticatedUser.role !== role) {
-        await logoutSupabase();
-        saveSession(null);
-        currentRole = null;
-        throw new Error(`Akun ini terdaftar sebagai ${authenticatedUser.role}, bukan ${role}.`);
-    }
-
-    return authenticatedUser;
-}
-
-async function loadAdminMasterData() {
-    if (!canUseSupabase()) return false;
-    const konsumen = await fetchProfilesByRole('konsumen');
-    const teknisi = await fetchProfilesByRole('teknisi');
-    const admin = await fetchProfilesByRole('admin');
-
-    cacheProfilesByRole('konsumen', konsumen);
-    cacheProfilesByRole('teknisi', teknisi);
-    cacheProfilesByRole('admin', admin);
-
-    renderAdminKonsumenTable(konsumen);
-    renderAdminTeknisiTable(teknisi);
-    renderAdminAdminTable(admin);
-    return true;
-}
-
-function hideAdminForPublic() {
-    syncAdminAccessUI();
-}
-
-function isAdminView(viewId = '') {
-    return String(viewId || '').startsWith('admin');
-}
-
-function syncAdminAccessUI() {
-    const roleAdminCard = document.getElementById('roleAdmin');
-    const loginAdminTab = document.getElementById('loginRoleTab-admin');
-    const roleCards = document.getElementById('roleCards');
-
-    if (roleAdminCard) {
-        roleAdminCard.style.display = '';
-        roleAdminCard.setAttribute('aria-hidden', 'false');
-    }
-
-    if (loginAdminTab) {
-        loginAdminTab.style.display = '';
-        loginAdminTab.disabled = false;
-        loginAdminTab.setAttribute('aria-hidden', 'false');
-    }
-
-    if (roleCards) {
-        roleCards.classList.remove('role-cards--admin-hidden');
-    }
-}
 
 async function syncNewUserToRemote(user, role) {
     // Sinkronisasi ke GitHub wajib lewat backend/serverless function yang memegang secret,
@@ -1101,40 +954,12 @@ function loginUser(role, username, password) {
     return null;
 }
 
-async function logoutUser(showMessage = true) {
-    await logoutSupabase();
-    saveSession(null);
-    currentRole = null;
-    currentView = null;
-    uploadingOrderId = null;
-    uploadProofImage = null;
-    document.getElementById('formLogin')?.reset();
-    switchLoginRole('konsumen');
-    showLanding();
-    if (showMessage) showToast('Anda berhasil logout.', 'success');
-}
-
 function requireRole(role) {
     if (!ensureValidSession(true)) return false;
     const session = getCurrentSession();
     if (session?.role !== role) {
         showToast(`Akses hanya untuk ${ROLE_LABELS[role] || role}.`, 'warning');
         navigateTo(`${session.role}-home`);
-        return false;
-    }
-    return true;
-}
-
-function requireAdminAccess() {
-    if (!ensureValidSession(true)) return false;
-    const session = getCurrentSession();
-    if (session?.role !== 'admin') {
-        showToast('Akses hanya untuk Admin.', 'warning');
-        navigateTo(`${session.role}-home`);
-        return false;
-    }
-    if (!canAccessAdmin(session.role)) {
-        resetToPublicLanding('Dashboard admin hanya tersedia untuk profile admin yang valid.');
         return false;
     }
     return true;
@@ -1215,20 +1040,6 @@ function switchRegisterTab(tab, element) {
     document.getElementById('regFormTeknisi').style.display = tab === 'teknisi' ? 'block' : 'none';
 }
 
-function switchLoginRole(role, element) {
-    if (role === 'admin' && !canAccessAdmin(role)) {
-        role = 'konsumen';
-        element = null;
-    }
-    const input = document.getElementById('loginRole');
-    if (input) input.value = role;
-    document.querySelectorAll('.login-role-tabs .tab').forEach((button) => button.classList.remove('active'));
-    if (element) {
-        element.classList.add('active');
-    } else {
-        document.getElementById(`loginRoleTab-${role}`)?.classList.add('active');
-    }
-}
 
 function renderDefaultAccountList() {
     const container = document.getElementById('defaultAccountList');
@@ -1238,33 +1049,6 @@ function renderDefaultAccountList() {
     container.style.display = 'none';
 }
 
-function renderLandingSessionNotice() {
-    const container = document.getElementById('landingSessionNotice');
-    if (!container) return;
-    const user = getCurrentUser();
-    if (!user) {
-        container.style.display = 'none';
-        container.innerHTML = '';
-        return;
-    }
-    container.style.display = 'block';
-    container.innerHTML = `
-        <p>Session aktif: <strong>${escapeHtml(user.name)}</strong> (${escapeHtml(ROLE_LABELS[user.role])}).</p>
-        <div class="btn-action-group">
-            <button class="btn btn-primary btn-sm" type="button" onclick="resumeSession()">Kembali ke Dashboard</button>
-            <button class="btn btn-outline btn-sm" type="button" onclick="logoutUser()">Keluar</button>
-        </div>
-    `;
-}
-
-function resumeSession() {
-    if (!ensureValidSession(true)) return;
-    const session = getCurrentSession();
-    currentRole = session.role;
-    openAppLayout();
-    renderAppShell();
-    navigateTo(`${session.role}-home`);
-}
 
 function goToLanding() {
     showLanding();
@@ -1288,34 +1072,6 @@ function renderAppShell() {
     document.getElementById('mobileNav').innerHTML = navHtml;
 }
 
-function navigateTo(viewId, prefill = '') {
-    if (!ensureValidSession(true)) return;
-    const session = getCurrentSession();
-    const role = session.role;
-    if (isAdminView(viewId) && role !== 'admin') {
-        showToast('Halaman admin hanya tersedia untuk role Admin.', 'warning');
-        viewId = `${role}-home`;
-    }
-    if (isAdminView(viewId) && !canAccessAdmin(role)) {
-        resetToPublicLanding('Dashboard admin hanya tersedia untuk profile admin yang valid.');
-        return;
-    }
-    if (!viewId.startsWith(role)) {
-        showToast('Anda tidak dapat membuka halaman role lain.', 'warning');
-        viewId = `${role}-home`;
-    }
-
-    document.querySelectorAll('.view').forEach((view) => {
-        view.style.display = 'none';
-    });
-
-    const targetId = `view${viewId.split('-').map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join('')}`;
-    const target = document.getElementById(targetId);
-    if (target) target.style.display = 'block';
-    currentView = viewId;
-    renderAppShell();
-    renderCurrentView(prefill);
-}
 
 function getServices(includeInactive = false) {
     const services = getData().services || [];
@@ -1542,67 +1298,6 @@ function renderTeknisiUpload() {
     ` : '';
 }
 
-function renderAdminHome() {
-    if (!requireAdminAccess()) return;
-    const data = getData();
-    const orders = data.orders || [];
-    document.getElementById('adminTotalOrders').textContent = orders.length;
-    document.getElementById('adminTotalRevenue').textContent = formatRupiah(orders.filter((order) => order.status === 'Selesai').reduce((sum, order) => sum + Number(order.price || 0), 0));
-    document.getElementById('adminTotalTeknisi').textContent = data.users.teknisi.filter((user) => user.status === 'Aktif').length;
-    document.getElementById('adminPendingOrders').textContent = orders.filter((order) => order.status === 'Menunggu').length;
-
-    const body = document.getElementById('adminRecentOrdersBody');
-    body.innerHTML = orders.length ? orders.slice().reverse().slice(0, 5).map((order) => `
-        <tr>
-            <td>${escapeHtml(order.id)}</td>
-            <td>${escapeHtml(order.konsumenName)}</td>
-            <td>${escapeHtml(order.serviceName)}</td>
-            <td>${escapeHtml(formatDate(order.preferredDate || order.createdAt))}</td>
-            <td>${renderStatusBadge(order.status)}</td>
-            <td><button class="btn btn-outline btn-xs" onclick="openOrderDetail('${order.id}')">Detail</button></td>
-        </tr>
-    `).join('') : '<tr><td colspan="6" class="empty-state">Belum ada pesanan</td></tr>';
-}
-
-function renderAdminOrders() {
-    if (!requireAdminAccess()) return;
-    const data = getData();
-    const filter = document.getElementById('adminFilterStatus').value;
-    const orders = (data.orders || []).filter((order) => filter === 'all' || order.status === filter);
-    const body = document.getElementById('adminAllOrdersBody');
-    body.innerHTML = orders.length ? orders.slice().reverse().map((order) => `
-        <tr>
-            <td>${escapeHtml(order.id)}</td>
-            <td>${escapeHtml(order.konsumenName)}</td>
-            <td>${escapeHtml(order.serviceName)}</td>
-            <td>${escapeHtml(order.brand || '-')}</td>
-            <td>${escapeHtml(formatDate(order.preferredDate))}</td>
-            <td>${escapeHtml(order.address)}</td>
-            <td>${escapeHtml(order.teknisiName || '-')}</td>
-            <td>${renderStatusBadge(order.status)}</td>
-            <td>
-                <div class="btn-action-group">
-                    <button class="btn btn-outline btn-xs" onclick="openOrderDetail('${order.id}')">Detail</button>
-                    <button class="btn btn-primary btn-xs" onclick="openAssignModal('${order.id}')">${order.status === 'Menunggu' ? 'Verifikasi' : 'Assign'}</button>
-                </div>
-            </td>
-        </tr>
-    `).join('') : '<tr><td colspan="9" class="empty-state">Belum ada pesanan</td></tr>';
-}
-
-function renderAdminUsers() {
-    if (!requireAdminAccess()) return;
-    renderAdminKonsumenTable();
-    renderAdminTeknisiTable();
-    renderAdminAdminTable();
-    renderAdminServicesTable();
-    renderAdminImageCatalogTable();
-    switchUserTab(currentUserTab);
-    loadAdminMasterData().catch((error) => {
-        console.error('Gagal memuat data master admin dari Supabase:', error);
-        showToast('Data master admin masih memakai cache lokal.', 'warning');
-    });
-}
 
 function renderAdminKonsumenTable(users = null) {
     if (!requireAdminAccess()) return;
@@ -1868,30 +1563,6 @@ function showToast(message, type = 'success') {
         toast.style.animation = 'toastOut 0.3s ease forwards';
         setTimeout(() => toast.remove(), 280);
     }, 2600);
-}
-
-async function handleLoginSubmit(event) {
-    event.preventDefault();
-    const role = document.getElementById('loginRole').value;
-    const identifier = document.getElementById('loginIdentifier').value.trim();
-    const password = document.getElementById('loginPassword').value;
-
-    if (!identifier || !password) {
-        showToast('Email dan password wajib diisi.', 'error');
-        return false;
-    }
-
-    try {
-        const user = await handleProfileLogin(role, identifier, password);
-        if (user) {
-            showToast(`Login berhasil. Selamat datang, ${user.name}.`, 'success');
-        }
-    } catch (error) {
-        console.error('Login identifier/password gagal:', error);
-        showToast(error?.message || 'Login gagal. Periksa email dan password Anda.', 'error');
-    }
-
-    return false;
 }
 
 function syncAgeField(dateInputId, ageInputId) {
@@ -3062,7 +2733,102 @@ function getOrderLabel(order) {
     return order?.displayId || order?.id || '-';
 }
 
-function canAccessAdmin() {
+function isAdminProfile(profileOrRole) {
+    if (!profileOrRole) return false;
+    if (typeof profileOrRole === 'string') return profileOrRole === 'admin';
+    return profileOrRole.role === 'admin';
+}
+
+function getAdminAccessDeniedMessage() {
+    return 'Dashboard admin hanya tersedia di localhost.';
+}
+
+function canAccessAdmin(profileOrRole = null) {
+    if (!isLocalhostEnv()) return false;
+    if (profileOrRole == null) return true;
+    return isAdminProfile(profileOrRole);
+}
+
+function isAdminRoute(routeName = '') {
+    return typeof routeName === 'string' && routeName.startsWith('admin-');
+}
+
+function clearAdminViewState() {
+    if (isAdminRoute(currentView)) currentView = null;
+    currentUserTab = 'konsumen';
+    const adminFilter = document.getElementById('adminFilterStatus');
+    if (adminFilter) adminFilter.value = 'all';
+}
+
+function resetLoginRoleToConsumer() {
+    const loginRoleInput = document.getElementById('loginRole');
+    const consumerTab = document.getElementById('loginRoleTab-konsumen');
+    const adminTab = document.getElementById('loginRoleTab-admin');
+
+    if (loginRoleInput) loginRoleInput.value = 'konsumen';
+    document.querySelectorAll('.login-role-tabs .tab').forEach((button) => {
+        button.classList.toggle('active', button === consumerTab);
+        button.setAttribute('aria-selected', String(button === consumerTab));
+    });
+
+    if (consumerTab) {
+        consumerTab.classList.add('active');
+        consumerTab.setAttribute('aria-selected', 'true');
+    }
+
+    if (adminTab) {
+        adminTab.classList.remove('active');
+        adminTab.setAttribute('aria-selected', 'false');
+    }
+}
+
+async function forceExitAdminOnPublicHost(options = {}) {
+    if (isLocalhostEnv()) return false;
+
+    const message = options.message || getAdminAccessDeniedMessage();
+
+    try {
+        clearAdminViewState();
+    } catch (_) {}
+
+    try {
+        resetLoginRoleToConsumer();
+    } catch (_) {}
+
+    try {
+        if (supabaseClient?.auth) {
+            await supabaseClient.auth.signOut();
+        }
+    } catch (_) {}
+
+    try {
+        clearRemoteSessionState({ preserveView: false });
+    } catch (_) {}
+
+    try {
+        document.getElementById('formLogin')?.reset();
+    } catch (_) {}
+
+    try {
+        syncAdminAccessUI();
+    } catch (_) {}
+
+    try {
+        if (typeof showLanding === 'function') {
+            showLanding();
+        }
+    } catch (_) {}
+
+    if (!options.silent) {
+        try {
+            if (typeof showToast === 'function') {
+                showToast(message, 'warning');
+            } else if (typeof showAlert === 'function') {
+                showAlert(message);
+            }
+        } catch (_) {}
+    }
+
     return true;
 }
 
@@ -3071,21 +2837,56 @@ function hideAdminForPublic() {
 }
 
 function syncAdminAccessUI() {
-    const roleAdminCard = document.getElementById('roleAdmin');
-    const loginAdminTab = document.getElementById('loginRoleTab-admin');
-    const roleCards = document.getElementById('roleCards');
+    const allowAdmin = isLocalhostEnv();
+    const adminCard = document.getElementById('roleAdmin');
+    const adminTab = document.getElementById('loginRoleTab-admin');
+    const consumerTab = document.getElementById('loginRoleTab-konsumen');
+    const loginRoleInput = document.getElementById('loginRole');
+    const roleCards = document.getElementById('roleCards') || document.querySelector('.role-cards');
+    const localhostHint = document.getElementById('adminLocalhostHint');
+    const adminSelected = loginRoleInput?.value === 'admin' || adminTab?.classList.contains('active');
 
-    if (roleAdminCard) {
-        roleAdminCard.style.display = '';
-        roleAdminCard.setAttribute('aria-hidden', 'false');
+    if (adminCard) {
+        adminCard.hidden = !allowAdmin;
+        adminCard.classList.toggle('is-hidden', !allowAdmin);
+        adminCard.setAttribute('aria-hidden', String(!allowAdmin));
     }
-    if (loginAdminTab) {
-        loginAdminTab.style.display = '';
-        loginAdminTab.disabled = false;
-        loginAdminTab.setAttribute('aria-hidden', 'false');
+
+    if (adminTab) {
+        adminTab.hidden = !allowAdmin;
+        adminTab.disabled = !allowAdmin;
+        adminTab.setAttribute('aria-hidden', String(!allowAdmin));
+        adminTab.tabIndex = allowAdmin ? 0 : -1;
+        adminTab.classList.toggle('is-hidden', !allowAdmin);
     }
+
     if (roleCards) {
-        roleCards.classList.remove('role-cards--admin-hidden');
+        roleCards.classList.toggle('role-cards--admin-visible', allowAdmin);
+        roleCards.classList.toggle('role-cards--admin-hidden', !allowAdmin);
+    }
+
+    if (localhostHint) {
+        localhostHint.hidden = allowAdmin;
+    }
+
+    if (!allowAdmin) {
+        if (loginRoleInput?.value === 'admin') {
+            loginRoleInput.value = 'konsumen';
+        }
+
+        if (adminTab) {
+            adminTab.classList.remove('active');
+            adminTab.setAttribute('aria-selected', 'false');
+        }
+
+        if (adminSelected && consumerTab) {
+            consumerTab.classList.add('active');
+            consumerTab.setAttribute('aria-selected', 'true');
+        }
+
+        if (adminSelected) {
+            resetLoginRoleToConsumer();
+        }
     }
 }
 
@@ -3123,14 +2924,28 @@ function loginUser() {
 
 function switchLoginRole(role, element) {
     const safeRole = ['konsumen', 'teknisi', 'admin'].includes(role) ? role : 'konsumen';
+
+    if (safeRole === 'admin' && !canAccessAdmin('admin')) {
+        syncAdminAccessUI();
+        resetLoginRoleToConsumer();
+        showToast(getAdminAccessDeniedMessage(), 'warning');
+        return 'konsumen';
+    }
+
     const input = document.getElementById('loginRole');
     if (input) input.value = safeRole;
-    document.querySelectorAll('.login-role-tabs .tab').forEach((button) => button.classList.remove('active'));
-    if (element) {
-        element.classList.add('active');
-    } else {
-        document.getElementById(`loginRoleTab-${safeRole}`)?.classList.add('active');
+    document.querySelectorAll('.login-role-tabs .tab').forEach((button) => {
+        button.classList.remove('active');
+        button.setAttribute('aria-selected', 'false');
+    });
+
+    const targetButton = element || document.getElementById(`loginRoleTab-${safeRole}`);
+    if (targetButton) {
+        targetButton.classList.add('active');
+        targetButton.setAttribute('aria-selected', 'true');
     }
+
+    return safeRole;
 }
 
 async function getSupabaseSession() {
@@ -3333,7 +3148,17 @@ async function ensureApprovedPublicProfile(profile) {
 }
 
 async function requireAuthenticatedProfile(showMessage = true) {
-    if (remoteState.profile) return remoteState.profile;
+    if (remoteState.profile) {
+        if (isAdminProfile(remoteState.profile) && !canAccessAdmin(remoteState.profile)) {
+            await forceExitAdminOnPublicHost({
+                message: getAdminAccessDeniedMessage(),
+                silent: !showMessage
+            });
+            return null;
+        }
+        return remoteState.profile;
+    }
+
     if (!canUseSupabase()) {
         if (showMessage) showToast('Supabase client belum siap.', 'error');
         return null;
@@ -3341,6 +3166,13 @@ async function requireAuthenticatedProfile(showMessage = true) {
 
     try {
         const profile = await fetchCurrentProfileStrict();
+        if (isAdminProfile(profile) && !canAccessAdmin(profile)) {
+            await forceExitAdminOnPublicHost({
+                message: getAdminAccessDeniedMessage(),
+                silent: !showMessage
+            });
+            return null;
+        }
         applySupabaseSession(profile);
         return profile;
     } catch (error) {
@@ -3351,6 +3183,14 @@ async function requireAuthenticatedProfile(showMessage = true) {
 }
 
 function ensureValidSession(showMessage = false) {
+    if (isAdminProfile(remoteState.profile) && !canAccessAdmin(remoteState.profile)) {
+        void forceExitAdminOnPublicHost({
+            message: getAdminAccessDeniedMessage(),
+            silent: !showMessage
+        });
+        return false;
+    }
+
     const valid = Boolean(remoteState.profile);
     if (!valid && showMessage) showToast('Session tidak valid. Silakan login kembali.', 'warning');
     return valid;
@@ -3368,9 +3208,13 @@ function requireRole(role) {
 
 function requireAdminAccess() {
     if (!ensureValidSession(true)) return false;
-    if (remoteState.profile?.role !== 'admin') {
+    if (!isAdminProfile(remoteState.profile)) {
         showToast('Akses hanya untuk Admin.', 'warning');
         navigateTo(`${remoteState.profile.role}-home`);
+        return false;
+    }
+    if (!canAccessAdmin(remoteState.profile)) {
+        void forceExitAdminOnPublicHost({ message: getAdminAccessDeniedMessage() });
         return false;
     }
     return true;
@@ -3399,6 +3243,10 @@ function renderLandingSessionNotice() {
 async function resumeSession() {
     const profile = await requireAuthenticatedProfile(true);
     if (!profile) return;
+    if (isAdminProfile(profile) && !canAccessAdmin(profile)) {
+        await forceExitAdminOnPublicHost({ message: getAdminAccessDeniedMessage() });
+        return;
+    }
     await redirectUserByRole(profile);
 }
 
@@ -3485,6 +3333,13 @@ async function bootstrapSessionFromSupabase(options = {}) {
     }
 
     const profile = await fetchCurrentProfileStrict();
+    if (isAdminProfile(profile) && !canAccessAdmin(profile)) {
+        await forceExitAdminOnPublicHost({
+            message: getAdminAccessDeniedMessage(),
+            silent: Boolean(options.silentGuard)
+        });
+        return null;
+    }
     await ensureApprovedPublicProfile(profile);
     applySupabaseSession(profile);
 
@@ -3522,6 +3377,10 @@ async function bootstrapAuthState() {
             logApp('auth', `onAuthStateChange: ${event}`, { hasSession: Boolean(session) });
 
             Promise.resolve().then(async () => {
+                if (event === 'SIGNED_IN' && authSignInInProgress) {
+                    return;
+                }
+
                 if (!session) {
                     clearRemoteSessionState({ preserveView: false });
                     showLanding();
@@ -3529,7 +3388,7 @@ async function bootstrapAuthState() {
                 }
 
                 try {
-                    const profile = await bootstrapSessionFromSupabase({ redirect: false });
+                    const profile = await bootstrapSessionFromSupabase({ redirect: false, silentGuard: true });
                     if (!profile) {
                         showLanding();
                         return;
@@ -3567,6 +3426,10 @@ async function bootstrapAuthState() {
 
 async function redirectUserByRole(profile = remoteState.profile) {
     if (!profile) return;
+    if (isAdminProfile(profile) && !canAccessAdmin(profile)) {
+        await forceExitAdminOnPublicHost({ message: getAdminAccessDeniedMessage() });
+        return;
+    }
     openAppLayout();
     renderAppShell();
     await navigateTo(`${profile.role}-home`);
@@ -3602,25 +3465,35 @@ async function logoutUser(showMessage = true) {
 async function handleSupabaseLogin(email, password) {
     if (!canUseSupabase()) throw new Error('Supabase client belum siap.');
 
-    const { error } = await supabaseClient.auth.signInWithPassword({
-        email: normalizeEmail(email),
-        password: String(password || '').trim()
-    });
+    authSignInInProgress = true;
 
-    if (error) throw error;
+    try {
+        const { error } = await supabaseClient.auth.signInWithPassword({
+            email: normalizeEmail(email),
+            password: String(password || '').trim()
+        });
 
-    const profile = await fetchCurrentProfileStrict();
-    await ensureApprovedPublicProfile(profile);
-    applySupabaseSession(profile);
+        if (error) throw error;
 
-    if (profile.role === 'admin') {
-        await loadAdminMasterData();
-    } else {
-        remoteState.currentOrders = await fetchOrdersForRole(profile);
+        const profile = await fetchCurrentProfileStrict();
+        await ensureApprovedPublicProfile(profile);
+        if (isAdminProfile(profile) && !canAccessAdmin(profile)) {
+            await forceExitAdminOnPublicHost({ message: getAdminAccessDeniedMessage() });
+            return null;
+        }
+        applySupabaseSession(profile);
+
+        if (profile.role === 'admin') {
+            await loadAdminMasterData();
+        } else {
+            remoteState.currentOrders = await fetchOrdersForRole(profile);
+        }
+
+        await redirectUserByRole(profile);
+        return profile;
+    } finally {
+        authSignInInProgress = false;
     }
-
-    await redirectUserByRole(profile);
-    return profile;
 }
 
 async function handleLoginSubmit(event) {
@@ -3637,6 +3510,7 @@ async function handleLoginSubmit(event) {
 
     try {
         const profile = await handleSupabaseLogin(email, password);
+        if (!profile) return false;
         if (selectedRole && selectedRole !== profile.role) {
             showToast(`Akun Anda terdaftar sebagai ${ROLE_LABELS[profile.role] || profile.role}. Dashboard disesuaikan otomatis.`, 'warning');
         } else {
@@ -3841,6 +3715,11 @@ async function navigateTo(viewId, prefill = '') {
     if (!ensureValidSession(true)) return;
     const profile = getCurrentUser();
     if (!profile) return;
+
+    if (isAdminRoute(viewId) && !canAccessAdmin(profile)) {
+        await forceExitAdminOnPublicHost({ message: getAdminAccessDeniedMessage() });
+        return;
+    }
 
     if (!String(viewId || '').startsWith(profile.role)) {
         showToast('Anda tidak dapat membuka halaman role lain.', 'warning');

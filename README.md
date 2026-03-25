@@ -8,6 +8,13 @@ Website statis Indo Sejuk AC yang berjalan di GitHub Pages dan memakai Supabase 
 
 Local storage hanya dipakai untuk cache UI non-kritis seperti katalog gambar lokal, foto unit lokal, dan preview dokumen teknisi. Auth, profile, order, dan dashboard admin tidak lagi memakai local cache sebagai sumber utama.
 
+## Mode akses aplikasi
+
+- Public URL GitHub Pages `https://palileo.github.io/indosejuk/` dipakai untuk `konsumen` dan `teknisi`.
+- Dashboard `admin` hanya tersedia saat frontend dibuka dari `localhost`, `127.0.0.1`, atau `::1`.
+- Supabase tetap menjadi source of truth untuk auth, profile, dan order di semua host.
+- Frontend hanya memakai `anon key`, tidak memakai `service_role`.
+
 ## Konfigurasi frontend
 
 Konfigurasi Supabase saat ini ada di [app.js](/c:/Users/justdoit/Documents/GitHub/indosejuk/app.js):
@@ -34,8 +41,19 @@ Ini adalah pendekatan paling aman untuk static site tanpa secret API WhatsApp.
 - Logout memakai `supabase.auth.signOut()`
 - Session utama memakai `supabase.auth.getSession()` + `onAuthStateChange`
 - Redirect dashboard ditentukan dari row `public.profiles.role`
-- Admin boleh login dari GitHub Pages maupun localhost
+- Session admin di public host akan langsung ditolak, logout otomatis, lalu kembali ke landing
+- Admin hanya boleh login dan membuka dashboard dari localhost
 - Admin tidak dibuat dari form publik
+
+## Menjalankan lokal
+
+Pilih salah satu cara berikut:
+
+- `python -m http.server 5500`
+- VS Code Live Server
+- Static server lain yang membuka project ini sebagai `http://localhost:<port>`
+
+Sesuaikan `Additional Redirect URLs` Supabase dengan port lokal yang Anda pakai.
 
 ## Flow registrasi publik
 
@@ -119,6 +137,30 @@ Di Supabase Dashboard, set:
   - `http://127.0.0.1:5500/`
 
 Sesuaikan localhost port dengan cara Anda menjalankan preview lokal.
+
+## Matriks akses final
+
+Public URL:
+
+- konsumen `OK`
+- teknisi `OK`
+- admin `Ditolak`
+
+Localhost:
+
+- konsumen `OK`
+- teknisi `OK`
+- admin `OK`
+
+## Checklist test final
+
+- Public host: card admin tidak tampil
+- Public host: tab admin tidak tampil
+- Public host: route admin diblok dan kembali ke landing
+- Public host: session admin yang ter-restore akan auto logout
+- Localhost: seluruh dashboard dan aksi admin tetap berjalan
+- Konsumen dan teknisi tetap normal di public host maupun localhost
+- Tidak ada `service_role` key di frontend
 
 ## SQL final
 

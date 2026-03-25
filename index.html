@@ -91,7 +91,7 @@
                     <div class="role-card-arrow">&gt;</div>
                 </div>
 
-                <div class="role-card role-card--admin" data-role="admin" id="roleAdmin">
+                <div class="role-card role-card--admin is-hidden" data-role="admin" id="roleAdmin" hidden>
                     <div class="role-card-icon">
                         <svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                             <rect x="4" y="4" width="40" height="40" rx="4"/>
@@ -113,10 +113,13 @@
                     <p>Gunakan email dan password akun Anda. Role akan ditentukan otomatis dari profil Supabase yang aktif.</p>
                 </div>
                 <div class="tabs login-role-tabs">
-                    <button class="tab active" id="loginRoleTab-konsumen" onclick="switchLoginRole('konsumen', this)">Konsumen</button>
-                    <button class="tab" id="loginRoleTab-teknisi" onclick="switchLoginRole('teknisi', this)">Teknisi</button>
-                    <button class="tab" id="loginRoleTab-admin" onclick="switchLoginRole('admin', this)">Admin</button>
+                    <button class="tab active" id="loginRoleTab-konsumen" aria-selected="true" onclick="switchLoginRole('konsumen', this)">Konsumen</button>
+                    <button class="tab" id="loginRoleTab-teknisi" aria-selected="false" onclick="switchLoginRole('teknisi', this)">Teknisi</button>
+                    <button class="tab is-hidden" id="loginRoleTab-admin" aria-selected="false" onclick="switchLoginRole('admin', this)" hidden>Admin</button>
                 </div>
+                <p id="adminLocalhostHint" class="admin-localhost-hint" hidden>
+                    Dashboard admin hanya tersedia di localhost.
+                </p>
                 <form id="formLogin" onsubmit="return handleLoginSubmit(event)">
                     <input type="hidden" id="loginRole" value="konsumen">
                     <div class="form-grid login-form-grid">
