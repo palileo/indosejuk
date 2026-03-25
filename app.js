@@ -21,11 +21,12 @@ const PROFILE_STATUS_ACTIVE = 'Aktif';
 const PROFILE_SCHEMA_DRIFT_CACHE_KEY = 'indoSejukProfileSchemaDrift';
 const PROFILE_SCHEMA_DRIFT_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const PENDING_VERIFICATION_EMAIL_KEY = 'indoSejukPendingVerificationEmail';
-const PUBLIC_UPLOAD_BUCKET = 'app-public-uploads';
-const PRIVATE_DOCUMENT_BUCKET = 'app-private-documents';
+const DEFAULT_PUBLIC_UPLOAD_BUCKET = 'app-public-uploads';
+const DEFAULT_PRIVATE_DOCUMENT_BUCKET = 'app-private-documents';
 const MAX_IMAGE_UPLOAD_BYTES = 8 * 1024 * 1024;
 const IMAGE_MIME_WHITELIST = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif']);
 const REMOTE_STORAGE_SYNC_FUNCTION_NAME = 'sync-storage-to-github';
+const PASSWORD_MIN_LENGTH = 8;
 const REQUIRED_PROFILE_COLUMNS = [
     'id',
     'role',
@@ -51,6 +52,7 @@ const OPTIONAL_PROFILE_COLUMNS = [
     'verified_at',
     'verified_by',
     'completed_jobs',
+    'auth_email',
     'unit_image_paths',
     'unit_image_urls',
     'ktp_photo_path',
@@ -68,6 +70,18 @@ const OPTIONAL_ORDER_COLUMNS = new Set([
 ]);
 const REMOTE_SYNC_FUNCTION_NAME = 'sync-user-to-github';
 const RESEND_VERIFICATION_COOLDOWN_MS = 60 * 1000;
+const PASSWORD_RESET_GENERIC_SUCCESS_MESSAGE = 'Jika akun ditemukan dan memiliki kanal pemulihan yang aktif, tautan reset sudah dikirim. Untuk akun konsumen tanpa email, hubungi CS agar sandi direset manual.';
+
+const appRuntimeConfig = (() => {
+    const source = window.INDOSEJUK_RUNTIME_CONFIG || {};
+    const storage = source.storage || {};
+    return {
+        storage: {
+            publicBucket: String(storage.publicBucket || DEFAULT_PUBLIC_UPLOAD_BUCKET).trim() || DEFAULT_PUBLIC_UPLOAD_BUCKET,
+            privateBucket: String(storage.privateBucket || DEFAULT_PRIVATE_DOCUMENT_BUCKET).trim() || DEFAULT_PRIVATE_DOCUMENT_BUCKET
+        }
+    };
+})();
 
 let currentRole = null;
 let currentView = null;
@@ -121,7 +135,13 @@ const runtimeState = {
     resendVerificationTimer: null,
     pendingVerificationEmail: '',
     signedImageUrlCache: {},
-    uploadLocks: {}
+    uploadLocks: {},
+    storageIssues: {},
+    changePasswordMode: 'profile',
+    changePasswordSubmitting: false,
+    changePasswordCodeSending: false,
+    changePasswordCodeSent: false,
+    passwordRecoveryActive: false
 };
 
 const ROLE_LABELS = {
@@ -194,6 +214,23 @@ function deepClone(value) {
 
 function canUseSupabase() {
     return Boolean(supabaseClient);
+}
+
+function getPublicUploadBucket() {
+    return appRuntimeConfig.storage.publicBucket;
+}
+
+function getPrivateDocumentBucket() {
+    return appRuntimeConfig.storage.privateBucket;
+}
+
+function getKnownStorageBuckets() {
+    return [
+        getPublicUploadBucket(),
+        getPrivateDocumentBucket(),
+        DEFAULT_PUBLIC_UPLOAD_BUCKET,
+        DEFAULT_PRIVATE_DOCUMENT_BUCKET
+    ].filter(Boolean);
 }
 
 function scheduleIdleTask(callback, timeout = 1200) {
@@ -734,10 +771,66 @@ async function withProfileColumnFallback(asyncOperation, options = {}) {
     throw new Error(`Operasi profiles gagal dipulihkan setelah retry schema fallback${options.context ? ` (${options.context})` : ''}.`);
 }
 
-function normalizeLoginIdentifier(value) {
+function isEmailIdentifier(value) {
+    return String(value || '').includes('@');
+}
+
+function normalizeLoginIdentifier(value, role = '') {
     const raw = String(value || '').trim();
     if (!raw) return '';
+    if (role === 'konsumen' && !isEmailIdentifier(raw)) {
+        return normalizePhone(raw);
+    }
     return normalizeEmail(raw);
+}
+
+function getLoginUiConfig(role = 'konsumen') {
+    if (role === 'konsumen') {
+        return {
+            label: 'Email atau No. Telepon',
+            placeholder: 'Masukkan email atau nomor telepon Anda',
+            inputMode: 'email',
+            description: 'Konsumen bisa login memakai email atau nomor telepon. Role akan ditentukan otomatis dari profil Supabase yang aktif.',
+            help: 'Konsumen bisa masuk memakai email atau nomor telepon yang terdaftar.',
+            resetLabel: 'Email atau No. Telepon',
+            resetPlaceholder: 'Masukkan email atau nomor telepon konsumen',
+            resetIntro: 'Masukkan email atau nomor telepon akun konsumen untuk meminta reset sandi.',
+            resetHelp: 'Jika akun ditemukan dan memiliki email pemulihan yang aktif, tautan reset akan dikirim. Untuk akun konsumen tanpa email, hubungi CS agar sandi direset manual.'
+        };
+    }
+
+    return {
+        label: 'Email',
+        placeholder: 'Masukkan email Anda',
+        inputMode: 'email',
+        description: 'Gunakan email dan password akun Anda. Role akan ditentukan otomatis dari profil Supabase yang aktif.',
+        help: 'Login memakai email akun yang terdaftar.',
+        resetLabel: 'Email',
+        resetPlaceholder: 'email@contoh.com',
+        resetIntro: 'Masukkan email akun Anda untuk menerima tautan reset password yang aman.',
+        resetHelp: 'Jika akun ditemukan dan memiliki kanal pemulihan yang aktif, tautan reset akan dikirim ke email tersebut.'
+    };
+}
+
+function syncLoginRoleCopy(role = document.getElementById('loginRole')?.value || 'konsumen') {
+    const safeRole = ['konsumen', 'teknisi', 'admin'].includes(role) ? role : 'konsumen';
+    const config = getLoginUiConfig(safeRole);
+    const label = document.getElementById('loginIdentifierLabel');
+    const input = document.getElementById('loginIdentifier');
+    const help = document.getElementById('loginIdentifierHelp');
+    const description = document.getElementById('loginRoleDescription');
+
+    if (label) {
+        label.innerHTML = `${escapeHtml(config.label)} <span class="required">*</span>`;
+    }
+    if (input) {
+        input.placeholder = config.placeholder;
+        input.setAttribute('inputmode', config.inputMode);
+        input.setAttribute('autocapitalize', 'none');
+        input.setAttribute('spellcheck', 'false');
+    }
+    if (help) help.textContent = config.help;
+    if (description) description.textContent = config.description;
 }
 
 function identifiersMatch(left, right) {
@@ -1216,10 +1309,10 @@ function validateImageFile(file, options = {}) {
 
 function getStorageTargetConfig(target) {
     const targetMap = {
-        'konsumen-unit': { bucket: PUBLIC_UPLOAD_BUCKET, isPrivate: false, folder: 'units' },
-        'teknisi-ktp': { bucket: PRIVATE_DOCUMENT_BUCKET, isPrivate: true, folder: 'ktp' },
-        'teknisi-selfie': { bucket: PRIVATE_DOCUMENT_BUCKET, isPrivate: true, folder: 'selfie' },
-        'order-proof': { bucket: PUBLIC_UPLOAD_BUCKET, isPrivate: false, folder: 'proofs' }
+        'konsumen-unit': { bucket: getPublicUploadBucket(), isPrivate: false, folder: 'units' },
+        'teknisi-ktp': { bucket: getPrivateDocumentBucket(), isPrivate: true, folder: 'ktp' },
+        'teknisi-selfie': { bucket: getPrivateDocumentBucket(), isPrivate: true, folder: 'selfie' },
+        'order-proof': { bucket: getPublicUploadBucket(), isPrivate: false, folder: 'proofs' }
     };
     return targetMap[target] || null;
 }
@@ -1266,7 +1359,7 @@ function getStorageObjectPathFromUrl(url, bucketHint = '') {
         }
         if (bucketHint) {
             if (remainder[0] === bucketHint) remainder.shift();
-        } else if (remainder[0] === PUBLIC_UPLOAD_BUCKET || remainder[0] === PRIVATE_DOCUMENT_BUCKET) {
+        } else if (getKnownStorageBuckets().includes(remainder[0])) {
             remainder.shift();
         }
         return decodeURIComponent(remainder.join('/'));
@@ -1289,6 +1382,33 @@ function getSignedUrlCacheKey(bucket, path) {
     return `${bucket}:${path}`;
 }
 
+function isBucketNotFoundError(error) {
+    const normalized = String(error?.message || error || '').toLowerCase();
+    return normalized.includes('bucket not found') || normalized.includes('the resource was not found');
+}
+
+function buildStorageConfigError(bucket, fallback = '') {
+    const safeBucket = String(bucket || '').trim() || 'bucket-storage';
+    return new Error(fallback || `Bucket storage "${safeBucket}" belum tersedia atau tidak cocok dengan konfigurasi aplikasi.`);
+}
+
+function setStorageIssue(bucket, message = '') {
+    if (!bucket) return;
+    if (message) {
+        runtimeState.storageIssues[bucket] = message;
+        return;
+    }
+    delete runtimeState.storageIssues[bucket];
+}
+
+function getStorageIssue(bucket) {
+    return bucket ? runtimeState.storageIssues[bucket] || '' : '';
+}
+
+function syncStorageStatusMessage(elementId, bucket, fallbackMessage) {
+    setElementText(elementId, getStorageIssue(bucket) || fallbackMessage);
+}
+
 async function resolveStorageImageUrl(bucket, path, options = {}) {
     const normalizedPath = String(path || '').trim();
     if (!bucket || !normalizedPath || !canUseSupabase()) return '';
@@ -1298,7 +1418,7 @@ async function resolveStorageImageUrl(bucket, path, options = {}) {
         return runtimeState.signedImageUrlCache[cacheKey];
     }
 
-    if (bucket === PUBLIC_UPLOAD_BUCKET) {
+    if (bucket === getPublicUploadBucket()) {
         const { data } = supabaseClient.storage.from(bucket).getPublicUrl(normalizedPath);
         const publicUrl = data?.publicUrl || '';
         if (publicUrl) runtimeState.signedImageUrlCache[cacheKey] = publicUrl;
@@ -1307,10 +1427,15 @@ async function resolveStorageImageUrl(bucket, path, options = {}) {
 
     const { data, error } = await supabaseClient.storage.from(bucket).createSignedUrl(normalizedPath, 60 * 60);
     if (error) {
+        if (isBucketNotFoundError(error)) {
+            setStorageIssue(bucket, buildStorageConfigError(bucket).message);
+            return '';
+        }
         console.warn('Gagal membuat signed URL storage:', error);
         return '';
     }
 
+    setStorageIssue(bucket, '');
     const signedUrl = data?.signedUrl || '';
     if (signedUrl) runtimeState.signedImageUrlCache[cacheKey] = signedUrl;
     return signedUrl;
@@ -1339,9 +1464,16 @@ async function uploadImageToSupabaseStorage(options = {}) {
             contentType: options.file?.type || 'image/jpeg'
         });
 
-    if (error) throw error;
+    if (error) {
+        if (isBucketNotFoundError(error)) {
+            setStorageIssue(targetConfig.bucket, buildStorageConfigError(targetConfig.bucket).message);
+            throw buildStorageConfigError(targetConfig.bucket);
+        }
+        throw error;
+    }
 
     const finalPath = data?.path || path;
+    setStorageIssue(targetConfig.bucket, '');
     const resolvedUrl = await resolveStorageImageUrl(targetConfig.bucket, finalPath, { forceRefresh: true });
     return {
         bucket: targetConfig.bucket,
@@ -1371,6 +1503,14 @@ async function deleteImageFromSupabaseStorage(options = {}) {
 
     const { error } = await supabaseClient.storage.from(bucket).remove([path]);
     if (error) {
+        if (isBucketNotFoundError(error)) {
+            setStorageIssue(bucket, buildStorageConfigError(bucket).message);
+            return {
+                ok: false,
+                skipped: true,
+                message: buildStorageConfigError(bucket).message
+            };
+        }
         const message = String(error?.message || error || '').toLowerCase();
         if (message.includes('not found') || message.includes('no object found')) {
             return {
@@ -1382,6 +1522,7 @@ async function deleteImageFromSupabaseStorage(options = {}) {
         throw error;
     }
 
+    setStorageIssue(bucket, '');
     delete runtimeState.signedImageUrlCache[getSignedUrlCacheKey(bucket, path)];
     return {
         ok: true,
@@ -1431,6 +1572,7 @@ function normalizeUser(user, role, index = 0) {
         username: user?.username || slugify(user?.name || defaults.name || `${role}-${index + 1}`),
         password: user?.password ?? defaults.password ?? '',
         email: normalizeEmail(user?.email || defaults.email || ''),
+        authEmail: normalizeEmail(user?.authEmail || user?.auth_email || user?.email || defaults.email || ''),
         phone: normalizePhone(user?.phone || user?.telepon || defaults.phone || ''),
         address: user?.address || user?.alamat || '',
         birthDate: user?.birthDate || user?.tanggalLahir || '',
@@ -2043,13 +2185,16 @@ function createPreviewCardHtml(src, options = {}) {
     const deleteTarget = String(options.deleteTarget || '').trim();
     const deleteLabel = options.deleteLabel || 'Hapus Gambar';
     const deleteArgs = Array.isArray(options.deleteArgs) ? options.deleteArgs.map((item) => JSON.stringify(item)).join(', ') : '';
+    const downloadUrl = String(options.downloadUrl || src || '').trim();
+    const downloadLabel = options.downloadLabel || 'Buka / Unduh';
     return `
         <div class="image-card image-card--with-actions">
             <img src="${escapeHtml(src)}" alt="${escapeHtml(options.alt || 'Preview upload')}" loading="lazy" decoding="async">
             ${options.caption ? `<p class="image-card-caption">${escapeHtml(options.caption)}</p>` : ''}
-            ${deleteTarget ? `
+            ${(deleteTarget || downloadUrl) ? `
                 <div class="image-card-actions">
-                    <button type="button" class="btn btn-danger btn-xs full-width-mobile" onclick="${deleteTarget}(${deleteArgs})">${escapeHtml(deleteLabel)}</button>
+                    ${downloadUrl ? `<a class="btn btn-outline btn-xs full-width-mobile" href="${escapeHtml(downloadUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(downloadLabel)}</a>` : ''}
+                    ${deleteTarget ? `<button type="button" class="btn btn-danger btn-xs full-width-mobile" onclick="${deleteTarget}(${deleteArgs})">${escapeHtml(deleteLabel)}</button>` : ''}
                 </div>
             ` : ''}
         </div>
@@ -2217,7 +2362,7 @@ async function finalizeSignupUploadsAfterSession(role) {
         await syncUploadedAssetToRemote({
             target: 'konsumen-unit',
             profileId: profile.id,
-            bucket: PUBLIC_UPLOAD_BUCKET,
+            bucket: getPublicUploadBucket(),
             paths: uploads.map((item) => item.path)
         });
         return updatedProfile;
@@ -2241,7 +2386,7 @@ async function finalizeSignupUploadsAfterSession(role) {
             await syncUploadedAssetToRemote({
                 target: 'teknisi-ktp',
                 profileId: profile.id,
-                bucket: PRIVATE_DOCUMENT_BUCKET,
+                bucket: getPrivateDocumentBucket(),
                 path: ktpUpload.path
             });
         }
@@ -2261,7 +2406,7 @@ async function finalizeSignupUploadsAfterSession(role) {
             await syncUploadedAssetToRemote({
                 target: 'teknisi-selfie',
                 profileId: profile.id,
-                bucket: PRIVATE_DOCUMENT_BUCKET,
+                bucket: getPrivateDocumentBucket(),
                 path: selfieUpload.path
             });
         }
@@ -2671,7 +2816,7 @@ async function openOrderDetail(orderId) {
         return;
     }
 
-    const proofUrl = order.proofImageUrl || order.proofImage || await resolveStorageImageUrl(PUBLIC_UPLOAD_BUCKET, order.proofImagePath);
+    const proofUrl = order.proofImageUrl || order.proofImage || await resolveStorageImageUrl(getPublicUploadBucket(), order.proofImagePath);
     const canRemoveProof = remoteState.profile?.role === 'teknisi' && remoteState.profile?.id === order.teknisiId && proofUrl;
     const proof = proofUrl
         ? `
@@ -3093,14 +3238,20 @@ function toUserFacingError(error, fallback = 'Terjadi kesalahan.') {
     const missingColumn = extractMissingColumnName(error);
 
     if (normalized.includes('invalid login credentials')) return 'Email atau password salah.';
+    if (normalized.includes('nomor telepon atau password salah')) return 'Nomor telepon atau password salah.';
     if (normalized.includes('email not confirmed')) return 'Email belum dikonfirmasi. Cek inbox Anda lalu login kembali.';
     if (normalized.includes('user already registered')) return 'Email sudah terdaftar. Silakan login langsung.';
     if (normalized.includes('email rate limit exceeded') || normalized.includes('over_email_send_rate_limit')) return 'Tunggu sebentar sebelum meminta email verifikasi lagi.';
     if (normalized.includes('429')) return 'Terlalu banyak permintaan. Tunggu sebentar lalu coba lagi.';
     if (normalized.includes('duplicate key') && normalized.includes('username')) return 'Username sudah digunakan akun lain.';
+    if (normalized.includes('duplicate key') && normalized.includes('phone')) return 'Nomor telepon konsumen sudah digunakan akun lain.';
     if (normalized.includes('violates row-level security')) return 'Policy Supabase untuk profile/order belum sesuai. Jalankan SQL final di README lalu coba lagi.';
     if (normalized.includes('mime') || normalized.includes('content type')) return 'Format file belum sesuai. Gunakan JPG, PNG, WEBP, HEIC, atau HEIF.';
     if (normalized.includes('payload too large') || normalized.includes('file too large')) return 'Ukuran file terlalu besar. Maksimal 8 MB per gambar.';
+    if (normalized.includes('bucket storage "') || normalized.includes('bucket not found')) return 'Konfigurasi bucket storage belum cocok. Jalankan migrasi storage Supabase atau sesuaikan `window.INDOSEJUK_RUNTIME_CONFIG.storage` agar nama bucket sinkron.';
+    if (normalized.includes('password should be at least')) return `Password minimal ${PASSWORD_MIN_LENGTH} karakter.`;
+    if (normalized.includes('same password')) return 'Sandi baru harus berbeda dari sandi sebelumnya.';
+    if (normalized.includes('reauthentication') || normalized.includes('nonce')) return 'Kode verifikasi ganti sandi tidak valid atau sudah kedaluwarsa. Kirim ulang kode lalu coba lagi.';
     if (missingColumn && OPTIONAL_PROFILE_COLUMN_SET.has(missingColumn)) {
         return 'Struktur profile Supabase sedang menyesuaikan schema. Aplikasi akan lanjut memakai fallback aman dan data inti tetap bisa dipakai.';
     }
@@ -3110,7 +3261,7 @@ function toUserFacingError(error, fallback = 'Terjadi kesalahan.') {
 }
 
 function setPendingVerificationEmail(email = '') {
-    const normalized = normalizeEmail(email);
+    const normalized = isEmailIdentifier(email) ? normalizeEmail(email) : '';
     runtimeState.pendingVerificationEmail = normalized;
     try {
         if (normalized) {
@@ -3149,8 +3300,10 @@ function syncResendVerificationUI(options = {}) {
     const actionButton = document.getElementById('btnResendVerification');
     if (!card || !emailNode || !textNode || !statusNode || !actionButton) return;
 
-    const typedEmail = normalizeEmail(document.getElementById('loginIdentifier')?.value || '');
-    const email = normalizeEmail(options.email || runtimeState.pendingVerificationEmail || typedEmail);
+    const typedValue = String(document.getElementById('loginIdentifier')?.value || '').trim();
+    const typedEmail = isEmailIdentifier(typedValue) ? normalizeEmail(typedValue) : '';
+    const emailCandidate = String(options.email || runtimeState.pendingVerificationEmail || typedEmail).trim();
+    const email = isEmailIdentifier(emailCandidate) ? normalizeEmail(emailCandidate) : '';
     const loginPageVisible = document.getElementById('loginPage')?.style.display !== 'none';
     const shouldShow = Boolean(email) && loginPageVisible;
     const remainingMs = Math.max(0, runtimeState.resendVerificationCooldownUntil - Date.now());
@@ -3240,6 +3393,270 @@ async function handleResendVerificationEmail() {
     }
 
     return false;
+}
+
+function getPasswordResetRedirectUrl() {
+    return getAppBaseUrl();
+}
+
+function resetPasswordResetModalState() {
+    document.getElementById('formPasswordReset')?.reset();
+    const role = document.getElementById('loginRole')?.value || 'konsumen';
+    const config = getLoginUiConfig(role);
+    const identifierInput = document.getElementById('passwordResetIdentifier');
+    const identifierLabel = document.getElementById('passwordResetIdentifierLabel');
+    const intro = document.getElementById('passwordResetIntro');
+    const help = document.getElementById('passwordResetHelp');
+    if (identifierInput) {
+        identifierInput.value = normalizeLoginIdentifier(document.getElementById('loginIdentifier')?.value || '', role);
+        identifierInput.placeholder = config.resetPlaceholder;
+    }
+    if (identifierLabel) identifierLabel.textContent = config.resetLabel;
+    if (intro) intro.textContent = config.resetIntro;
+    if (help) help.textContent = config.resetHelp;
+}
+
+function openPasswordResetModal() {
+    resetPasswordResetModalState();
+    const modal = document.getElementById('modalPasswordReset');
+    if (modal) modal.style.display = 'flex';
+}
+
+async function requestPasswordReset(identifier, role = 'konsumen') {
+    if (!canUseSupabase()) throw new Error('Supabase client belum siap.');
+
+    const normalizedIdentifier = normalizeLoginIdentifier(identifier, role);
+    if (!normalizedIdentifier) {
+        throw new Error(role === 'konsumen'
+            ? 'Masukkan email atau nomor telepon terlebih dahulu.'
+            : 'Masukkan email terlebih dahulu.');
+    }
+
+    if (role === 'konsumen' && !isEmailIdentifier(normalizedIdentifier)) {
+        const { data, error } = await supabaseClient.functions.invoke('request-password-reset', {
+            body: {
+                role,
+                identifier: normalizedIdentifier,
+                redirectTo: getPasswordResetRedirectUrl()
+            }
+        });
+        if (error) throw error;
+        return data || { ok: true };
+    }
+
+    if (!isEmailIdentifier(normalizedIdentifier)) {
+        throw new Error('Email pemulihan harus diisi untuk role ini.');
+    }
+
+    const { error } = await supabaseClient.auth.resetPasswordForEmail(normalizeEmail(normalizedIdentifier), {
+        redirectTo: getPasswordResetRedirectUrl()
+    });
+    if (error) throw error;
+    return { ok: true };
+}
+
+async function handlePasswordResetRequest(event) {
+    event.preventDefault();
+    const role = document.getElementById('loginRole')?.value || 'konsumen';
+    const identifier = document.getElementById('passwordResetIdentifier')?.value || '';
+
+    try {
+        await requestPasswordReset(identifier, role);
+        closeModal('modalPasswordReset');
+        showToast(PASSWORD_RESET_GENERIC_SUCCESS_MESSAGE, 'success');
+    } catch (error) {
+        console.error('Permintaan lupa sandi gagal:', error);
+        showToast(toUserFacingError(error, 'Permintaan reset password gagal.'), 'error');
+    }
+
+    return false;
+}
+
+function resetChangePasswordForm(options = {}) {
+    document.getElementById('formChangePassword')?.reset();
+    runtimeState.changePasswordCodeSent = false;
+    runtimeState.changePasswordCodeSending = false;
+    runtimeState.changePasswordSubmitting = false;
+    runtimeState.changePasswordMode = options.mode || runtimeState.changePasswordMode || 'profile';
+
+    const isRecoveryMode = runtimeState.changePasswordMode === 'recovery';
+    const title = document.getElementById('changePasswordTitle');
+    const intro = document.getElementById('changePasswordIntro');
+    const verificationCard = document.getElementById('changePasswordVerificationCard');
+    const verificationHelp = document.getElementById('changePasswordVerificationHelp');
+    const nonceGroup = document.getElementById('changePasswordNonceGroup');
+    const status = document.getElementById('changePasswordStatus');
+    const submitButton = document.getElementById('btnSubmitChangePassword');
+    const sendButton = document.getElementById('btnSendPasswordChangeCode');
+
+    if (title) title.textContent = isRecoveryMode ? 'Atur Sandi Baru' : 'Ubah Sandi';
+    if (intro) {
+        intro.textContent = isRecoveryMode
+            ? 'Tautan reset sudah tervalidasi. Masukkan sandi baru Anda untuk menyelesaikan pemulihan akun.'
+            : 'Untuk keamanan, kirim kode verifikasi terlebih dahulu lalu masukkan sandi baru Anda.';
+    }
+    if (verificationCard) verificationCard.hidden = isRecoveryMode;
+    if (nonceGroup) nonceGroup.hidden = isRecoveryMode;
+    if (verificationHelp) {
+        verificationHelp.textContent = 'Klik tombol di bawah untuk mengirim kode verifikasi ganti sandi lewat Supabase Auth ke kanal pemulihan akun yang aktif.';
+    }
+    if (status) {
+        status.textContent = isRecoveryMode
+            ? 'Session recovery aktif. Sandi baru akan langsung diterapkan setelah disimpan.'
+            : 'Belum ada kode verifikasi yang dikirim.';
+    }
+    if (submitButton) submitButton.textContent = isRecoveryMode ? 'Simpan Sandi Baru' : 'Perbarui Sandi';
+    if (sendButton) {
+        sendButton.disabled = false;
+        sendButton.textContent = 'Kirim Kode Verifikasi';
+    }
+}
+
+function openChangePasswordModal(mode = 'profile') {
+    resetChangePasswordForm({ mode });
+    const modal = document.getElementById('modalChangePassword');
+    if (modal) modal.style.display = 'flex';
+}
+
+function closeChangePasswordModal() {
+    if (runtimeState.passwordRecoveryActive) {
+        runtimeState.passwordRecoveryActive = false;
+        window.history.replaceState({}, document.title, getAppBaseUrl());
+        void logoutSupabase().catch(() => {});
+        resetChangePasswordForm({ mode: 'profile' });
+        closeModal('modalChangePassword');
+        showLoginPage();
+        showToast('Pemulihan sandi dibatalkan. Anda bisa meminta tautan reset baru kapan saja.', 'warning');
+        return;
+    }
+    resetChangePasswordForm({ mode: runtimeState.passwordRecoveryActive ? 'recovery' : 'profile' });
+    closeModal('modalChangePassword');
+}
+
+async function sendPasswordChangeVerificationCode() {
+    if (runtimeState.changePasswordCodeSending) return false;
+    if (!canUseSupabase()) {
+        showToast('Supabase client belum siap.', 'error');
+        return false;
+    }
+
+    const sendButton = document.getElementById('btnSendPasswordChangeCode');
+    const status = document.getElementById('changePasswordStatus');
+    runtimeState.changePasswordCodeSending = true;
+    if (sendButton) {
+        sendButton.disabled = true;
+        sendButton.textContent = 'Mengirim...';
+    }
+    if (status) status.textContent = 'Mengirim kode verifikasi ganti sandi...';
+
+    try {
+        if (typeof supabaseClient.auth.reauthenticate !== 'function') {
+            throw new Error('Fitur reauthentication Supabase belum tersedia di client ini.');
+        }
+        const { error } = await supabaseClient.auth.reauthenticate();
+        if (error) throw error;
+        runtimeState.changePasswordCodeSent = true;
+        if (status) status.textContent = 'Kode verifikasi sudah dikirim. Cek email/kanal pemulihan akun Anda lalu masukkan kode tersebut di kolom verifikasi.';
+        showToast('Kode verifikasi ganti sandi sudah dikirim.', 'success');
+    } catch (error) {
+        console.error('Gagal mengirim kode verifikasi ganti sandi:', error);
+        if (status) status.textContent = toUserFacingError(error, 'Gagal mengirim kode verifikasi ganti sandi.');
+        showToast(toUserFacingError(error, 'Gagal mengirim kode verifikasi ganti sandi.'), 'error');
+    } finally {
+        runtimeState.changePasswordCodeSending = false;
+        if (sendButton) {
+            sendButton.disabled = false;
+            sendButton.textContent = runtimeState.changePasswordCodeSent ? 'Kirim Ulang Kode' : 'Kirim Kode Verifikasi';
+        }
+    }
+
+    return false;
+}
+
+async function finalizePasswordChangeSuccess(message = 'Sandi berhasil diperbarui.') {
+    showToast(message, 'success');
+    const modal = document.getElementById('modalChangePassword');
+    if (modal) modal.style.display = 'none';
+
+    if (runtimeState.passwordRecoveryActive) {
+        runtimeState.passwordRecoveryActive = false;
+        window.history.replaceState({}, document.title, getAppBaseUrl());
+        const profile = await bootstrapSessionFromSupabase({ redirect: false, silentGuard: true }).catch(() => null);
+        if (profile) {
+            await redirectUserByRole(profile);
+            return;
+        }
+        showLoginPage();
+        return;
+    }
+
+    const profile = await requireAuthenticatedProfile(false);
+    if (profile) await renderCurrentView();
+}
+
+async function handleChangePasswordSubmit(event) {
+    event.preventDefault();
+    if (runtimeState.changePasswordSubmitting) return false;
+
+    const isRecoveryMode = runtimeState.changePasswordMode === 'recovery';
+    const nonce = String(document.getElementById('changePasswordNonce')?.value || '').trim();
+    const newPassword = String(document.getElementById('changePasswordNew')?.value || '');
+    const confirmPassword = String(document.getElementById('changePasswordConfirm')?.value || '');
+    const status = document.getElementById('changePasswordStatus');
+
+    if (newPassword.length < PASSWORD_MIN_LENGTH) {
+        showToast(`Password minimal ${PASSWORD_MIN_LENGTH} karakter.`, 'warning');
+        return false;
+    }
+    if (newPassword !== confirmPassword) {
+        showToast('Konfirmasi sandi baru belum sama.', 'warning');
+        return false;
+    }
+    if (!isRecoveryMode && !nonce) {
+        showToast('Masukkan kode verifikasi ganti sandi terlebih dahulu.', 'warning');
+        return false;
+    }
+
+    runtimeState.changePasswordSubmitting = true;
+    if (status) status.textContent = 'Menyimpan sandi baru...';
+
+    try {
+        const updatePayload = {
+            password: newPassword
+        };
+        if (!isRecoveryMode) updatePayload.nonce = nonce;
+        const { error } = await supabaseClient.auth.updateUser(updatePayload);
+        if (error) throw error;
+        if (status) {
+            status.textContent = isRecoveryMode
+                ? 'Sandi baru berhasil disimpan. Session recovery akan ditutup ke flow login normal.'
+                : 'Sandi berhasil diperbarui dan sesi akun tetap aman.';
+        }
+        await finalizePasswordChangeSuccess(isRecoveryMode
+            ? 'Sandi baru berhasil disimpan. Anda bisa melanjutkan login dengan sandi tersebut.'
+            : 'Sandi berhasil diperbarui.');
+    } catch (error) {
+        console.error('Gagal memperbarui sandi:', error);
+        if (status) status.textContent = toUserFacingError(error, 'Gagal memperbarui sandi.');
+        showToast(toUserFacingError(error, 'Gagal memperbarui sandi.'), 'error');
+    } finally {
+        runtimeState.changePasswordSubmitting = false;
+    }
+
+    return false;
+}
+
+function hasPasswordRecoveryContext() {
+    const url = new URL(window.location.href);
+    const hashParams = new URLSearchParams((url.hash || '').replace(/^#/, ''));
+    const queryParams = url.searchParams;
+    const type = String(hashParams.get('type') || queryParams.get('type') || '').trim().toLowerCase();
+    return type === 'recovery';
+}
+
+function activatePasswordRecoveryMode() {
+    runtimeState.passwordRecoveryActive = true;
+    openChangePasswordModal('recovery');
 }
 
 function getLocalUiCache() {
@@ -3363,7 +3780,7 @@ async function persistUploadedImageReference(options = {}) {
         if (nextPaths.length && updatedProfile.unitImagePaths.length < nextPaths.length) {
             const newestPath = nextPaths[nextPaths.length - 1];
             const newestUrl = nextUrls[nextUrls.length - 1] || '';
-            await deleteImageFromSupabaseStorage({ bucket: PUBLIC_UPLOAD_BUCKET, path: newestPath, url: newestUrl });
+            await deleteImageFromSupabaseStorage({ bucket: getPublicUploadBucket(), path: newestPath, url: newestUrl });
             throw new Error('Kolom storage foto unit belum siap di schema profiles. Jalankan migration storage terlebih dahulu.');
         }
         applySupabaseSession(updatedProfile);
@@ -3382,11 +3799,11 @@ async function persistUploadedImageReference(options = {}) {
             selfie_photo_url: options.target === 'teknisi-selfie' ? options.url : profile.selfiePhotoUrl
         }));
         if (options.target === 'teknisi-ktp' && options.path && updatedProfile.ktpPhotoPath !== options.path) {
-            await deleteImageFromSupabaseStorage({ bucket: PRIVATE_DOCUMENT_BUCKET, path: options.path, url: options.url });
+            await deleteImageFromSupabaseStorage({ bucket: getPrivateDocumentBucket(), path: options.path, url: options.url });
             throw new Error('Kolom storage foto KTP belum siap di schema profiles. Jalankan migration storage terlebih dahulu.');
         }
         if (options.target === 'teknisi-selfie' && options.path && updatedProfile.selfiePhotoPath !== options.path) {
-            await deleteImageFromSupabaseStorage({ bucket: PRIVATE_DOCUMENT_BUCKET, path: options.path, url: options.url });
+            await deleteImageFromSupabaseStorage({ bucket: getPrivateDocumentBucket(), path: options.path, url: options.url });
             throw new Error('Kolom storage foto diri belum siap di schema profiles. Jalankan migration storage terlebih dahulu.');
         }
         applySupabaseSession(updatedProfile);
@@ -3406,7 +3823,7 @@ async function persistUploadedImageReference(options = {}) {
             status: options.status || 'Selesai'
         });
         if (options.path && updatedOrder.proofImagePath !== options.path) {
-            await deleteImageFromSupabaseStorage({ bucket: PUBLIC_UPLOAD_BUCKET, path: options.path, url: options.url });
+            await deleteImageFromSupabaseStorage({ bucket: getPublicUploadBucket(), path: options.path, url: options.url });
             throw new Error('Kolom storage bukti pekerjaan belum siap di schema orders. Jalankan migration storage terlebih dahulu.');
         }
         return updatedOrder;
@@ -3427,7 +3844,7 @@ async function removeUploadedImage(options = {}) {
         const path = currentPaths[targetIndex] || '';
         const url = currentUrls[targetIndex] || '';
         await deleteImageFromSupabaseStorage({
-            bucket: PUBLIC_UPLOAD_BUCKET,
+            bucket: getPublicUploadBucket(),
             path,
             url
         });
@@ -3442,7 +3859,7 @@ async function removeUploadedImage(options = {}) {
             target: 'konsumen-unit',
             profileId: profile.id,
             path,
-            bucket: PUBLIC_UPLOAD_BUCKET
+            bucket: getPublicUploadBucket()
         });
         return updatedProfile;
     }
@@ -3452,7 +3869,7 @@ async function removeUploadedImage(options = {}) {
         const path = isKtp ? profile.ktpPhotoPath : profile.selfiePhotoPath;
         const url = isKtp ? profile.ktpPhotoUrl : profile.selfiePhotoUrl;
         await deleteImageFromSupabaseStorage({
-            bucket: PRIVATE_DOCUMENT_BUCKET,
+            bucket: getPrivateDocumentBucket(),
             path,
             url
         });
@@ -3465,7 +3882,7 @@ async function removeUploadedImage(options = {}) {
             target: options.target,
             profileId: profile.id,
             path,
-            bucket: PRIVATE_DOCUMENT_BUCKET
+            bucket: getPrivateDocumentBucket()
         });
         return updatedProfile;
     }
@@ -3474,7 +3891,7 @@ async function removeUploadedImage(options = {}) {
         const order = findVisibleOrderById(options.orderId);
         if (!order) throw new Error('Pesanan bukti tidak ditemukan.');
         await deleteImageFromSupabaseStorage({
-            bucket: PUBLIC_UPLOAD_BUCKET,
+            bucket: getPublicUploadBucket(),
             path: order.proofImagePath,
             url: order.proofImageUrl || order.proofImage
         });
@@ -3490,7 +3907,7 @@ async function removeUploadedImage(options = {}) {
             orderId: order.id,
             profileId: profile.id,
             path: order.proofImagePath,
-            bucket: PUBLIC_UPLOAD_BUCKET
+            bucket: getPublicUploadBucket()
         });
         remoteState.currentOrders = remoteState.currentOrders.map((item) => item.id === updatedOrder.id ? updatedOrder : item);
         return updatedOrder;
@@ -3520,6 +3937,7 @@ function sanitizeProfileRecord(profile) {
         username: String(profile.username || '').trim(),
         name: String(profile.name || '').trim(),
         email: normalizeEmail(profile.email),
+        authEmail: normalizeEmail(profile.auth_email || profile.authEmail || profile.email),
         phone: normalizePhone(profile.phone),
         address: String(profile.address || '').trim(),
         status: String(profile.status || 'Aktif').trim(),
@@ -3631,6 +4049,8 @@ function resetLoginRoleToConsumer() {
         card.classList.toggle('active', active);
         card.setAttribute('aria-pressed', String(active));
     });
+
+    syncLoginRoleCopy('konsumen');
 }
 
 async function forceExitAdminOnPublicHost(options = {}) {
@@ -3794,6 +4214,11 @@ function switchLoginRole(role, element) {
         card.setAttribute('aria-pressed', String(active));
     });
 
+    syncLoginRoleCopy(safeRole);
+    if (document.getElementById('modalPasswordReset')?.style.display === 'flex') {
+        resetPasswordResetModalState();
+    }
+
     return safeRole;
 }
 
@@ -3817,6 +4242,8 @@ function extractPendingProfileSeed(user) {
         role: String(metadata.role || '').trim().toLowerCase(),
         username: String(metadata.username || '').trim(),
         name: String(metadata.name || '').trim(),
+        email: normalizeEmail(metadata.contact_email || metadata.email),
+        auth_email: normalizeEmail(metadata.auth_email || user?.email),
         phone: normalizePhone(metadata.phone),
         address: String(metadata.address || '').trim(),
         age: metadata.age || '',
@@ -3865,7 +4292,8 @@ function validateProfilePayloadForRole(role, payload = {}, options = {}) {
         role: normalizedRole,
         username: String(payload.username || '').trim(),
         name: String(payload.name || '').trim(),
-        email: normalizeEmail(payload.email || remoteState.user?.email || ''),
+        email: normalizeEmail(payload.email),
+        auth_email: normalizeEmail(payload.auth_email || payload.authEmail || remoteState.user?.email || ''),
         phone: normalizePhone(payload.phone),
         address: String(payload.address || '').trim(),
         age: payload.age,
@@ -3889,14 +4317,16 @@ function validateProfilePayloadForRole(role, payload = {}, options = {}) {
     if (!cleanPayload.id) throw new Error('User auth belum tersedia untuk profile.');
     if (!cleanPayload.username) throw new Error('Username wajib diisi.');
     if (!cleanPayload.name) throw new Error('Nama wajib diisi.');
-    if (!cleanPayload.email) throw new Error('Email wajib diisi.');
+    if (!cleanPayload.auth_email) throw new Error('Email auth wajib tersedia untuk profile.');
+    if (normalizedRole !== 'konsumen' && !cleanPayload.email) throw new Error('Email wajib diisi.');
 
     const result = {
         id: cleanPayload.id,
         role: cleanPayload.role,
         username: cleanPayload.username,
         name: cleanPayload.name,
-        email: cleanPayload.email,
+        email: toNullableText(cleanPayload.email),
+        auth_email: cleanPayload.auth_email,
         phone: toNullableText(cleanPayload.phone),
         address: toNullableText(cleanPayload.address),
         age: toNullableNumber(cleanPayload.age),
@@ -3953,7 +4383,8 @@ function buildAuthenticatedProfilePayload(role, options = {}) {
     return validateProfilePayloadForRole(normalizedRole, {
         ...mergedDraft,
         id: authUser?.id || mergedDraft.id,
-        email: authUser?.email || mergedDraft.email || options.formPayload?.email,
+        email: mergedDraft.email || options.formPayload?.email,
+        auth_email: authUser?.email || mergedDraft.auth_email || mergedDraft.authEmail || options.formPayload?.auth_email || options.formPayload?.authEmail,
         role: normalizedRole,
         status: shouldActivatePublicProfile
             ? PROFILE_STATUS_ACTIVE
@@ -4040,7 +4471,8 @@ async function createMissingProfileForAuthenticatedUser(userInput = null) {
     const payload = validateProfilePayloadForRole(metadataSeed.role, {
         ...metadataSeed,
         id: user.id,
-        email: user.email,
+        email: metadataSeed.email,
+        auth_email: metadataSeed.auth_email || user.email,
         status: metadataSeed.role === 'admin' ? metadataSeed.status : PROFILE_STATUS_ACTIVE,
         verified_at: metadataSeed.role === 'admin' ? '' : new Date().toISOString()
     });
@@ -4326,6 +4758,13 @@ async function bootstrapAuthState() {
             logApp('auth', `onAuthStateChange: ${event}`, { hasSession: Boolean(session) });
 
             Promise.resolve().then(async () => {
+                if (event === 'PASSWORD_RECOVERY') {
+                    runtimeState.passwordRecoveryActive = true;
+                    showLoginPage();
+                    activatePasswordRecoveryMode();
+                    return;
+                }
+
                 if (event === 'SIGNED_IN' && authSignInInProgress) {
                     return;
                 }
@@ -4411,18 +4850,60 @@ async function logoutUser(showMessage = true) {
     resetToPublicLanding(showMessage ? 'Anda berhasil logout.' : '');
 }
 
-async function handleSupabaseLogin(email, password) {
+async function signInConsumerWithPhoneOrEmail(identifier, password) {
+    const normalizedIdentifier = normalizeLoginIdentifier(identifier, 'konsumen');
+    const normalizedPassword = String(password || '').trim();
+    if (!normalizedIdentifier || !normalizedPassword) {
+        throw new Error('Nomor telepon atau password salah.');
+    }
+
+    if (isEmailIdentifier(normalizedIdentifier)) {
+        const { error } = await supabaseClient.auth.signInWithPassword({
+            email: normalizeEmail(normalizedIdentifier),
+            password: normalizedPassword
+        });
+        if (error) throw error;
+        return true;
+    }
+
+    const { data, error } = await supabaseClient.functions.invoke('consumer-password-login', {
+        body: {
+            identifier: normalizedIdentifier,
+            password: normalizedPassword
+        }
+    });
+    if (error) throw error;
+
+    const session = data?.session;
+    const accessToken = session?.access_token || session?.accessToken;
+    const refreshToken = session?.refresh_token || session?.refreshToken;
+    if (!accessToken || !refreshToken) {
+        throw new Error('Session login konsumen tidak valid.');
+    }
+
+    const { error: sessionError } = await supabaseClient.auth.setSession({
+        access_token: accessToken,
+        refresh_token: refreshToken
+    });
+    if (sessionError) throw sessionError;
+    return true;
+}
+
+async function handleSupabaseLogin(identifier, password, role = 'konsumen') {
     if (!canUseSupabase()) throw new Error('Supabase client belum siap.');
 
     authSignInInProgress = true;
 
     try {
-        const { error } = await supabaseClient.auth.signInWithPassword({
-            email: normalizeEmail(email),
-            password: String(password || '').trim()
-        });
-
-        if (error) throw error;
+        if (role === 'konsumen') {
+            await signInConsumerWithPhoneOrEmail(identifier, password);
+        } else {
+            const { error } = await supabaseClient.auth.signInWithPassword({
+                email: normalizeEmail(identifier),
+                password: String(password || '').trim()
+            });
+            if (error) throw error;
+        }
 
         const rawProfile = await fetchCurrentProfileStrict();
         const profile = await ensureApprovedPublicProfile(rawProfile);
@@ -4449,16 +4930,18 @@ async function handleLoginSubmit(event) {
     event.preventDefault();
 
     const selectedRole = document.getElementById('loginRole').value;
-    const email = document.getElementById('loginIdentifier').value.trim();
+    const identifier = document.getElementById('loginIdentifier').value.trim();
     const password = document.getElementById('loginPassword').value;
 
-    if (!email || !password) {
-        showToast('Email dan password wajib diisi.', 'error');
+    if (!identifier || !password) {
+        showToast(selectedRole === 'konsumen'
+            ? 'Email/nomor telepon dan password wajib diisi.'
+            : 'Email dan password wajib diisi.', 'error');
         return false;
     }
 
     try {
-        const profile = await handleSupabaseLogin(email, password);
+        const profile = await handleSupabaseLogin(identifier, password, selectedRole);
         if (!profile) return false;
         setPendingVerificationEmail('');
         syncResendVerificationUI();
@@ -4470,13 +4953,15 @@ async function handleLoginSubmit(event) {
     } catch (error) {
         console.error('Login Supabase gagal:', error);
         if (String(error?.message || '').toLowerCase().includes('email not confirmed')) {
-            setPendingVerificationEmail(email);
+            setPendingVerificationEmail(identifier);
             syncResendVerificationUI({
-                email,
+                email: identifier,
                 message: 'Akun ini belum terverifikasi email. Anda bisa kirim ulang email verifikasi dari tombol di bawah.'
             });
         }
-        showToast(toUserFacingError(error, 'Login gagal. Periksa email dan password Anda.'), 'error');
+        showToast(toUserFacingError(error, selectedRole === 'konsumen'
+            ? 'Login gagal. Periksa email/nomor telepon dan password Anda.'
+            : 'Login gagal. Periksa email dan password Anda.'), 'error');
     }
 
     return false;
@@ -4492,6 +4977,33 @@ async function registerKonsumenSupabase(formValues) {
     const usernameTaken = await isUsernameTakenRemote(formValues.username);
     if (usernameTaken) throw new Error('Username konsumen sudah digunakan.');
 
+    if (!formValues.phone) throw new Error('Nomor telepon konsumen wajib diisi.');
+
+    if (!email) {
+        const { data, error } = await supabaseClient.functions.invoke('register-consumer-account', {
+            body: {
+                username: formValues.username,
+                name: formValues.name,
+                password,
+                phone: formValues.phone,
+                address: formValues.address,
+                age: formValues.age,
+                birth_date: formValues.birthDate,
+                district: formValues.district,
+                location_text: formValues.locationText,
+                lat: formValues.lat,
+                lng: formValues.lng,
+                status: PROFILE_STATUS_ACTIVE
+            }
+        });
+        if (error) throw error;
+        return {
+            user: data?.user || null,
+            session: null,
+            needsPhoneLogin: true
+        };
+    }
+
     const { data, error } = await supabaseClient.auth.signUp({
         email,
         password,
@@ -4501,6 +5013,8 @@ async function registerKonsumenSupabase(formValues) {
                 role: 'konsumen',
                 username: formValues.username,
                 name: formValues.name,
+                contact_email: email,
+                auth_email: email,
                 phone: formValues.phone,
                 address: formValues.address,
                 age: formValues.age,
@@ -4539,6 +5053,8 @@ async function registerTeknisiSupabase(formValues) {
                 role: 'teknisi',
                 username: formValues.username,
                 name: formValues.name,
+                contact_email: email,
+                auth_email: email,
                 phone: formValues.phone,
                 address: formValues.address,
                 age: formValues.age,
@@ -4571,7 +5087,7 @@ async function handleRegisterKonsumen(event) {
         return false;
     }
     const waPopup = prepareWhatsAppPopup();
-    if (!form.name || !form.username || !form.password || !form.email || !form.phone || !form.address || !form.district) {
+    if (!form.name || !form.username || !form.password || !form.phone || !form.address || !form.district) {
         closePreparedPopup(waPopup);
         showToast('Lengkapi data wajib konsumen.', 'error');
         return false;
@@ -4579,12 +5095,17 @@ async function handleRegisterKonsumen(event) {
 
     try {
         const authResult = await registerKonsumenSupabase(form);
+        const registeredWithEmail = Boolean(form.email);
         const hasSession = Boolean(authResult.session);
         notifyAdminNewRegistration('konsumen', {
             ...form,
             registeredAt: new Date().toISOString(),
-            emailVerificationStatus: hasSession ? 'Session aktif; email confirmation tidak menahan login' : 'Menunggu konfirmasi email',
-            profileStatus: hasSession ? PROFILE_STATUS_ACTIVE : `${PROFILE_STATUS_ACTIVE} otomatis setelah email confirmed`
+            emailVerificationStatus: registeredWithEmail
+                ? (hasSession ? 'Session aktif; email confirmation tidak menahan login' : 'Menunggu konfirmasi email')
+                : 'Email opsional tidak dipakai; login telepon aktif',
+            profileStatus: registeredWithEmail && !hasSession
+                ? `${PROFILE_STATUS_ACTIVE} otomatis setelah email confirmed`
+                : PROFILE_STATUS_ACTIVE
         }, waPopup);
 
         if (hasSession) {
@@ -4600,7 +5121,18 @@ async function handleRegisterKonsumen(event) {
             clearImagePreviewState('register-konsumen-unit');
             document.getElementById('regKonLocationResult').style.display = 'none';
             resetToPublicLanding(`Pendaftaran konsumen ${form.name} berhasil. Profile publik aktif dan siap dipakai login.`);
-            document.getElementById('loginIdentifier').value = form.email;
+            document.getElementById('loginIdentifier').value = form.email || form.phone;
+            return false;
+        }
+
+        if (!registeredWithEmail && authResult.needsPhoneLogin) {
+            document.getElementById('formRegKonsumen').reset();
+            clearImagePreviewState('register-konsumen-unit');
+            document.getElementById('regKonLocationResult').style.display = 'none';
+            showLoginPage();
+            switchLoginRole('konsumen');
+            document.getElementById('loginIdentifier').value = form.phone;
+            showToast('Pendaftaran konsumen berhasil. Karena email tidak diisi, akun langsung aktif dan bisa login memakai nomor telepon.', 'success');
             return false;
         }
 
@@ -4815,7 +5347,6 @@ function renderKonsumenProfile() {
     document.getElementById('profileKonsumenAddress').value = user.address || '';
     document.getElementById('profileKonsumenLocation').textContent = formatLocationSummary(user);
     document.getElementById('profileKonsumenJoined').textContent = formatDate(user.joinedAt);
-    document.getElementById('konsumenProfileAutosave').textContent = 'Profil akan sinkron otomatis ke Supabase.';
 }
 
 async function renderKonsumenUnit() {
@@ -4827,13 +5358,15 @@ async function renderKonsumenUnit() {
         return;
     }
 
+    syncStorageStatusMessage('konUnitUploadStatus', getPublicUploadBucket(), 'Foto unit yang diunggah akan tersimpan ke Supabase Storage.');
+
     const imageSources = [];
     const remotePaths = normalizeTextArray(user.unitImagePaths);
     const remoteUrls = normalizeTextArray(user.unitImageUrls);
     for (let index = 0; index < remotePaths.length; index += 1) {
         const path = remotePaths[index];
         const existingUrl = remoteUrls[index] || '';
-        const resolvedUrl = existingUrl || await resolveStorageImageUrl(PUBLIC_UPLOAD_BUCKET, path);
+        const resolvedUrl = existingUrl || await resolveStorageImageUrl(getPublicUploadBucket(), path);
         if (resolvedUrl) {
             imageSources.push({
                 path,
@@ -4936,7 +5469,6 @@ function renderTeknisiProfile() {
     document.getElementById('profileTeknisiAddress').value = user.address || '';
     document.getElementById('profileTeknisiLocation').textContent = formatLocationSummary(user);
     document.getElementById('profileTeknisiStatus').textContent = user.status || 'Aktif';
-    document.getElementById('teknisiProfileAutosave').textContent = 'Profil akan sinkron otomatis ke Supabase.';
 }
 
 async function renderTeknisiDocs() {
@@ -4951,8 +5483,11 @@ async function renderTeknisiDocs() {
         return;
     }
 
-    const ktpUrl = user.ktpPhotoUrl || (user.ktpPhotoPath ? await resolveStorageImageUrl(PRIVATE_DOCUMENT_BUCKET, user.ktpPhotoPath, { forceRefresh: true }) : '') || cachedDocs.ktpPhoto || '';
-    const selfieUrl = user.selfiePhotoUrl || (user.selfiePhotoPath ? await resolveStorageImageUrl(PRIVATE_DOCUMENT_BUCKET, user.selfiePhotoPath, { forceRefresh: true }) : '') || cachedDocs.selfiePhoto || '';
+    syncStorageStatusMessage('teknisiDocStatus', getPrivateDocumentBucket(), 'Dokumen tersimpan otomatis saat file dipilih.');
+
+    const privateBucket = getPrivateDocumentBucket();
+    const ktpUrl = user.ktpPhotoUrl || (user.ktpPhotoPath ? await resolveStorageImageUrl(privateBucket, user.ktpPhotoPath, { forceRefresh: true }) : '') || cachedDocs.ktpPhoto || '';
+    const selfieUrl = user.selfiePhotoUrl || (user.selfiePhotoPath ? await resolveStorageImageUrl(privateBucket, user.selfiePhotoPath, { forceRefresh: true }) : '') || cachedDocs.selfiePhoto || '';
 
     if (ktpUrl && ktpUrl !== user.ktpPhotoUrl) {
         user.ktpPhotoUrl = ktpUrl;
@@ -4986,7 +5521,7 @@ async function renderTeknisiUpload() {
     ` : '';
     }
     const existingProof = document.getElementById('existingProofCard');
-    setElementText('uploadProofStatus', order?.proofImagePath || order?.proofImageUrl || order?.proofImage
+    syncStorageStatusMessage('uploadProofStatus', getPublicUploadBucket(), order?.proofImagePath || order?.proofImageUrl || order?.proofImage
         ? 'Bukti pekerjaan yang tersimpan bisa diganti atau dihapus dari sini.'
         : 'Belum ada bukti yang dipilih.');
     if (!existingProof) return;
@@ -4996,7 +5531,7 @@ async function renderTeknisiUpload() {
         return;
     }
 
-    const proofUrl = order.proofImageUrl || order.proofImage || await resolveStorageImageUrl(PUBLIC_UPLOAD_BUCKET, order.proofImagePath);
+    const proofUrl = order.proofImageUrl || order.proofImage || await resolveStorageImageUrl(getPublicUploadBucket(), order.proofImagePath);
     if (proofUrl && !order.proofImageUrl) order.proofImageUrl = proofUrl;
     existingProof.hidden = !proofUrl;
     existingProof.innerHTML = proofUrl ? `
@@ -5216,9 +5751,6 @@ async function saveProfile(role) {
     const profile = await requireAuthenticatedProfile(false);
     if (!profile || profile.role !== role) return;
 
-    const statusNode = document.getElementById(role === 'konsumen' ? 'konsumenProfileAutosave' : 'teknisiProfileAutosave');
-    if (statusNode) statusNode.textContent = 'Menyinkronkan ke Supabase...';
-
     try {
         let payload = null;
 
@@ -5266,7 +5798,7 @@ async function saveProfile(role) {
 
         const usernameTaken = await isUsernameTakenRemote(payload.username, profile.id);
         if (usernameTaken) {
-            if (statusNode) statusNode.textContent = 'Username sudah dipakai akun lain.';
+            showToast('Username sudah dipakai akun lain.', 'warning');
             return;
         }
 
@@ -5274,10 +5806,8 @@ async function saveProfile(role) {
         applySupabaseSession(updatedProfile);
         void syncNewUserToRemote(updatedProfile, { reason: `profile-autosave-${role}` });
         renderAppShell();
-        if (statusNode) statusNode.textContent = `Tersinkron ke Supabase ${formatDateTime(new Date())}`;
     } catch (error) {
         console.error(`Gagal menyimpan profile ${role}:`, error);
-        if (statusNode) statusNode.textContent = 'Gagal sinkron ke Supabase.';
         showToast(toUserFacingError(error, 'Gagal menyimpan profile.'), 'error');
     }
 }
@@ -5365,6 +5895,9 @@ function initDomEvents() {
     document.getElementById('btnResendVerification')?.addEventListener('click', () => {
         void handleResendVerificationEmail();
     });
+    document.getElementById('btnSendPasswordChangeCode')?.addEventListener('click', () => {
+        void sendPasswordChangeVerificationCode();
+    });
     document.getElementById('btnInstallApp')?.addEventListener('click', () => {
         void promptInstallApp();
     });
@@ -5421,8 +5954,10 @@ async function initApp() {
     purgeLegacyKonsumenTeknisiCache();
     hydrateMissingProfileColumnsCache();
     hydratePendingVerificationEmail();
+    runtimeState.passwordRecoveryActive = hasPasswordRecoveryContext();
     populateSpecializationOptions('regTekSpecialization', 'Semua Layanan');
     syncAdminAccessUI();
+    syncLoginRoleCopy('konsumen');
     initDomEvents();
     syncConnectionStatusBanner();
     syncInstallPromptUI();
@@ -5438,6 +5973,11 @@ async function initApp() {
 
     try {
         const hasSession = await restoreSession();
+        if (runtimeState.passwordRecoveryActive) {
+            showLoginPage();
+            activatePasswordRecoveryMode();
+            return;
+        }
         if (hasSession && remoteState.profile) {
             await redirectUserByRole(remoteState.profile);
             return;
@@ -5448,6 +5988,10 @@ async function initApp() {
     }
 
     showLanding();
+    if (runtimeState.passwordRecoveryActive) {
+        showLoginPage();
+        activatePasswordRecoveryMode();
+    }
 }
 
 window.addEventListener('DOMContentLoaded', initApp);

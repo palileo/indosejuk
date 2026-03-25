@@ -7,7 +7,7 @@ Frontend statis Indo Sejuk AC dengan source of truth utama di Supabase untuk:
 - `public.orders`
 - Supabase Storage untuk upload gambar penting
 
-Patch ini mempertahankan flow existing dan menambahkan hardening mobile, PWA-friendly shell, upload image yang benar ke Supabase Storage, hapus gambar, resend verifikasi email, serta jalur sinkron GitHub yang aman via backend/server-side.
+Patch ini mempertahankan flow existing dan menambahkan hardening mobile, PWA-friendly shell, upload image yang benar ke Supabase Storage, hapus gambar, resend verifikasi email, lupa sandi, ubah sandi terverifikasi, login konsumen via telepon, serta jalur sinkron GitHub yang aman via backend/server-side.
 
 ## Kontak aplikasi
 
@@ -82,7 +82,39 @@ Saat signup belum confirmed atau link verifikasi kedaluwarsa:
 - ada cooldown sederhana agar tidak spam klik
 - jika fallback Edge Function belum di-deploy, flow utama tetap aman
 
-### 4. Sinkron GitHub yang aman
+### 4. Login konsumen via telepon + email konsumen opsional
+
+Flow auth konsumen sekarang dibersihkan supaya:
+
+- email publik konsumen boleh kosong
+- akun auth konsumen tetap punya `auth_email` internal yang konsisten
+- login konsumen bisa memakai email atau nomor telepon
+- nomor telepon dinormalisasi konsisten ke format lokal `08...`
+- reset password konsumen via telepon memakai Edge Function aman tanpa membocorkan detail akun
+
+Edge Function yang ditambahkan:
+
+- `supabase/functions/register-consumer-account`
+- `supabase/functions/consumer-password-login`
+- `supabase/functions/request-password-reset`
+
+### 5. Lupa sandi + ubah sandi terverifikasi
+
+Flow keamanan akun yang sekarang aktif:
+
+- login memiliki CTA `Lupa Sandi?`
+- reset password email tetap memakai jalur resmi Supabase Auth
+- redirect recovery kembali ke app dan membuka form `Atur Sandi Baru`
+- perubahan sandi dari halaman profil memakai `reauthenticate()` Supabase sebelum `updateUser(...)`
+- untuk akun konsumen tanpa email publik, reset self-service tetap bergantung pada email auth/recovery yang tersedia; bila tidak ada kanal email nyata, UI mengarahkan user ke CS tanpa membocorkan status akun
+
+Referensi resmi Supabase:
+
+- https://supabase.com/docs/reference/kotlin/auth-resetpasswordforemail
+- https://supabase.com/docs/reference/javascript/auth-reauthentication
+- https://supabase.com/docs/guides/auth/passwords
+
+### 6. Sinkron GitHub yang aman
 
 Sinkron repo **tidak pernah dilakukan langsung dari browser**.
 
@@ -91,6 +123,9 @@ Jalur aman yang disiapkan:
 - `supabase/functions/sync-user-to-github`
 - `supabase/functions/sync-storage-to-github`
 - `supabase/functions/resend-signup-verification`
+- `supabase/functions/register-consumer-account`
+- `supabase/functions/consumer-password-login`
+- `supabase/functions/request-password-reset`
 
 Fungsi ini dipanggil dari frontend hanya bila backend sudah dikonfigurasi. Secret tetap server-side:
 
@@ -183,6 +218,7 @@ Pastikan migration berikut dijalankan:
 
 - `supabase/migrations/20260325_fix_profiles_birth_date_and_auth.sql`
 - `supabase/migrations/20260325_storage_policies_and_cleanup.sql`
+- `supabase/migrations/20260325_consumer_auth_phone_and_security.sql`
 
 Migration storage menambahkan:
 
@@ -191,6 +227,16 @@ Migration storage menambahkan:
 - bucket `app-public-uploads`
 - bucket `app-private-documents`
 - policy insert/update/delete/select yang mengikuti folder user dan tetap mengizinkan admin server-side/localhost flow
+
+Migration auth konsumen/security menambahkan:
+
+- kolom `public.profiles.auth_email`
+- email publik konsumen menjadi opsional
+- normalisasi nomor telepon Indonesia di level SQL
+- unique index `auth_email`
+- unique index telepon konsumen hanya bila data legacy sudah tidak duplikat
+- RPC `public.is_username_available(...)`
+- trigger provisioning profile yang sinkron dengan `contact_email` vs `auth_email`
 
 ## Menjalankan lokal
 
@@ -215,10 +261,18 @@ Variabel penting:
 - `SUPABASE_URL`
 - `SUPABASE_ANON_KEY`
 - `SUPABASE_SERVICE_ROLE_KEY`
+- `CONSUMER_AUTH_EMAIL_DOMAIN`
 - `GITHUB_TOKEN`
 - `GITHUB_OWNER`
 - `GITHUB_REPO`
 - `GITHUB_BRANCH`
+
+Frontend runtime config opsional:
+
+- `window.INDOSEJUK_RUNTIME_CONFIG.storage.publicBucket`
+- `window.INDOSEJUK_RUNTIME_CONFIG.storage.privateBucket`
+
+Jika nama bucket Supabase berbeda dengan default migration, override config runtime di HTML sebelum `app.js` dimuat.
 - `GITHUB_SNAPSHOT_PATH`
 - `GITHUB_UPLOADS_SNAPSHOT_PATH`
 
@@ -241,7 +295,11 @@ Variabel penting:
 - landscape mobile/tablet
 - install PWA dari browser yang support
 - login/logout tetap normal
-- register konsumen tetap normal
+- register konsumen tanpa email tetap normal
+- login konsumen via telepon tetap normal
+- lupa sandi tampil dan memicu reset password
+- recovery link membuka flow sandi baru
+- ubah sandi dari profil meminta verifikasi lebih dulu
 - register teknisi + OCR + fallback manual tetap normal
 - resend email verifikasi tampil saat relevan
 - upload foto unit tersimpan ke Supabase Storage

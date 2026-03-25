@@ -125,7 +125,7 @@
             <div class="card form-card login-form-card">
                 <div class="page-header login-header">
                     <h2>Masuk ke Dashboard</h2>
-                    <p>Gunakan email dan password akun Anda. Role akan ditentukan otomatis dari profil Supabase yang aktif.</p>
+                    <p id="loginRoleDescription">Gunakan email dan password akun Anda. Role akan ditentukan otomatis dari profil Supabase yang aktif.</p>
                 </div>
                 <div class="tabs login-role-tabs">
                     <button type="button" class="tab active" id="loginRoleTab-konsumen" aria-selected="true" onclick="switchLoginRole('konsumen', this)">Konsumen</button>
@@ -139,8 +139,9 @@
                     <input type="hidden" id="loginRole" value="konsumen">
                     <div class="form-grid login-form-grid">
                         <div class="form-group full-width">
-                            <label for="loginIdentifier">Email <span class="required">*</span></label>
-                            <input type="email" id="loginIdentifier" autocomplete="username" required placeholder="Masukkan email Anda">
+                            <label for="loginIdentifier" id="loginIdentifierLabel">Email atau No. Telepon <span class="required">*</span></label>
+                            <input type="text" id="loginIdentifier" autocomplete="username" inputmode="email" required placeholder="Masukkan email atau nomor telepon Anda">
+                            <p class="text-muted text-sm login-identifier-help" id="loginIdentifierHelp">Konsumen bisa masuk memakai email atau nomor telepon yang terdaftar.</p>
                         </div>
                         <div class="form-group full-width">
                             <label for="loginPassword">Password <span class="required">*</span></label>
@@ -148,6 +149,7 @@
                         </div>
                     </div>
                     <div class="form-actions">
+                        <button type="button" class="btn btn-outline btn-lg" onclick="openPasswordResetModal()">Lupa Sandi?</button>
                         <button type="submit" class="btn btn-primary btn-lg btn-glow">Masuk</button>
                     </div>
                 </form>
@@ -237,8 +239,8 @@
                             <input type="password" id="regKonPassword" required placeholder="Password akun">
                         </div>
                         <div class="form-group">
-                            <label for="regKonEmail">Email <span class="required">*</span></label>
-                            <input type="email" id="regKonEmail" required placeholder="email@contoh.com">
+                            <label for="regKonEmail">Email <span class="text-muted">(Opsional)</span></label>
+                            <input type="email" id="regKonEmail" placeholder="email@contoh.com">
                         </div>
                         <div class="form-group">
                             <label for="regKonPhone">No. Telepon / WhatsApp <span class="required">*</span></label>
@@ -847,7 +849,13 @@
                     <div class="profile-details">
                         <div class="detail-row"><span class="detail-label">Lokasi GPS</span><span class="detail-value" id="profileKonsumenLocation">Belum dibagikan</span></div>
                         <div class="detail-row"><span class="detail-label">Bergabung</span><span class="detail-value" id="profileKonsumenJoined">-</span></div>
-                        <div class="detail-row"><span class="detail-label">Status Simpan</span><span class="detail-value" id="konsumenProfileAutosave">Siap menyimpan otomatis</span></div>
+                    </div>
+                    <div class="card-subtle profile-security-card">
+                        <div>
+                            <h3>Keamanan Akun</h3>
+                            <p class="text-muted text-sm">Ubah sandi lewat verifikasi aman Supabase. Jika akun Anda punya email pemulihan, kode akan dikirim ke sana.</p>
+                        </div>
+                        <button type="button" class="btn btn-outline btn-sm" onclick="openChangePasswordModal('profile')">Ubah Sandi</button>
                     </div>
                 </div>
             </section>
@@ -1021,7 +1029,13 @@
                     <div class="profile-details">
                         <div class="detail-row"><span class="detail-label">Lokasi GPS</span><span class="detail-value" id="profileTeknisiLocation">Belum dibagikan</span></div>
                         <div class="detail-row"><span class="detail-label">Status</span><span class="detail-value" id="profileTeknisiStatus">Aktif</span></div>
-                        <div class="detail-row"><span class="detail-label">Status Simpan</span><span class="detail-value" id="teknisiProfileAutosave">Siap menyimpan otomatis</span></div>
+                    </div>
+                    <div class="card-subtle profile-security-card">
+                        <div>
+                            <h3>Keamanan Akun</h3>
+                            <p class="text-muted text-sm">Ubah sandi lewat verifikasi aman Supabase. Kode verifikasi akan dikirim ke email akun yang aktif.</p>
+                        </div>
+                        <button type="button" class="btn btn-outline btn-sm" onclick="openChangePasswordModal('profile')">Ubah Sandi</button>
                     </div>
                 </div>
             </section>
@@ -1746,9 +1760,77 @@
         </div>
     </div>
 
+    <div class="modal-overlay" id="modalPasswordReset" style="display:none;">
+        <div class="modal">
+            <div class="modal-header">
+                <h3>Lupa Sandi</h3>
+                <button type="button" class="modal-close" onclick="closeModal('modalPasswordReset')">&times;</button>
+            </div>
+            <form id="formPasswordReset" onsubmit="return handlePasswordResetRequest(event)">
+                <div class="modal-body">
+                    <p class="text-muted" id="passwordResetIntro">Masukkan email akun Anda untuk menerima tautan reset password yang aman.</p>
+                    <div class="form-group">
+                        <label for="passwordResetIdentifier" id="passwordResetIdentifierLabel">Email</label>
+                        <input type="text" id="passwordResetIdentifier" autocomplete="username" placeholder="email@contoh.com">
+                    </div>
+                    <p class="text-muted text-sm" id="passwordResetHelp">Jika akun ditemukan dan memiliki kanal pemulihan yang aktif, tautan reset akan dikirim. Untuk akun konsumen tanpa email, hubungi CS agar sandi direset manual.</p>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline" onclick="closeModal('modalPasswordReset')">Tutup</button>
+                    <button type="submit" class="btn btn-primary">Kirim Tautan Reset</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="modalChangePassword" style="display:none;">
+        <div class="modal">
+            <div class="modal-header">
+                <h3 id="changePasswordTitle">Ubah Sandi</h3>
+                <button type="button" class="modal-close" onclick="closeChangePasswordModal()">&times;</button>
+            </div>
+            <form id="formChangePassword" onsubmit="return handleChangePasswordSubmit(event)">
+                <div class="modal-body">
+                    <p class="text-muted" id="changePasswordIntro">Masukkan sandi baru Anda. Untuk sesi login biasa, kirim kode verifikasi terlebih dahulu.</p>
+                    <div class="card-subtle" id="changePasswordVerificationCard">
+                        <p class="text-muted text-sm" id="changePasswordVerificationHelp">Klik tombol di bawah untuk mengirim kode verifikasi ganti sandi lewat Supabase Auth ke kanal pemulihan akun yang aktif.</p>
+                        <div class="form-actions">
+                            <button type="button" class="btn btn-outline btn-sm" id="btnSendPasswordChangeCode">Kirim Kode Verifikasi</button>
+                        </div>
+                    </div>
+                    <div class="form-group" id="changePasswordNonceGroup">
+                        <label for="changePasswordNonce">Kode Verifikasi</label>
+                        <input type="text" id="changePasswordNonce" inputmode="numeric" autocomplete="one-time-code" placeholder="Masukkan kode verifikasi">
+                    </div>
+                    <div class="form-group">
+                        <label for="changePasswordNew">Sandi Baru</label>
+                        <input type="password" id="changePasswordNew" autocomplete="new-password" placeholder="Minimal 8 karakter">
+                    </div>
+                    <div class="form-group">
+                        <label for="changePasswordConfirm">Konfirmasi Sandi Baru</label>
+                        <input type="password" id="changePasswordConfirm" autocomplete="new-password" placeholder="Ulangi sandi baru">
+                    </div>
+                    <p class="text-muted text-sm" id="changePasswordStatus">Belum ada proses perubahan sandi.</p>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline" onclick="closeChangePasswordModal()">Batal</button>
+                    <button type="submit" class="btn btn-primary" id="btnSubmitChangePassword">Perbarui Sandi</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <!-- Toast Notification -->
     <div class="toast-container" id="toastContainer"></div>
 
+    <script>
+        window.INDOSEJUK_RUNTIME_CONFIG = Object.assign({
+            storage: {
+                publicBucket: 'app-public-uploads',
+                privateBucket: 'app-private-documents'
+            }
+        }, window.INDOSEJUK_RUNTIME_CONFIG || {});
+    </script>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2" defer></script>
     <script src="app.js" defer></script>
 </body>
