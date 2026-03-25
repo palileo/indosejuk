@@ -30,6 +30,9 @@ const MAX_IMAGE_UPLOAD_BYTES = 8 * 1024 * 1024;
 const IMAGE_MIME_WHITELIST = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif']);
 const REMOTE_STORAGE_SYNC_FUNCTION_NAME = 'sync-storage-to-github';
 const PASSWORD_MIN_LENGTH = 8;
+const AUTH_BACKEND_HEALTH_CACHE_TTL_MS = 5 * 60 * 1000;
+const AUTH_SETTINGS_CACHE_TTL_MS = 5 * 60 * 1000;
+const PUBLIC_AUTH_FUNCTION_NAMES = ['register-public-account', 'profile-password-login', 'request-password-reset'];
 const REQUIRED_PROFILE_COLUMNS = [
     'id',
     'role',
@@ -145,7 +148,12 @@ const runtimeState = {
     changePasswordCodeSending: false,
     changePasswordCodeSent: false,
     passwordRecoveryActive: false,
-    sensitiveEmailSubmitting: false
+    sensitiveEmailSubmitting: false,
+    authBackendHealth: {
+        functions: {},
+        settings: null,
+        publicNoticeMessage: ''
+    }
 };
 
 const ROLE_LABELS = {
@@ -513,6 +521,13 @@ function formatDisplayPhone(value) {
 
 function getAuthEmailDomain() {
     return appRuntimeConfig.auth.emailDomain || DEFAULT_AUTH_EMAIL_DOMAIN;
+}
+
+function buildSyntheticAuthEmail(role, phone) {
+    const normalizedRole = String(role || 'user').trim().toLowerCase() || 'user';
+    const normalizedPhone = normalizePhone(phone);
+    if (!normalizedPhone) return '';
+    return `${normalizedRole}.${normalizedPhone}@${getAuthEmailDomain()}`;
 }
 
 function isSyntheticAuthEmail(value) {
@@ -999,7 +1014,7 @@ async function syncNewUserToRemote(profile, options = {}) {
         };
     } catch (error) {
         const message = String(error?.message || error || '');
-        const looksMissingOrDisabled = /404|not found|edge function|failed to send a request|functionshttperror/i.test(message);
+        const looksMissingOrDisabled = /404|not found|edge function|failed to send a request|functionshttperror|functionsfetcherror/i.test(message);
 
         if (looksMissingOrDisabled) {
             console.warn('Sinkron snapshot GitHub belum dikonfigurasi di backend aman. Supabase tetap menjadi source of truth.', error);
@@ -1301,7 +1316,7 @@ async function invokeRemoteAssetSync(functionName, payload = {}, options = {}) {
         };
     } catch (error) {
         const message = String(error?.message || error || '');
-        const looksMissingOrDisabled = /404|not found|edge function|failed to send a request|functionshttperror/i.test(message);
+        const looksMissingOrDisabled = /404|not found|edge function|failed to send a request|functionshttperror|functionsfetcherror/i.test(message);
 
         if (looksMissingOrDisabled) {
             console.warn(`Edge Function ${functionName} belum tersedia atau belum dikonfigurasi. Supabase tetap menjadi source of truth.`, error);
@@ -3298,6 +3313,288 @@ function getAppBaseUrl() {
     return url.toString();
 }
 
+function getEdgeFunctionUrl(functionName) {
+    return `${SUPABASE_URL}/functions/v1/${functionName}`;
+}
+
+function getAuthSettingsUrl() {
+    return `${SUPABASE_URL}/auth/v1/settings`;
+}
+
+function createFunctionInvokeError(message, originalError, functionName) {
+    const error = new Error(message);
+    error.originalError = originalError || null;
+    error.functionName = functionName || '';
+    error.status = Number(originalError?.context?.status || originalError?.status || 0) || null;
+    return error;
+}
+
+function extractFunctionPayloadMessage(payload) {
+    if (!payload) return '';
+    if (typeof payload === 'string') return payload.trim();
+    const candidates = [payload.message, payload.error, payload.msg, payload.details];
+    for (const candidate of candidates) {
+        if (typeof candidate === 'string' && candidate.trim()) {
+            return candidate.trim();
+        }
+    }
+    return '';
+}
+
+async function extractEdgeFunctionErrorMessage(error) {
+    const context = error?.context;
+    if (!context) return '';
+
+    try {
+        const response = typeof context.clone === 'function' ? context.clone() : context;
+        const contentType = String(response.headers?.get?.('content-type') || '').toLowerCase();
+
+        if (contentType.includes('application/json')) {
+            const jsonPayload = await response.json().catch(() => null);
+            const jsonMessage = extractFunctionPayloadMessage(jsonPayload);
+            if (jsonMessage) return jsonMessage;
+        }
+
+        const rawText = await response.text().catch(() => '');
+        const text = String(rawText || '').trim();
+        if (!text) return '';
+
+        try {
+            const parsed = JSON.parse(text);
+            const parsedMessage = extractFunctionPayloadMessage(parsed);
+            if (parsedMessage) return parsedMessage;
+        } catch (_) {
+            // Biarkan fallback ke raw text.
+        }
+
+        return text;
+    } catch (_) {
+        return '';
+    }
+}
+
+function getMissingEdgeFunctionMessage(functionName) {
+    const knownMessages = {
+        'register-public-account': 'Backend register publik belum aktif. Deploy Edge Function `register-public-account` ke Supabase terlebih dahulu.',
+        'profile-password-login': 'Backend login multi-identifier belum aktif. Deploy Edge Function `profile-password-login` ke Supabase terlebih dahulu.',
+        'request-password-reset': 'Backend reset password belum aktif. Deploy Edge Function `request-password-reset` ke Supabase terlebih dahulu.'
+    };
+    return knownMessages[functionName] || `Edge Function \`${functionName}\` belum tersedia atau belum dideploy di project Supabase.`;
+}
+
+function looksLikeMissingEdgeFunction(error) {
+    const status = Number(error?.context?.status || error?.status || 0);
+    const combined = [
+        error?.functionName,
+        error?.name,
+        error?.message,
+        error?.context?.statusText
+    ].filter(Boolean).join(' ').toLowerCase();
+
+    return status === 404
+        || combined.includes('functionsfetcherror')
+        || combined.includes('failed to send a request')
+        || combined.includes('edge function not found')
+        || combined.includes('not found');
+}
+
+function isEdgeFunctionDependencyError(error, functionName = '') {
+    if (!error) return false;
+    if (functionName && error?.functionName === functionName && looksLikeMissingEdgeFunction(error)) {
+        return true;
+    }
+
+    const combined = [
+        error?.functionName,
+        error?.name,
+        error?.message
+    ].filter(Boolean).join(' ').toLowerCase();
+
+    return looksLikeMissingEdgeFunction(error)
+        || (Boolean(functionName) && combined.includes(functionName.toLowerCase()))
+        || combined.includes('backend register publik belum aktif')
+        || combined.includes('backend login multi-identifier belum aktif')
+        || combined.includes('backend reset password belum aktif');
+}
+
+async function fetchSupabaseAuthSettings(options = {}) {
+    const cached = runtimeState.authBackendHealth.settings;
+    if (!options.force && cached?.checkedAt && (Date.now() - cached.checkedAt) < AUTH_SETTINGS_CACHE_TTL_MS) {
+        return cached;
+    }
+
+    const headers = { apikey: SUPABASE_ANON_KEY };
+
+    try {
+        const response = await fetch(getAuthSettingsUrl(), {
+            method: 'GET',
+            headers,
+            cache: 'no-store'
+        });
+        if (!response.ok) {
+            throw new Error(`Supabase Auth settings merespons ${response.status}.`);
+        }
+
+        const payload = await response.json();
+        const summary = {
+            checkedAt: Date.now(),
+            ok: true,
+            mailerAutoconfirm: Boolean(payload?.mailer_autoconfirm),
+            phoneAutoconfirm: Boolean(payload?.phone_autoconfirm),
+            disableSignup: Boolean(payload?.disable_signup)
+        };
+        runtimeState.authBackendHealth.settings = summary;
+        return summary;
+    } catch (error) {
+        const summary = {
+            checkedAt: Date.now(),
+            ok: false,
+            mailerAutoconfirm: false,
+            phoneAutoconfirm: false,
+            disableSignup: false,
+            message: String(error?.message || error || 'Gagal membaca auth settings Supabase.')
+        };
+        runtimeState.authBackendHealth.settings = summary;
+        return summary;
+    }
+}
+
+async function probeEdgeFunctionAvailability(functionName, options = {}) {
+    const cached = runtimeState.authBackendHealth.functions[functionName];
+    if (!options.force && cached?.checkedAt && (Date.now() - cached.checkedAt) < AUTH_BACKEND_HEALTH_CACHE_TTL_MS) {
+        return cached;
+    }
+
+    const headers = {
+        apikey: SUPABASE_ANON_KEY,
+        Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+        'Content-Type': 'application/json'
+    };
+
+    let timeoutId = null;
+    const controller = typeof AbortController === 'function' ? new AbortController() : null;
+
+    try {
+        if (controller) {
+            timeoutId = window.setTimeout(() => controller.abort(), options.timeoutMs || 6000);
+        }
+
+        const response = await fetch(getEdgeFunctionUrl(functionName), {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({}),
+            cache: 'no-store',
+            signal: controller?.signal
+        });
+
+        const result = {
+            checkedAt: Date.now(),
+            ok: response.status !== 404,
+            status: response.status,
+            message: response.status === 404 ? getMissingEdgeFunctionMessage(functionName) : ''
+        };
+        runtimeState.authBackendHealth.functions[functionName] = result;
+        return result;
+    } catch (error) {
+        const result = {
+            checkedAt: Date.now(),
+            ok: false,
+            status: 0,
+            message: `Endpoint Edge Function \`${functionName}\` tidak bisa dijangkau dari browser ini.`
+        };
+        runtimeState.authBackendHealth.functions[functionName] = result;
+        return result;
+    } finally {
+        if (timeoutId) window.clearTimeout(timeoutId);
+    }
+}
+
+async function getPublicAuthBackendStatus(options = {}) {
+    const [functionChecks, authSettings] = await Promise.all([
+        Promise.all(PUBLIC_AUTH_FUNCTION_NAMES.map((functionName) => probeEdgeFunctionAvailability(functionName, options))),
+        fetchSupabaseAuthSettings(options)
+    ]);
+
+    const missingFunctions = PUBLIC_AUTH_FUNCTION_NAMES.filter((_, index) => !functionChecks[index]?.ok);
+    const missingFunctionLabels = missingFunctions.map((name) => `\`${name}\``).join(', ');
+    const registerFallbackReady = Boolean(authSettings?.ok && authSettings.mailerAutoconfirm && !authSettings.disableSignup);
+    const message = missingFunctions.length
+        ? (registerFallbackReady
+            ? `Backend auth publik belum lengkap. Function yang belum aktif: ${missingFunctionLabels}. Login username/telepon masih butuh backend, tetapi register fallback client-side aman dipakai karena email confirmation Supabase sudah dimatikan.`
+            : `Backend auth publik belum lengkap di project Supabase ini. Function yang belum aktif: ${missingFunctionLabels}. Supabase Auth masih mewajibkan konfirmasi email untuk signup biasa, jadi register publik tetap butuh backend register yang aktif.`)
+        : '';
+
+    const summary = {
+        checkedAt: Date.now(),
+        ok: missingFunctions.length === 0,
+        missingFunctions,
+        registerFallbackReady,
+        authSettings,
+        message
+    };
+    runtimeState.authBackendHealth.publicNoticeMessage = message;
+    return summary;
+}
+
+function renderPublicAuthBackendNotice(message = '') {
+    ['authBackendNoticeLogin', 'authBackendNoticeRegister'].forEach((id) => {
+        const element = document.getElementById(id);
+        if (!element) return;
+        if (!message) {
+            element.hidden = true;
+            element.textContent = '';
+            return;
+        }
+        element.hidden = false;
+        element.textContent = message;
+    });
+}
+
+async function refreshPublicAuthBackendNotice(options = {}) {
+    const user = getCurrentUser();
+    if (user) {
+        renderPublicAuthBackendNotice('');
+        return;
+    }
+
+    const status = await getPublicAuthBackendStatus(options);
+    renderPublicAuthBackendNotice(status.message || '');
+}
+
+async function resolveEdgeFunctionError(error, functionName, fallback = '') {
+    const bodyMessage = await extractEdgeFunctionErrorMessage(error);
+    if (bodyMessage) {
+        return createFunctionInvokeError(bodyMessage, error, functionName);
+    }
+
+    if (looksLikeMissingEdgeFunction(error)) {
+        return createFunctionInvokeError(getMissingEdgeFunctionMessage(functionName), error, functionName);
+    }
+
+    const directMessage = String(error?.message || '').trim();
+    if (directMessage && !/edge function returned a non-2xx status code/i.test(directMessage)) {
+        return createFunctionInvokeError(directMessage, error, functionName);
+    }
+
+    return createFunctionInvokeError(
+        fallback || `Pemanggilan backend ${functionName} gagal.`,
+        error,
+        functionName
+    );
+}
+
+async function invokeEdgeFunction(functionName, body = {}, options = {}) {
+    if (!canUseSupabase()) {
+        throw new Error('Supabase client belum siap.');
+    }
+
+    const { data, error } = await supabaseClient.functions.invoke(functionName, { body });
+    if (error) {
+        throw await resolveEdgeFunctionError(error, functionName, options.fallbackMessage);
+    }
+    return data || {};
+}
+
 function toUserFacingError(error, fallback = 'Terjadi kesalahan.') {
     const message = String(error?.message || error || fallback);
     const normalized = message.toLowerCase();
@@ -3305,6 +3602,15 @@ function toUserFacingError(error, fallback = 'Terjadi kesalahan.') {
 
     if (normalized.includes('invalid login credentials')) return 'Login gagal. Periksa identifier dan password Anda.';
     if (normalized.includes('email, username, atau no. telepon')) return 'Masukkan email, username, atau nomor telepon yang valid.';
+    if (normalized.includes('failed to send a request to the edge function') || normalized.includes('functionsfetcherror')) {
+        return 'Browser gagal menjangkau Edge Function Supabase. Biasanya karena function belum dideploy, env function belum lengkap, atau koneksi ke endpoint Functions sedang gagal.';
+    }
+    if (normalized.includes('function register/login/reset belum aktif')) {
+        return 'Backend auth publik di Supabase belum lengkap. Deploy function register/login/reset atau aktifkan fallback yang aman sesuai README.';
+    }
+    if (normalized.includes('masih mewajibkan konfirmasi email untuk signup biasa')) {
+        return 'Register publik belum bisa dijalankan karena project Supabase masih mewajibkan konfirmasi email dan backend register belum aktif.';
+    }
     if (normalized.includes('email not confirmed')) return 'Alur register tidak lagi memakai konfirmasi email. Jika ini muncul, cek deployment auth/backend terbaru.';
     if (normalized.includes('user already registered')) return 'Email sudah terdaftar. Silakan login langsung.';
     if (normalized.includes('email rate limit exceeded') || normalized.includes('over_email_send_rate_limit')) return 'Tunggu sebentar sebelum meminta email verifikasi lagi.';
@@ -3356,22 +3662,48 @@ function openPasswordResetModal() {
 }
 
 async function requestPasswordReset(identifier, role = 'konsumen') {
-    if (!canUseSupabase()) throw new Error('Supabase client belum siap.');
-
     const normalizedIdentifier = normalizeLoginIdentifier(identifier);
     if (!normalizedIdentifier) {
         throw new Error('Masukkan email, username, atau nomor telepon terlebih dahulu.');
     }
 
-    const { data, error } = await supabaseClient.functions.invoke('request-password-reset', {
-        body: {
+    const resetFunctionStatus = await probeEdgeFunctionAvailability('request-password-reset');
+    if (!resetFunctionStatus.ok) {
+        if (isEmailIdentifier(normalizedIdentifier) && !isSyntheticAuthEmail(normalizedIdentifier)) {
+            const { error: resetError } = await supabaseClient.auth.resetPasswordForEmail(normalizedIdentifier, {
+                redirectTo: getPasswordResetRedirectUrl()
+            });
+            if (resetError) throw resetError;
+            return {
+                ok: true,
+                fallbackMode: 'direct-email-reset'
+            };
+        }
+
+        throw new Error('Reset sandi via username atau nomor telepon belum aktif karena backend `request-password-reset` belum tersedia. Gunakan email verifikasi aktif atau deploy function tersebut.');
+    }
+
+    try {
+        return await invokeEdgeFunction('request-password-reset', {
             role,
             identifier: normalizedIdentifier,
             redirectTo: getPasswordResetRedirectUrl()
+        }, {
+            fallbackMessage: 'Permintaan reset password gagal diproses oleh backend.'
+        });
+    } catch (error) {
+        if (isEdgeFunctionDependencyError(error, 'request-password-reset') && isEmailIdentifier(normalizedIdentifier) && !isSyntheticAuthEmail(normalizedIdentifier)) {
+            const { error: resetError } = await supabaseClient.auth.resetPasswordForEmail(normalizedIdentifier, {
+                redirectTo: getPasswordResetRedirectUrl()
+            });
+            if (resetError) throw resetError;
+            return {
+                ok: true,
+                fallbackMode: 'direct-email-reset'
+            };
         }
-    });
-    if (error) throw error;
-    return data || { ok: true };
+        throw error;
+    }
 }
 
 async function handlePasswordResetRequest(event) {
@@ -3384,6 +3716,9 @@ async function handlePasswordResetRequest(event) {
         closeModal('modalPasswordReset');
         showToast(PASSWORD_RESET_GENERIC_SUCCESS_MESSAGE, 'success');
     } catch (error) {
+        if (isEdgeFunctionDependencyError(error, 'request-password-reset')) {
+            void refreshPublicAuthBackendNotice({ force: true });
+        }
         console.error('Permintaan lupa sandi gagal:', error);
         showToast(toUserFacingError(error, 'Permintaan reset password gagal.'), 'error');
     }
@@ -4954,14 +5289,46 @@ async function signInWithResolvedIdentifier(identifier, password, requestedRole 
         throw new Error('Login gagal. Periksa identifier dan password Anda.');
     }
 
-    const { data, error } = await supabaseClient.functions.invoke('profile-password-login', {
-        body: {
-            identifier: normalizedIdentifier,
-            password: normalizedPassword,
-            requestedRole
+    const loginFunctionStatus = await probeEdgeFunctionAvailability('profile-password-login');
+    if (!loginFunctionStatus.ok) {
+        if (isEmailIdentifier(normalizedIdentifier)) {
+            const { error: directError } = await supabaseClient.auth.signInWithPassword({
+                email: normalizedIdentifier,
+                password: normalizedPassword
+            });
+            if (directError) throw directError;
+            return {
+                ok: true,
+                fallbackMode: 'direct-email-login'
+            };
         }
-    });
-    if (error) throw error;
+
+        throw new Error('Login dengan username atau nomor telepon belum aktif karena backend `profile-password-login` belum tersedia. Gunakan email login atau deploy function tersebut.');
+    }
+
+    let data;
+    try {
+        data = await invokeEdgeFunction('profile-password-login', {
+                identifier: normalizedIdentifier,
+                password: normalizedPassword,
+                requestedRole
+            }, {
+                fallbackMessage: 'Login multi-identifier gagal diproses oleh backend.'
+        });
+    } catch (error) {
+        if (isEdgeFunctionDependencyError(error, 'profile-password-login') && isEmailIdentifier(normalizedIdentifier)) {
+            const { error: directError } = await supabaseClient.auth.signInWithPassword({
+                email: normalizedIdentifier,
+                password: normalizedPassword
+            });
+            if (directError) throw directError;
+            return {
+                ok: true,
+                fallbackMode: 'direct-email-login'
+            };
+        }
+        throw error;
+    }
     await applyResolvedAuthSession(data?.session);
     return data || { ok: true };
 }
@@ -5024,6 +5391,9 @@ async function handleLoginSubmit(event) {
             showToast(`Login berhasil. Selamat datang, ${profile.name}.`, 'success');
         }
     } catch (error) {
+        if (isEdgeFunctionDependencyError(error, 'profile-password-login')) {
+            void refreshPublicAuthBackendNotice({ force: true });
+        }
         console.error('Login Supabase gagal:', error);
         showToast(toUserFacingError(error, 'Login gagal. Periksa identifier dan password Anda.'), 'error');
     }
@@ -5032,8 +5402,6 @@ async function handleLoginSubmit(event) {
 }
 
 async function registerPublicAccountSupabase(role, formValues) {
-    if (!canUseSupabase()) throw new Error('Supabase client belum siap.');
-
     const password = String(formValues.password || '').trim();
     if (!password) throw new Error('Password wajib diisi.');
     if (!formValues.phone) throw new Error('Nomor telepon wajib diisi.');
@@ -5041,29 +5409,75 @@ async function registerPublicAccountSupabase(role, formValues) {
     const usernameTaken = await isUsernameTakenRemote(formValues.username);
     if (usernameTaken) throw new Error(`Username ${ROLE_LABELS[role] || role} sudah digunakan.`);
 
-    const { data, error } = await supabaseClient.functions.invoke('register-public-account', {
-        body: {
-            role,
-            username: formValues.username,
-            name: formValues.name,
-            password,
-            email: formValues.email,
-            phone: formValues.phone,
-            address: formValues.address,
-            age: formValues.age,
-            birth_date: formValues.birthDate,
-            district: formValues.district || '',
-            location_text: formValues.locationText,
-            lat: formValues.lat,
-            lng: formValues.lng,
-            nik: formValues.nik || '',
-            specialization: formValues.specialization || '',
-            experience: formValues.experience ?? '',
-            status: PROFILE_STATUS_PENDING
+    const registerFunctionStatus = await probeEdgeFunctionAvailability('register-public-account');
+    if (registerFunctionStatus.ok) {
+        return invokeEdgeFunction('register-public-account', {
+                role,
+                username: formValues.username,
+                name: formValues.name,
+                password,
+                email: formValues.email,
+                phone: formValues.phone,
+                address: formValues.address,
+                age: formValues.age,
+                birth_date: formValues.birthDate,
+                district: formValues.district || '',
+                location_text: formValues.locationText,
+                lat: formValues.lat,
+                lng: formValues.lng,
+                nik: formValues.nik || '',
+                specialization: formValues.specialization || '',
+                experience: formValues.experience ?? '',
+                status: PROFILE_STATUS_PENDING
+            }, {
+                fallbackMessage: 'Registrasi akun publik gagal diproses oleh backend.'
+        });
+    }
+
+    const authSettings = await fetchSupabaseAuthSettings();
+    if (!authSettings.ok || authSettings.disableSignup || !authSettings.mailerAutoconfirm) {
+        throw new Error('Backend auth publik belum lengkap di project Supabase ini. Function register/login/reset belum aktif, sementara Supabase Auth masih mewajibkan konfirmasi email untuk signup biasa.');
+    }
+
+    const authEmail = buildSyntheticAuthEmail(role, formValues.phone);
+    if (!authEmail) {
+        throw new Error('Email auth sintetis tidak dapat dibuat karena nomor telepon belum valid.');
+    }
+
+    const { data, error: signUpError } = await supabaseClient.auth.signUp({
+        email: authEmail,
+        password,
+        options: {
+            data: {
+                role,
+                username: formValues.username,
+                name: formValues.name,
+                contact_email: formValues.email || '',
+                auth_email: authEmail,
+                phone: normalizePhone(formValues.phone),
+                address: formValues.address || '',
+                age: formValues.age ?? null,
+                birth_date: formValues.birthDate || '',
+                district: formValues.district || '',
+                location_text: formValues.locationText || '',
+                lat: formValues.lat || '',
+                lng: formValues.lng || '',
+                nik: formValues.nik || '',
+                specialization: formValues.specialization || '',
+                experience: formValues.experience ?? null,
+                status: PROFILE_STATUS_PENDING
+            }
         }
     });
-    if (error) throw error;
-    return data || {};
+
+    if (signUpError) throw signUpError;
+    return {
+        ok: true,
+        user: data?.user || null,
+        session: data?.session || null,
+        auth_email: authEmail,
+        fallbackMode: 'client-signup'
+    };
 }
 
 async function finalizePendingRegistration(role, formValues, authResult) {
@@ -5165,6 +5579,9 @@ async function handleRegisterKonsumen(event) {
         showToast('Pendaftaran konsumen berhasil dibuat. Status akun sekarang Menunggu Verifikasi admin.', 'success');
     } catch (error) {
         closePreparedPopup(waPopup);
+        if (isEdgeFunctionDependencyError(error, 'register-public-account')) {
+            void refreshPublicAuthBackendNotice({ force: true });
+        }
         console.error('Registrasi konsumen gagal:', error);
         showToast(toUserFacingError(error, 'Registrasi konsumen gagal.'), 'error');
     }
@@ -5211,6 +5628,9 @@ async function handleRegisterTeknisi(event) {
         showToast('Pendaftaran teknisi berhasil dibuat. Status akun sekarang Menunggu Verifikasi admin.', 'success');
     } catch (error) {
         closePreparedPopup(waPopup);
+        if (isEdgeFunctionDependencyError(error, 'register-public-account')) {
+            void refreshPublicAuthBackendNotice({ force: true });
+        }
         console.error('Registrasi teknisi gagal:', error);
         showToast(toUserFacingError(error, 'Registrasi teknisi gagal.'), 'error');
     }
@@ -5975,6 +6395,7 @@ async function initApp() {
     initDomEvents();
     syncConnectionStatusBanner();
     syncInstallPromptUI();
+    void refreshPublicAuthBackendNotice();
     scheduleIdleTask(() => {
         void registerServiceWorkerSafe();
     }, 1800);

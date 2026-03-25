@@ -135,6 +135,7 @@
                 <p id="adminLocalhostHint" class="admin-localhost-hint" hidden>
                     Dashboard admin hanya tersedia di localhost.
                 </p>
+                <p id="authBackendNoticeLogin" class="admin-localhost-hint" hidden></p>
                 <form id="formLogin" onsubmit="return handleLoginSubmit(event)">
                     <input type="hidden" id="loginRole" value="konsumen">
                     <div class="form-grid login-form-grid">
@@ -209,6 +210,7 @@
                 <button type="button" class="reg-tab active" onclick="switchRegisterTab('konsumen', this)">Daftar Konsumen</button>
                 <button type="button" class="reg-tab" onclick="switchRegisterTab('teknisi', this)">Daftar Teknisi</button>
             </div>
+            <p id="authBackendNoticeRegister" class="admin-localhost-hint" hidden></p>
 
             <!-- === FORM DAFTAR KONSUMEN === -->
             <div class="register-form-card" id="regFormKonsumen">
@@ -1873,7 +1875,7 @@
         }, window.INDOSEJUK_RUNTIME_CONFIG || {});
     </script>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2" defer></script>
-    <script src="app.js" defer></script>
+    <script src="app.js?v=20260326-3" defer></script>
 </body>
 </html>
 

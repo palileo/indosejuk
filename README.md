@@ -102,6 +102,14 @@ Setelah update ini, deploy ulang:
 - Edge Function `profile-password-login`
 - Edge Function `request-password-reset`
 
+Contoh CLI:
+
+- `supabase functions deploy register-public-account --project-ref zqjretruylhumkehtcli`
+- `supabase functions deploy profile-password-login --project-ref zqjretruylhumkehtcli`
+- `supabase functions deploy request-password-reset --project-ref zqjretruylhumkehtcli`
+
+Jika browser menampilkan error seperti `Requested function was not found` atau `Failed to send a request to the Edge Function`, itu berarti frontend sudah berjalan tetapi function live di project Supabase belum tersedia / belum bisa dijangkau.
+
 Opsional env backend:
 
 - `AUTH_EMAIL_DOMAIN=auth.indosejuk.local`
