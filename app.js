@@ -17,6 +17,8 @@ const OCR_CDN_URL = 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.
 const DEFAULT_ADMIN_WHATSAPP = '08970788800';
 const PROFILE_STATUS_PENDING = 'Menunggu Verifikasi';
 const PROFILE_STATUS_ACTIVE = 'Aktif';
+const PROFILE_SCHEMA_DRIFT_CACHE_KEY = 'indoSejukProfileSchemaDrift';
+const PROFILE_SCHEMA_DRIFT_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const REQUIRED_PROFILE_COLUMNS = [
     'id',
     'role',
@@ -56,7 +58,6 @@ let appData = null;
 let authBootstrapPromise = null;
 let authSignInInProgress = false;
 const missingProfileColumnsCache = new Set();
-const schemaToastCache = new Set();
 const syncToastCache = new Set();
 
 const remoteState = {
@@ -150,11 +151,6 @@ function deepClone(value) {
 
 function canUseSupabase() {
     return Boolean(supabaseClient);
-}
-
-function shouldFallbackToLocalAuth(error) {
-    console.warn('Fallback auth lokal sudah dimatikan.', error);
-    return false;
 }
 
 function normalizeEmail(value) {
@@ -360,19 +356,48 @@ function extractMissingColumnName(error) {
     return '';
 }
 
+function persistMissingProfileColumnsCache() {
+    try {
+        const payload = {
+            columns: [...missingProfileColumnsCache],
+            updatedAt: Date.now()
+        };
+        localStorage.setItem(PROFILE_SCHEMA_DRIFT_CACHE_KEY, JSON.stringify(payload));
+    } catch (_) {}
+}
+
+function hydrateMissingProfileColumnsCache() {
+    try {
+        const raw = localStorage.getItem(PROFILE_SCHEMA_DRIFT_CACHE_KEY);
+        if (!raw) return;
+
+        const parsed = JSON.parse(raw);
+        const updatedAt = Number(parsed?.updatedAt || 0);
+        const columns = Array.isArray(parsed?.columns) ? parsed.columns : [];
+
+        if (!updatedAt || (Date.now() - updatedAt) > PROFILE_SCHEMA_DRIFT_CACHE_TTL_MS) {
+            localStorage.removeItem(PROFILE_SCHEMA_DRIFT_CACHE_KEY);
+            return;
+        }
+
+        columns.forEach((column) => {
+            const normalized = String(column || '').trim().toLowerCase();
+            if (OPTIONAL_PROFILE_COLUMN_SET.has(normalized)) {
+                missingProfileColumnsCache.add(normalized);
+            }
+        });
+    } catch (_) {}
+}
+
 function markMissingProfileColumn(name, error = null) {
     const normalized = String(name || '').trim().toLowerCase();
     if (!normalized || !OPTIONAL_PROFILE_COLUMN_SET.has(normalized)) return false;
 
     const isNew = !missingProfileColumnsCache.has(normalized);
     missingProfileColumnsCache.add(normalized);
+    persistMissingProfileColumnsCache();
 
     console.warn(`Kolom optional profiles "${normalized}" belum tersedia di schema cache Supabase. Query akan diulang tanpa kolom tersebut sampai migrasi terbaca normal.`, error || '');
-
-    if (!schemaToastCache.has(normalized)) {
-        schemaToastCache.add(normalized);
-        showToast(`Kolom profile "${normalized}" belum terbaca dari schema cache Supabase. Jalankan migrasi SQL lalu refresh bila perlu.`, 'warning');
-    }
 
     return isNew;
 }
@@ -449,36 +474,6 @@ function isLocalhostEnv() {
     return ['localhost', '127.0.0.1', '::1'].includes(window.location.hostname);
 }
 
-async function getCurrentAuthUser() {
-    if (!canUseSupabase()) return null;
-    const { data, error } = await supabaseClient.auth.getUser();
-    if (error) {
-        console.error('Gagal mengambil auth user:', error);
-        return null;
-    }
-    return data.user || null;
-}
-
-async function fetchCurrentProfile() {
-    const user = await getCurrentAuthUser();
-    if (!user) return null;
-
-    try {
-        const { data } = await withProfileColumnFallback(
-            ({ selectClause }) => supabaseClient
-                .from('profiles')
-                .select(selectClause)
-                .eq('id', user.id)
-                .maybeSingle(),
-            { context: 'fetchCurrentProfile' }
-        );
-        return data || null;
-    } catch (error) {
-        console.error('Gagal mengambil profile:', error);
-        return null;
-    }
-}
-
 function upsertLocalProfile(profile, overrides = {}) {
     const role = overrides.role || profile?.role;
     if (!role || !getData().users?.[role]) return null;
@@ -514,34 +509,6 @@ function upsertLocalProfile(profile, overrides = {}) {
     return normalizedUser;
 }
 
-function applySupabaseSession(profile, overrides = {}) {
-    const localUser = upsertLocalProfile(profile, overrides);
-    if (!localUser) return null;
-
-    saveSession({
-        role: localUser.role,
-        userId: localUser.id,
-        loginAt: new Date().toISOString(),
-        provider: 'supabase'
-    });
-    currentRole = localUser.role;
-    return localUser;
-}
-
-function applyLocalSession(profile, overrides = {}) {
-    const localUser = upsertLocalProfile(profile, overrides);
-    if (!localUser) return null;
-
-    saveSession({
-        role: localUser.role,
-        userId: localUser.id,
-        loginAt: new Date().toISOString(),
-        provider: 'local'
-    });
-    currentRole = localUser.role;
-    return localUser;
-}
-
 function mapProfileToLocalUser(profile, role, index = 0) {
     const existing = getData().users?.[role]?.find((item) => item.id === profile?.id) || {};
     return normalizeUser({
@@ -560,98 +527,6 @@ function cacheProfilesByRole(role, profiles) {
     saveData(data);
     return data.users[role];
 }
-
-async function registerKonsumenSupabase(formValues) {
-    if (!canUseSupabase()) throw new Error('Supabase client belum siap.');
-    const email = normalizeEmail(formValues.email);
-    const password = formValues.password.trim();
-    const phone = normalizePhone(formValues.phone);
-
-    const { data, error } = await supabaseClient.auth.signUp({
-        email,
-        password
-    });
-
-    if (error) throw error;
-    if (!data.user) throw new Error('User auth tidak berhasil dibuat');
-
-    const { error: profileError } = await supabaseClient
-        .from('profiles')
-        .insert({
-            id: data.user.id,
-            role: 'konsumen',
-            username: formValues.username.trim(),
-            name: formValues.name.trim(),
-            email,
-            phone: phone || null,
-            address: formValues.address?.trim() || null,
-            age: formValues.age ? Number(formValues.age) : null,
-            status: 'Aktif'
-        });
-
-    if (profileError) throw profileError;
-
-    return data.user;
-}
-
-async function registerTeknisiSupabase(formValues) {
-    if (!canUseSupabase()) throw new Error('Supabase client belum siap.');
-    const email = normalizeEmail(formValues.email);
-    const password = formValues.password.trim();
-    const phone = normalizePhone(formValues.phone);
-
-    const { data, error } = await supabaseClient.auth.signUp({
-        email,
-        password
-    });
-
-    if (error) throw error;
-    if (!data.user) throw new Error('User auth tidak berhasil dibuat');
-
-    const { error: profileError } = await supabaseClient
-        .from('profiles')
-        .insert({
-            id: data.user.id,
-            role: 'teknisi',
-            username: formValues.username.trim(),
-            name: formValues.name.trim(),
-            email,
-            phone: phone || null,
-            nik: formValues.nik?.trim() || null,
-            specialization: formValues.specialization?.trim() || null,
-            status: 'Aktif',
-            completed_jobs: 0
-        });
-
-    if (profileError) throw profileError;
-
-    return data.user;
-}
-
-async function signInSupabase(email, password) {
-    if (!canUseSupabase()) throw new Error('Supabase client belum siap.');
-    const { data, error } = await supabaseClient.auth.signInWithPassword({
-        email: normalizeEmail(email),
-        password: password.trim()
-    });
-
-    if (error) throw error;
-    return data;
-}
-
-function isEmailIdentifier(identifier) {
-    return String(identifier || '').includes('@');
-}
-
-async function findProfileByIdentifier(role, identifier) {
-    const normalized = normalizeLoginIdentifier(identifier);
-    if (!normalized) return null;
-    if (!canUseSupabase()) return null;
-
-    const profiles = await fetchProfilesByRole(role);
-    return (profiles || []).find((profile) => identifiersMatch(profile?.email, normalized)) || null;
-}
-
 
 async function syncNewUserToRemote(profile, options = {}) {
     if (!canUseSupabase()) {
@@ -1071,76 +946,10 @@ function getData() {
     return appData;
 }
 
-function saveSession(session) {
-    const data = getData();
-    data.currentSession = session || null;
-    saveData(data);
-}
-
-function getCurrentSession() {
-    return getData().currentSession || null;
-}
-
-function findUserById(role, userId) {
-    return getData().users?.[role]?.find((user) => user.id === userId) || null;
-}
-
-function getCurrentUser() {
-    const session = getCurrentSession();
-    if (!session || !session.role || !session.userId) return null;
-    return findUserById(session.role, session.userId);
-}
-
-function resetToPublicLanding(message = '') {
-    saveSession(null);
-    currentRole = null;
-    currentView = null;
-    uploadingOrderId = null;
-    uploadProofImage = null;
-    document.getElementById('formLogin')?.reset();
-    switchLoginRole('konsumen');
-    showLanding();
-    if (message) showToast(message, 'warning');
-}
-
-function ensureValidSession(showMessage = false) {
-    const session = getCurrentSession();
-    if (!session) return false;
-    if (session.role === 'admin' && !canAccessAdmin(session.role)) {
-        resetToPublicLanding(showMessage ? 'Dashboard admin hanya tersedia untuk profile admin yang valid.' : '');
-        return false;
-    }
-    const user = getCurrentUser();
-    if (user) return true;
-    saveSession(null);
-    currentRole = null;
-    currentView = null;
-    if (showMessage) {
-        showToast('Session tidak valid. Silakan login kembali.', 'warning');
-    }
-    showLanding();
-    return false;
-}
-
 function isUsernameTaken(role, username, excludeUserId = '') {
     const normalized = String(username || '').trim().toLowerCase();
     if (!normalized) return false;
     return getData().users[role].some((user) => user.id !== excludeUserId && String(user.username || '').trim().toLowerCase() === normalized);
-}
-
-function loginUser(role, username, password) {
-    return null;
-}
-
-function requireRole(role) {
-    if (!ensureValidSession(true)) return false;
-    const session = getCurrentSession();
-    if (session?.role !== role) {
-        showToast(`Akses hanya untuk ${ROLE_LABELS[role] || role}.`, 'warning');
-        navigateTo(`${session.role}-home`);
-        return false;
-    }
-    return true;
 }
 
 function getNavItems(role) {
@@ -1232,38 +1041,10 @@ function goToLanding() {
     showLanding();
 }
 
-function renderAppShell() {
-    const user = getCurrentUser();
-    if (!user) return;
-    currentRole = user.role;
-    document.getElementById('headerAvatar').textContent = (user.name || 'U').charAt(0).toUpperCase();
-    document.getElementById('headerUserName').textContent = user.name || 'User';
-    document.getElementById('headerUserRole').textContent = ROLE_LABELS[user.role] || user.role;
-
-    const navHtml = getNavItems(user.role).map((item) => `
-        <button class="nav-item ${currentView === item.id ? 'active' : ''}" type="button" onclick="navigateTo('${item.id}')">
-            ${item.icon}
-            <span>${item.label}</span>
-        </button>
-    `).join('');
-    document.getElementById('sidebarNav').innerHTML = navHtml;
-    document.getElementById('mobileNav').innerHTML = navHtml;
-}
-
 
 function getServices(includeInactive = false) {
     const services = getData().services || [];
     return includeInactive ? services : services.filter((service) => service.active !== false);
-}
-
-function getOrdersForCurrentKonsumen() {
-    const user = getCurrentUser();
-    return (getData().orders || []).filter((order) => order.konsumenId === user?.id);
-}
-
-function getOrdersForCurrentTeknisi() {
-    const user = getCurrentUser();
-    return (getData().orders || []).filter((order) => order.teknisiId === user?.id);
 }
 
 function getImageCatalogItem(imageCatalogId) {
@@ -1279,158 +1060,9 @@ function summarizeImageSource(src) {
     return src.startsWith('data:image/') ? 'Upload localStorage' : src;
 }
 
-function renderCurrentView(prefill = '') {
-    if (currentView === 'konsumen-home') renderKonsumenHome();
-    if (currentView === 'konsumen-order') renderKonsumenOrder(prefill);
-    if (currentView === 'konsumen-history') renderKonsumenHistory();
-    if (currentView === 'konsumen-profile') renderKonsumenProfile();
-    if (currentView === 'konsumen-unit') renderKonsumenUnit();
-    if (currentView === 'teknisi-home') renderTeknisiHome();
-    if (currentView === 'teknisi-jobs') renderTeknisiJobs();
-    if (currentView === 'teknisi-profile') renderTeknisiProfile();
-    if (currentView === 'teknisi-docs') renderTeknisiDocs();
-    if (currentView === 'teknisi-upload') renderTeknisiUpload();
-    if (currentView === 'admin-home') renderAdminHome();
-    if (currentView === 'admin-orders') renderAdminOrders();
-    if (currentView === 'admin-users') renderAdminUsers();
-}
-
 function renderStatusBadge(status) {
     const className = slugify(status || 'menunggu');
     return `<span class="status-badge status-${className}">${escapeHtml(status || 'Menunggu')}</span>`;
-}
-
-function renderKonsumenHome() {
-    const orders = getOrdersForCurrentKonsumen();
-    document.getElementById('konsumenTotalOrders').textContent = orders.length;
-    document.getElementById('konsumenPending').textContent = orders.filter((order) => order.status !== 'Selesai').length;
-    document.getElementById('konsumenCompleted').textContent = orders.filter((order) => order.status === 'Selesai').length;
-
-    const recentBody = document.getElementById('konsumenRecentBody');
-    recentBody.innerHTML = orders.length ? orders.slice().reverse().slice(0, 5).map((order) => `
-        <tr>
-            <td>${escapeHtml(order.id)}</td>
-            <td>${escapeHtml(order.serviceName)}</td>
-            <td>${escapeHtml(formatDate(order.preferredDate || order.createdAt))}</td>
-            <td>${renderStatusBadge(order.status)}</td>
-        </tr>
-    `).join('') : '<tr><td colspan="4" class="empty-state">Belum ada pesanan</td></tr>';
-
-    const container = document.getElementById('serviceCardsContainer');
-    const services = getServices(false);
-    container.innerHTML = services.map((service) => `
-        <div class="service-card" onclick="navigateTo('konsumen-order', '${escapeHtml(service.name)}')">
-            <img src="${escapeHtml(serviceImage(service))}" alt="${escapeHtml(service.name)}">
-            <div class="service-card-body">
-                <h4>${escapeHtml(service.name)}</h4>
-                <p>${escapeHtml(service.description)}</p>
-                <span class="service-price">${formatRupiah(service.price)}</span>
-            </div>
-        </div>
-    `).join('');
-}
-
-function renderKonsumenOrder(prefill = '') {
-    const user = getCurrentUser();
-    const serviceSelect = document.getElementById('orderService');
-    serviceSelect.innerHTML = '<option value="">Pilih Layanan</option>' + getServices(false).map((service) => `<option value="${escapeHtml(service.id)}">${escapeHtml(service.name)}</option>`).join('');
-    if (prefill) {
-        const target = getServices(false).find((service) => service.name === prefill);
-        if (target) serviceSelect.value = target.id;
-    }
-    document.getElementById('orderPhone').value = user?.phone || '';
-    document.getElementById('orderAddress').value = user?.address || '';
-}
-
-function renderKonsumenHistory() {
-    const orders = getOrdersForCurrentKonsumen();
-    const body = document.getElementById('konsumenHistoryBody');
-    body.innerHTML = orders.length ? orders.slice().reverse().map((order) => `
-        <tr>
-            <td>${escapeHtml(order.id)}</td>
-            <td>${escapeHtml(order.serviceName)}</td>
-            <td>${escapeHtml(order.brand || '-')}</td>
-            <td>${escapeHtml(formatDate(order.preferredDate || order.createdAt))}</td>
-            <td>${escapeHtml(order.teknisiName || 'Belum ditugaskan')}</td>
-            <td>${renderStatusBadge(order.status)}</td>
-        </tr>
-    `).join('') : '<tr><td colspan="6" class="empty-state">Belum ada pesanan</td></tr>';
-}
-
-function renderKonsumenProfile() {
-    const user = getCurrentUser();
-    if (!user) return;
-    document.getElementById('profileKonsumenName').value = user.name || '';
-    document.getElementById('profileKonsumenUsername').value = user.username || '';
-    document.getElementById('profileKonsumenEmail').value = user.email || '';
-    document.getElementById('profileKonsumenPhone').value = user.phone || '';
-    document.getElementById('profileKonsumenBirthDate').value = user.birthDate || '';
-    document.getElementById('profileKonsumenAge').value = user.age || '';
-    document.getElementById('profileKonsumenAddress').value = user.address || '';
-    document.getElementById('profileKonsumenLocation').textContent = user.lat && user.lng ? `${user.lat}, ${user.lng}` : 'Belum dibagikan';
-    document.getElementById('profileKonsumenJoined').textContent = formatDate(user.joinedAt);
-}
-
-function renderKonsumenUnit() {
-    const user = getCurrentUser();
-    const gallery = document.getElementById('konUnitGallery');
-    const images = user?.unitImages || [];
-    gallery.innerHTML = images.length ? images.map((image, index) => `
-        <div class="image-card">
-            <img src="${escapeHtml(image)}" alt="Foto unit ${index + 1}">
-        </div>
-    `).join('') : '<div class="empty-state-box"><p>Belum ada foto unit.</p></div>';
-}
-
-function renderTeknisiHome() {
-    const orders = getOrdersForCurrentTeknisi();
-    document.getElementById('teknisiTotalJobs').textContent = orders.length;
-    document.getElementById('teknisiActiveJobs').textContent = orders.filter((order) => order.status === 'Ditugaskan' || order.status === 'Dikerjakan').length;
-    document.getElementById('teknisiCompletedJobs').textContent = orders.filter((order) => order.status === 'Selesai').length;
-
-    const list = document.getElementById('teknisiJobsList');
-    const activeOrders = orders.filter((order) => order.status !== 'Selesai');
-    list.innerHTML = activeOrders.length ? activeOrders.map((order) => `
-        <div class="job-card">
-            <div class="job-card-header">
-                <h4>${escapeHtml(order.serviceName)}</h4>
-                ${renderStatusBadge(order.status)}
-            </div>
-            <div class="job-card-details">
-                <div><strong>No:</strong> ${escapeHtml(order.id)}</div>
-                <div><strong>Konsumen:</strong> ${escapeHtml(order.konsumenName)}</div>
-                <div><strong>Alamat:</strong> ${escapeHtml(order.address)}</div>
-                <div><strong>Tanggal:</strong> ${escapeHtml(formatDate(order.preferredDate))}</div>
-            </div>
-            <div class="btn-action-group">
-                <button class="btn btn-outline btn-xs" onclick="openOrderDetail('${order.id}')">Detail</button>
-                ${order.status === 'Ditugaskan' ? `<button class="btn btn-info btn-xs" onclick="startJob('${order.id}')">Mulai</button>` : ''}
-                <button class="btn btn-primary btn-xs" onclick="openUploadProof('${order.id}')">Upload Bukti</button>
-            </div>
-        </div>
-    `).join('') : '<div class="empty-state-box"><p>Belum ada pekerjaan yang ditugaskan.</p></div>';
-}
-
-function renderTeknisiJobs() {
-    const orders = getOrdersForCurrentTeknisi();
-    const body = document.getElementById('teknisiAllJobsBody');
-    body.innerHTML = orders.length ? orders.slice().reverse().map((order) => `
-        <tr>
-            <td>${escapeHtml(order.id)}</td>
-            <td>${escapeHtml(order.konsumenName)}</td>
-            <td>${escapeHtml(order.serviceName)}</td>
-            <td>${escapeHtml(order.address)}</td>
-            <td>${escapeHtml(formatDate(order.preferredDate))}</td>
-            <td>${renderStatusBadge(order.status)}</td>
-            <td>
-                <div class="btn-action-group">
-                    <button class="btn btn-outline btn-xs" onclick="openOrderDetail('${order.id}')">Detail</button>
-                    ${order.status === 'Ditugaskan' ? `<button class="btn btn-info btn-xs" onclick="startJob('${order.id}')">Mulai</button>` : ''}
-                    ${order.status !== 'Selesai' ? `<button class="btn btn-primary btn-xs" onclick="openUploadProof('${order.id}')">Upload</button>` : ''}
-                </div>
-            </td>
-        </tr>
-    `).join('') : '<tr><td colspan="7" class="empty-state">Belum ada pekerjaan</td></tr>';
 }
 
 function populateSpecializationOptions(selectId, selected = '') {
@@ -1439,117 +1071,6 @@ function populateSpecializationOptions(selectId, selected = '') {
     const options = ['Semua Layanan', ...getServices(true).map((service) => service.name)];
     select.innerHTML = options.map((option) => `<option value="${escapeHtml(option)}">${escapeHtml(option)}</option>`).join('');
     select.value = selected || 'Semua Layanan';
-}
-
-function renderTeknisiProfile() {
-    const user = getCurrentUser();
-    if (!user) return;
-    populateSpecializationOptions('profileTeknisiSpecialization', user.specialization);
-    document.getElementById('profileTeknisiName').value = user.name || '';
-    document.getElementById('profileTeknisiUsername').value = user.username || '';
-    document.getElementById('profileTeknisiEmail').value = user.email || '';
-    document.getElementById('profileTeknisiPhone').value = user.phone || '';
-    document.getElementById('profileTeknisiNIK').value = user.nik || '';
-    document.getElementById('profileTeknisiBirthDate').value = user.birthDate || '';
-    document.getElementById('profileTeknisiAge').value = user.age || '';
-    document.getElementById('profileTeknisiExperience').value = user.experience || 0;
-    document.getElementById('profileTeknisiAddress').value = user.address || '';
-    document.getElementById('profileTeknisiLocation').textContent = user.lat && user.lng ? `${user.lat}, ${user.lng}` : 'Belum dibagikan';
-    document.getElementById('profileTeknisiStatus').textContent = user.status || 'Aktif';
-}
-
-function renderTeknisiDocs() {
-    const user = getCurrentUser();
-    const ktpGrid = document.getElementById('tekIDPreviewGrid');
-    const selfieGrid = document.getElementById('tekSelfiePreviewGrid');
-    ktpGrid.innerHTML = user?.ktpPhoto ? `<div class="image-card"><img src="${escapeHtml(user.ktpPhoto)}" alt="Foto KTP"></div>` : '';
-    selfieGrid.innerHTML = user?.selfiePhoto ? `<div class="image-card"><img src="${escapeHtml(user.selfiePhoto)}" alt="Foto Diri"></div>` : '';
-}
-
-function renderTeknisiUpload() {
-    const info = document.getElementById('uploadOrderInfo');
-    const order = getData().orders.find((item) => item.id === uploadingOrderId);
-    info.innerHTML = order ? `
-        <div class="detail-row"><span class="detail-label">Pesanan</span><span class="detail-value">${escapeHtml(order.id)}</span></div>
-        <div class="detail-row"><span class="detail-label">Layanan</span><span class="detail-value">${escapeHtml(order.serviceName)}</span></div>
-        <div class="detail-row"><span class="detail-label">Konsumen</span><span class="detail-value">${escapeHtml(order.konsumenName)}</span></div>
-    ` : '';
-}
-
-
-function renderAdminKonsumenTable(users = null) {
-    if (!requireAdminAccess()) return;
-    const data = getData();
-    const body = document.getElementById('adminKonsumenListBody');
-    const list = (users || data.users.konsumen || []).map((user, index) => users ? mapProfileToLocalUser(user, 'konsumen', index) : user);
-    // Tabel Data Master konsumen harus konsisten dengan tabel admin lain, termasuk kolom password.
-    body.innerHTML = list.length ? list.map((user) => `
-        <tr>
-            <td>${escapeHtml(user.name)}</td>
-            <td>${escapeHtml(user.username)}</td>
-            <td>${escapeHtml(user.password)}</td>
-            <td>${escapeHtml(user.email || '-')}</td>
-            <td>${escapeHtml(user.phone || '-')}</td>
-            <td>${escapeHtml(user.age || '-')}</td>
-            <td>${escapeHtml(user.address || '-')}</td>
-            <td>${data.orders.filter((order) => order.konsumenId === user.id).length}</td>
-            <td>
-                <div class="btn-action-group">
-                    <button class="btn btn-outline btn-xs" onclick="openEditKonsumen('${user.id}')">Edit</button>
-                    <button class="btn btn-danger btn-xs" onclick="deleteUser('konsumen', '${user.id}')">Hapus</button>
-                </div>
-            </td>
-        </tr>
-    `).join('') : '<tr><td colspan="9" class="empty-state">Tidak ada data</td></tr>';
-}
-
-function renderAdminTeknisiTable(users = null) {
-    if (!requireAdminAccess()) return;
-    const body = document.getElementById('adminTeknisiListBody');
-    const list = (users || getData().users.teknisi || []).map((user, index) => users ? mapProfileToLocalUser(user, 'teknisi', index) : user);
-    // Tabel Data Master teknisi juga menampilkan password agar formatnya konsisten dengan admin/konsumen.
-    body.innerHTML = list.length ? list.map((user) => `
-        <tr>
-            <td>${escapeHtml(user.name)}</td>
-            <td>${escapeHtml(user.username)}</td>
-            <td>${escapeHtml(user.password)}</td>
-            <td>${escapeHtml(user.nik || '-')}</td>
-            <td>${escapeHtml(user.age || '-')}</td>
-            <td>${escapeHtml(user.specialization || '-')}</td>
-            <td>${escapeHtml(user.phone || '-')}</td>
-            <td>${escapeHtml(user.status || '-')}</td>
-            <td>${escapeHtml(user.completedJobs || 0)}</td>
-            <td>
-                <div class="btn-action-group">
-                    <button class="btn btn-outline btn-xs" onclick="openEditTeknisi('${user.id}')">Edit</button>
-                    <button class="btn btn-outline btn-xs" onclick="openTeknisiImages('${user.id}')">Foto</button>
-                    <button class="btn btn-danger btn-xs" onclick="deleteUser('teknisi', '${user.id}')">Hapus</button>
-                </div>
-            </td>
-        </tr>
-    `).join('') : '<tr><td colspan="10" class="empty-state">Tidak ada data</td></tr>';
-}
-
-function renderAdminAdminTable(users = null) {
-    if (!requireAdminAccess()) return;
-    const body = document.getElementById('adminAdminListBody');
-    const list = (users || getData().users.admin || []).map((user, index) => users ? mapProfileToLocalUser(user, 'admin', index) : user);
-    // Render tabel admin dipertahankan konsisten agar audit data master seragam antar-role.
-    body.innerHTML = list.length ? list.map((user) => `
-        <tr>
-            <td>${escapeHtml(user.name)}</td>
-            <td>${escapeHtml(user.username)}</td>
-            <td>${escapeHtml(user.password)}</td>
-            <td>${escapeHtml(user.role)}</td>
-            <td>${escapeHtml(user.status || 'Aktif')}</td>
-            <td>
-                <div class="btn-action-group">
-                    <button class="btn btn-outline btn-xs" onclick="openEditAdmin('${user.id}')">Edit</button>
-                    <button class="btn btn-danger btn-xs" onclick="deleteUser('admin', '${user.id}')">Hapus</button>
-                </div>
-            </td>
-        </tr>
-    `).join('') : '<tr><td colspan="6" class="empty-state">Tidak ada data admin</td></tr>';
 }
 
 function renderAdminServicesTable() {
@@ -1778,72 +1299,6 @@ function collectRegisterKonsumenForm() {
     };
 }
 
-async function handleRegisterKonsumen(event) {
-    event.preventDefault();
-    const form = collectRegisterKonsumenForm();
-    const manualBirthDateInput = document.getElementById('regKonBirthDateManual');
-    if (manualBirthDateInput && !manualBirthDateInput.checkValidity()) {
-        manualBirthDateInput.reportValidity();
-        return false;
-    }
-    if (!form.name || !form.username || !form.password || !form.email || !form.phone || !form.address) {
-        showToast('Lengkapi data wajib konsumen.', 'error');
-        return false;
-    }
-    if (isUsernameTaken('konsumen', form.username)) {
-        showToast('Username konsumen sudah digunakan.', 'error');
-        return false;
-    }
-
-    const localPayload = {
-        id: nextId(getData().users.konsumen, 'K'),
-        role: 'konsumen',
-        username: form.username,
-        name: form.name,
-        email: form.email,
-        phone: form.phone,
-        address: form.address,
-        age: form.age ? Number(form.age) : null,
-        status: 'Aktif',
-        birthDate: form.birthDate,
-        district: form.district,
-        lat: form.lat,
-        lng: form.lng,
-        unitImages: deepClone(draftUploads.regKonUnitImages),
-        joinedAt: new Date().toISOString(),
-        password: form.password
-    };
-
-    try {
-        const authUser = await registerKonsumenSupabase(form);
-        const user = applySupabaseSession({
-            ...localPayload,
-            id: authUser.id
-        });
-
-        document.getElementById('formRegKonsumen').reset();
-        draftUploads.regKonUnitImages = [];
-        document.getElementById('regKonUnitPreview').innerHTML = '';
-        showKonsumenDashboard();
-        showToast(`Akun konsumen ${user?.name || form.name} berhasil dibuat.`, 'success');
-    } catch (error) {
-        console.error('Registrasi konsumen Supabase gagal:', error);
-        if (!shouldFallbackToLocalAuth(error)) {
-            showToast(error?.message || 'Registrasi konsumen gagal.', 'error');
-            return false;
-        }
-
-        const user = applyLocalSession(localPayload);
-        document.getElementById('formRegKonsumen').reset();
-        draftUploads.regKonUnitImages = [];
-        document.getElementById('regKonUnitPreview').innerHTML = '';
-        showKonsumenDashboard();
-        showToast(`Akun konsumen ${user?.name || form.name} tersimpan lokal. Sinkronisasi cloud akan aktif saat Supabase siap.`, 'warning');
-    }
-
-    return false;
-}
-
 function collectRegisterTeknisiForm() {
     const birthDate = resolveBirthDateValue('regTekBirthDate', 'regTekBirthDateManual');
     syncAgeField('regTekBirthDate', 'regTekAge');
@@ -1863,243 +1318,6 @@ function collectRegisterTeknisiForm() {
         lat: document.getElementById('regTekLat').value,
         lng: document.getElementById('regTekLng').value
     };
-}
-
-async function handleRegisterTeknisi(event) {
-    event.preventDefault();
-    const form = collectRegisterTeknisiForm();
-    if (!form.name || !form.username || !form.password || !form.email || !form.phone || !form.nik || !form.birthDate || !form.specialization || !form.address) {
-        showToast('Lengkapi data wajib teknisi.', 'error');
-        return false;
-    }
-    if (!draftUploads.regTekKtpPhoto || !draftUploads.regTekSelfiePhoto) {
-        showToast('Foto KTP dan foto diri teknisi wajib diunggah.', 'error');
-        return false;
-    }
-    if (isUsernameTaken('teknisi', form.username)) {
-        showToast('Username teknisi sudah digunakan.', 'error');
-        return false;
-    }
-
-    const localPayload = {
-        id: nextId(getData().users.teknisi, 'T'),
-        role: 'teknisi',
-        username: form.username,
-        name: form.name,
-        email: form.email,
-        phone: form.phone,
-        nik: form.nik,
-        specialization: form.specialization,
-        status: 'Aktif',
-        completedJobs: 0,
-        birthDate: form.birthDate,
-        age: form.age ? Number(form.age) : null,
-        experience: form.experience,
-        address: form.address,
-        lat: form.lat,
-        lng: form.lng,
-        ktpPhoto: draftUploads.regTekKtpPhoto,
-        selfiePhoto: draftUploads.regTekSelfiePhoto,
-        joinedAt: new Date().toISOString(),
-        password: form.password
-    };
-
-    try {
-        const authUser = await registerTeknisiSupabase(form);
-        const user = applySupabaseSession({
-            ...localPayload,
-            id: authUser.id
-        });
-
-        document.getElementById('formRegTeknisi').reset();
-        draftUploads.regTekKtpPhoto = '';
-        draftUploads.regTekSelfiePhoto = '';
-        draftUploads.ocrLastResult = null;
-        document.getElementById('regTekIDPreview').innerHTML = '';
-        document.getElementById('regTekSelfiePreview').innerHTML = '';
-        showTeknisiDashboard();
-        showToast(`Akun teknisi ${user?.name || form.name} berhasil dibuat.`, 'success');
-    } catch (error) {
-        console.error('Registrasi teknisi Supabase gagal:', error);
-        if (!shouldFallbackToLocalAuth(error)) {
-            showToast(error?.message || 'Registrasi teknisi gagal.', 'error');
-            return false;
-        }
-
-        const user = applyLocalSession(localPayload);
-        document.getElementById('formRegTeknisi').reset();
-        draftUploads.regTekKtpPhoto = '';
-        draftUploads.regTekSelfiePhoto = '';
-        draftUploads.ocrLastResult = null;
-        document.getElementById('regTekIDPreview').innerHTML = '';
-        document.getElementById('regTekSelfiePreview').innerHTML = '';
-        showTeknisiDashboard();
-        showToast(`Akun teknisi ${user?.name || form.name} tersimpan lokal. Sinkronisasi cloud akan aktif saat Supabase siap.`, 'warning');
-    }
-
-    return false;
-}
-
-async function createOrderSupabase(orderValues) {
-    const user = getCurrentUser();
-    if (!user) throw new Error('User belum login');
-    if (!canUseSupabase()) {
-        return {
-            synced: false,
-            reason: 'Supabase client belum siap.'
-        };
-    }
-
-    const { error } = await supabaseClient
-        .from('orders')
-        .insert({
-            konsumen_id: user.id,
-            service_id: orderValues.service_id,
-            service_name: orderValues.service_name,
-            price: Number(orderValues.price),
-            brand: orderValues.brand || null,
-            pk: orderValues.pk || null,
-            refrigerant: orderValues.refrigerant || null,
-            preferred_date: orderValues.preferred_date || null,
-            address: orderValues.address || null,
-            notes: orderValues.notes || null,
-            phone: orderValues.phone || null,
-            status: 'Menunggu'
-        });
-
-    if (error) {
-        return {
-            synced: false,
-            reason: error.message || 'Gagal sinkron ke Supabase.'
-        };
-    }
-
-    return {
-        synced: true
-    };
-}
-
-async function handleOrderSubmit(event) {
-    event.preventDefault();
-    const user = getCurrentUser();
-    if (!user) {
-        showToast('Session Anda sudah berakhir. Silakan login kembali.', 'warning');
-        return false;
-    }
-    const service = getServices(false).find((item) => item.id === document.getElementById('orderService').value);
-    if (!service) {
-        showToast('Pilih layanan terlebih dahulu.', 'error');
-        return false;
-    }
-    const data = getData();
-    const order = {
-        id: `ORD-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${String(data.orders.length + 1).padStart(3, '0')}`,
-        serviceId: service.id,
-        serviceName: service.name,
-        price: service.price,
-        brand: document.getElementById('orderBrand').value.trim(),
-        pk: document.getElementById('orderPK').value.trim(),
-        refrigerant: document.getElementById('orderRefrigerant').value.trim(),
-        preferredDate: document.getElementById('orderDate').value,
-        address: document.getElementById('orderAddress').value.trim(),
-        notes: document.getElementById('orderNotes').value.trim(),
-        phone: normalizePhone(document.getElementById('orderPhone').value),
-        konsumenId: user.id,
-        konsumenName: user.name,
-        teknisiId: null,
-        teknisiName: null,
-        proofImage: '',
-        status: 'Menunggu',
-        createdAt: new Date().toISOString()
-    };
-    const remoteResult = await createOrderSupabase({
-        service_id: service.id,
-        service_name: service.name,
-        price: service.price,
-        brand: order.brand,
-        pk: order.pk,
-        refrigerant: order.refrigerant,
-        preferred_date: order.preferredDate,
-        address: order.address,
-        notes: order.notes,
-        phone: order.phone
-    }).catch((error) => {
-        console.error('Gagal menyimpan order ke Supabase:', error);
-        return {
-            synced: false,
-            reason: error?.message || 'Sinkronisasi cloud gagal.'
-        };
-    });
-
-    data.orders.push({
-        ...order,
-        syncStatus: remoteResult?.synced ? 'synced' : 'local-only'
-    });
-    saveData(data);
-    document.getElementById('formOrder').reset();
-    navigateTo('konsumen-home');
-    showToast(`Pesanan ${order.id} berhasil dibuat.`, 'success');
-    if (remoteResult && !remoteResult.synced) {
-        showToast(`Pesanan disimpan lokal. Sinkronisasi cloud tertunda: ${remoteResult.reason}`, 'warning');
-    }
-
-    return false;
-}
-
-const persistProfileKonsumen = debounce(() => saveProfile('konsumen'), 500);
-const persistProfileTeknisi = debounce(() => saveProfile('teknisi'), 500);
-
-function handleProfileFormInput(role) {
-    if (role === 'konsumen') persistProfileKonsumen();
-    if (role === 'teknisi') persistProfileTeknisi();
-}
-
-function saveProfile(role) {
-    const session = getCurrentSession();
-    if (!session || session.role !== role) return;
-    const data = getData();
-    const user = data.users[role].find((item) => item.id === session.userId);
-    if (!user) return;
-
-    if (role === 'konsumen') {
-        const username = document.getElementById('profileKonsumenUsername').value.trim();
-        if (isUsernameTaken('konsumen', username, user.id)) {
-            document.getElementById('konsumenProfileAutosave').textContent = 'Username sudah dipakai akun lain.';
-            return;
-        }
-        Object.assign(user, {
-            name: document.getElementById('profileKonsumenName').value.trim(),
-            username,
-            email: normalizeEmail(document.getElementById('profileKonsumenEmail').value),
-            phone: normalizePhone(document.getElementById('profileKonsumenPhone').value),
-            birthDate: document.getElementById('profileKonsumenBirthDate').value,
-            address: document.getElementById('profileKonsumenAddress').value.trim()
-        });
-        document.getElementById('konsumenProfileAutosave').textContent = `Tersimpan otomatis ${formatDateTime(new Date())}`;
-    }
-
-    if (role === 'teknisi') {
-        const username = document.getElementById('profileTeknisiUsername').value.trim();
-        if (isUsernameTaken('teknisi', username, user.id)) {
-            document.getElementById('teknisiProfileAutosave').textContent = 'Username sudah dipakai akun lain.';
-            return;
-        }
-        Object.assign(user, {
-            name: document.getElementById('profileTeknisiName').value.trim(),
-            username,
-            email: normalizeEmail(document.getElementById('profileTeknisiEmail').value),
-            phone: normalizePhone(document.getElementById('profileTeknisiPhone').value),
-            nik: document.getElementById('profileTeknisiNIK').value.trim(),
-            birthDate: document.getElementById('profileTeknisiBirthDate').value,
-            specialization: document.getElementById('profileTeknisiSpecialization').value,
-            experience: Number(document.getElementById('profileTeknisiExperience').value || 0),
-            address: document.getElementById('profileTeknisiAddress').value.trim()
-        });
-        document.getElementById('teknisiProfileAutosave').textContent = `Tersimpan otomatis ${formatDateTime(new Date())}`;
-    }
-
-    saveData(data);
-    renderAppShell();
 }
 
 async function previewRegUpload(event, previewId) {
@@ -2163,7 +1381,8 @@ function getShareLocation(prefix) {
 
 function openEditKonsumen(userId) {
     if (!requireAdminAccess()) return;
-    const user = getData().users.konsumen.find((item) => item.id === userId);
+    const user = remoteState.adminProfiles.konsumen.find((item) => item.id === userId)
+        || getData().users.konsumen.find((item) => item.id === userId);
     if (!user) return;
     document.getElementById('editKonsumenId').value = user.id;
     document.getElementById('editKonsumenName').value = user.name || '';
@@ -2216,7 +1435,8 @@ async function saveEditKonsumen() {
 
 function openEditTeknisi(userId) {
     if (!requireAdminAccess()) return;
-    const user = getData().users.teknisi.find((item) => item.id === userId);
+    const user = remoteState.adminProfiles.teknisi.find((item) => item.id === userId)
+        || getData().users.teknisi.find((item) => item.id === userId);
     if (!user) return;
     populateSpecializationOptions('editTeknisiSpecialization', user.specialization);
     document.getElementById('editTeknisiId').value = user.id;
@@ -2287,7 +1507,8 @@ function openAddAdminModal() {
 
 function openEditAdmin(userId) {
     if (!requireAdminAccess()) return;
-    const user = getData().users.admin.find((item) => item.id === userId);
+    const user = remoteState.adminProfiles.admin.find((item) => item.id === userId)
+        || getData().users.admin.find((item) => item.id === userId);
     if (!user) return;
     document.getElementById('adminModalTitle').textContent = 'Edit Data Admin';
     document.getElementById('editAdminId').value = user.id;
@@ -2852,7 +2073,7 @@ function toUserFacingError(error, fallback = 'Terjadi kesalahan.') {
     if (normalized.includes('duplicate key') && normalized.includes('username')) return 'Username sudah digunakan akun lain.';
     if (normalized.includes('violates row-level security')) return 'Policy Supabase untuk profile/order belum sesuai. Jalankan SQL final di README lalu coba lagi.';
     if (missingColumn && OPTIONAL_PROFILE_COLUMN_SET.has(missingColumn)) {
-        return `Kolom profile "${missingColumn}" belum terbaca dari schema cache Supabase. Jalankan migrasi SQL lalu coba lagi; login inti tetap memakai fallback aman.`;
+        return 'Struktur profile Supabase sedang menyesuaikan schema. Aplikasi akan lanjut memakai fallback aman dan data inti tetap bisa dipakai.';
     }
     if (normalized.includes('menunggu verifikasi admin')) return 'Status profile lama masih pending. Setelah email confirmed, app akan mengaktifkan profile publik otomatis.';
 
@@ -3129,15 +2350,6 @@ function applySupabaseSession(profile) {
     remoteState.profile = sanitizeProfileRecord(profile);
     currentRole = remoteState.profile?.role || null;
     return remoteState.profile;
-}
-
-function applyLocalSession() {
-    console.warn('Fallback auth lokal sudah dinonaktifkan.');
-    return null;
-}
-
-function loginUser() {
-    return null;
 }
 
 function switchLoginRole(role, element) {
@@ -4622,15 +3834,6 @@ function purgeLegacyKonsumenTeknisiCache() {
     localStorage.removeItem(LEGACY_STORAGE_KEY);
 }
 
-async function logoutSupabase() {
-    if (!canUseSupabase()) return;
-    const { error } = await supabaseClient.auth.signOut();
-    if (error) {
-        console.error('Gagal logout Supabase:', error);
-        throw error;
-    }
-}
-
 async function restoreSession() {
     const profile = await bootstrapAuthState();
     return Boolean(profile);
@@ -4640,6 +3843,7 @@ async function initApp() {
     appData = loadStoredData();
     saveData(appData);
     purgeLegacyKonsumenTeknisiCache();
+    hydrateMissingProfileColumnsCache();
     populateSpecializationOptions('regTekSpecialization', 'Semua Layanan');
     syncAdminAccessUI();
     initDomEvents();
