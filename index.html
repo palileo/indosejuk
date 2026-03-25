@@ -73,7 +73,7 @@
                     </div>
                     <h3>Konsumen</h3>
                     <p>Pesan layanan service AC untuk rumah atau kantor Anda</p>
-                    <div class="role-card-arrow">â†’</div>
+                    <div class="role-card-arrow">&gt;</div>
                 </div>
 
                 <div class="role-card" data-role="teknisi" id="roleTeknisi">
@@ -88,7 +88,7 @@
                     </div>
                     <h3>Teknisi</h3>
                     <p>Kelola pekerjaan service dan update status tugas</p>
-                    <div class="role-card-arrow">â†’</div>
+                    <div class="role-card-arrow">&gt;</div>
                 </div>
 
                 <div class="role-card role-card--admin" data-role="admin" id="roleAdmin">
@@ -103,7 +103,7 @@
                     </div>
                     <h3>Admin</h3>
                     <p>Pantau seluruh operasional dan kelola bisnis</p>
-                    <div class="role-card-arrow">â†’</div>
+                    <div class="role-card-arrow">&gt;</div>
                 </div>
             </div>
 
@@ -142,7 +142,17 @@
             </div>
 
             <div class="login-footer-text">
-                <p>ðŸ“ Banyumas, Jawa Tengah &nbsp;|&nbsp; ðŸ“ž 0897-0788-800</p>
+                <p>Lokasi: Banyumas, Jawa Tengah | Telp/WA: 0897-0788-800</p>
+            </div>
+            <div class="landing-contact-actions">
+                <button type="button" class="btn btn-success btn-lg btn-glow" onclick="openCustomerServiceWhatsApp()">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                        <path d="M21 11.5a8.5 8.5 0 0 1-12.57 7.49L3 21l2.14-5.05A8.5 8.5 0 1 1 21 11.5z"/>
+                        <path d="M8.8 9.5c.2-.5.4-.5.7-.5h.6c.2 0 .4 0 .5.4l.5 1.4c.1.3.1.4 0 .6l-.4.6c-.1.1-.1.2 0 .4.3.5.8 1 1.3 1.3.2.1.3.1.4 0l.6-.4c.2-.1.3-.1.6 0l1.4.5c.4.1.4.3.4.5v.6c0 .3 0 .5-.5.7-.4.2-1.2.2-2.3-.3-1-.4-2.1-1.3-2.9-2.1-.8-.8-1.7-1.9-2.1-2.9-.5-1.1-.5-1.9-.3-2.3z"/>
+                    </svg>
+                    Hubungi CS WhatsApp
+                </button>
+                <p class="landing-cs-note">Klik untuk konsultasi cepat soal service, cuci, atau perbaikan AC.</p>
             </div>
         </div>
     </section>
@@ -175,7 +185,7 @@
             <!-- === FORM DAFTAR KONSUMEN === -->
             <div class="register-form-card" id="regFormKonsumen">
                 <form id="formRegKonsumen" onsubmit="return handleRegisterKonsumen(event)">
-                    <h3 class="reg-form-title">ðŸ“‹ Data Diri Konsumen</h3>
+                    <h3 class="reg-form-title">Data Diri Konsumen</h3>
                     <div class="reg-form-grid">
                         <div class="form-group">
                             <label for="regKonName">Nama Lengkap <span class="required">*</span></label>
@@ -198,30 +208,124 @@
                             <input type="tel" id="regKonPhone" required placeholder="08xx-xxxx-xxxx">
                         </div>
                         <div class="form-group">
-                            <label for="regKonKecamatan">Kecamatan <span class="required">*</span></label>
+                            <label for="regKonKecamatan">Kecamatan / Area <span class="required">*</span></label>
                             <select id="regKonKecamatan" required>
-                                <option value="">Pilih Kecamatan</option>
-                                <option value="Purwokerto Utara">Purwokerto Utara</option>
-                                <option value="Purwokerto Selatan">Purwokerto Selatan</option>
-                                <option value="Purwokerto Barat">Purwokerto Barat</option>
-                                <option value="Purwokerto Timur">Purwokerto Timur</option>
-                                <option value="Sokaraja">Sokaraja</option>
-                                <option value="Kembaran">Kembaran</option>
-                                <option value="Baturraden">Baturraden</option>
-                                <option value="Sumbang">Sumbang</option>
-                                <option value="Kedungbanteng">Kedungbanteng</option>
-                                <option value="Karanglewas">Karanglewas</option>
-                                <option value="Patikraja">Patikraja</option>
-                                <option value="Ajibarang">Ajibarang</option>
-                                <option value="Wangon">Wangon</option>
-                                <option value="Jatilawang">Jatilawang</option>
-                                <option value="Rawalo">Rawalo</option>
+                                <option value="">Pilih Kecamatan / Area</option>
+                                <optgroup label="Banyumas">
+                                    <option value="Purwokerto Utara, Banyumas">Purwokerto Utara, Banyumas</option>
+                                    <option value="Purwokerto Selatan, Banyumas">Purwokerto Selatan, Banyumas</option>
+                                    <option value="Purwokerto Barat, Banyumas">Purwokerto Barat, Banyumas</option>
+                                    <option value="Purwokerto Timur, Banyumas">Purwokerto Timur, Banyumas</option>
+                                    <option value="Sokaraja, Banyumas">Sokaraja, Banyumas</option>
+                                    <option value="Kembaran, Banyumas">Kembaran, Banyumas</option>
+                                    <option value="Baturraden, Banyumas">Baturraden, Banyumas</option>
+                                    <option value="Sumbang, Banyumas">Sumbang, Banyumas</option>
+                                    <option value="Kedungbanteng, Banyumas">Kedungbanteng, Banyumas</option>
+                                    <option value="Karanglewas, Banyumas">Karanglewas, Banyumas</option>
+                                    <option value="Patikraja, Banyumas">Patikraja, Banyumas</option>
+                                    <option value="Wangon, Banyumas">Wangon, Banyumas</option>
+                                    <option value="Jatilawang, Banyumas">Jatilawang, Banyumas</option>
+                                    <option value="Rawalo, Banyumas">Rawalo, Banyumas</option>
+                                </optgroup>
+                                <optgroup label="Ajibarang">
+                                    <option value="Ajibarang Kulon, Ajibarang">Ajibarang Kulon, Ajibarang</option>
+                                    <option value="Ajibarang Wetan, Ajibarang">Ajibarang Wetan, Ajibarang</option>
+                                    <option value="Banjarsari, Ajibarang">Banjarsari, Ajibarang</option>
+                                    <option value="Ciberung, Ajibarang">Ciberung, Ajibarang</option>
+                                    <option value="Darmakradenan, Ajibarang">Darmakradenan, Ajibarang</option>
+                                    <option value="Jingkang, Ajibarang">Jingkang, Ajibarang</option>
+                                    <option value="Kalibenda, Ajibarang">Kalibenda, Ajibarang</option>
+                                    <option value="Karangbawang, Ajibarang">Karangbawang, Ajibarang</option>
+                                    <option value="Kracak, Ajibarang">Kracak, Ajibarang</option>
+                                    <option value="Lesmana, Ajibarang">Lesmana, Ajibarang</option>
+                                    <option value="Pancasan, Ajibarang">Pancasan, Ajibarang</option>
+                                    <option value="Pancurendang, Ajibarang">Pancurendang, Ajibarang</option>
+                                    <option value="Pandansari, Ajibarang">Pandansari, Ajibarang</option>
+                                    <option value="Sawangan, Ajibarang">Sawangan, Ajibarang</option>
+                                    <option value="Tipar Kidul, Ajibarang">Tipar Kidul, Ajibarang</option>
+                                </optgroup>
+                                <optgroup label="Cilacap">
+                                    <option value="Cilacap Selatan, Cilacap">Cilacap Selatan, Cilacap</option>
+                                    <option value="Cilacap Tengah, Cilacap">Cilacap Tengah, Cilacap</option>
+                                    <option value="Cilacap Utara, Cilacap">Cilacap Utara, Cilacap</option>
+                                    <option value="Jeruklegi, Cilacap">Jeruklegi, Cilacap</option>
+                                    <option value="Kawunganten, Cilacap">Kawunganten, Cilacap</option>
+                                    <option value="Bantarsari, Cilacap">Bantarsari, Cilacap</option>
+                                    <option value="Kesugihan, Cilacap">Kesugihan, Cilacap</option>
+                                    <option value="Adipala, Cilacap">Adipala, Cilacap</option>
+                                    <option value="Maos, Cilacap">Maos, Cilacap</option>
+                                    <option value="Sampang, Cilacap">Sampang, Cilacap</option>
+                                    <option value="Kroya, Cilacap">Kroya, Cilacap</option>
+                                    <option value="Binangun, Cilacap">Binangun, Cilacap</option>
+                                    <option value="Nusawungu, Cilacap">Nusawungu, Cilacap</option>
+                                    <option value="Sidareja, Cilacap">Sidareja, Cilacap</option>
+                                    <option value="Kedungreja, Cilacap">Kedungreja, Cilacap</option>
+                                    <option value="Gandrungmangu, Cilacap">Gandrungmangu, Cilacap</option>
+                                    <option value="Patimuan, Cilacap">Patimuan, Cilacap</option>
+                                    <option value="Cipari, Cilacap">Cipari, Cilacap</option>
+                                    <option value="Karangpucung, Cilacap">Karangpucung, Cilacap</option>
+                                    <option value="Cimanggu, Cilacap">Cimanggu, Cilacap</option>
+                                    <option value="Majenang, Cilacap">Majenang, Cilacap</option>
+                                    <option value="Wanareja, Cilacap">Wanareja, Cilacap</option>
+                                    <option value="Dayeuhluhur, Cilacap">Dayeuhluhur, Cilacap</option>
+                                    <option value="Kampung Laut, Cilacap">Kampung Laut, Cilacap</option>
+                                </optgroup>
+                                <optgroup label="Kebumen">
+                                    <option value="Ayah, Kebumen">Ayah, Kebumen</option>
+                                    <option value="Buayan, Kebumen">Buayan, Kebumen</option>
+                                    <option value="Puring, Kebumen">Puring, Kebumen</option>
+                                    <option value="Petanahan, Kebumen">Petanahan, Kebumen</option>
+                                    <option value="Klirong, Kebumen">Klirong, Kebumen</option>
+                                    <option value="Buluspesantren, Kebumen">Buluspesantren, Kebumen</option>
+                                    <option value="Ambal, Kebumen">Ambal, Kebumen</option>
+                                    <option value="Mirit, Kebumen">Mirit, Kebumen</option>
+                                    <option value="Bonorowo, Kebumen">Bonorowo, Kebumen</option>
+                                    <option value="Prembun, Kebumen">Prembun, Kebumen</option>
+                                    <option value="Padureso, Kebumen">Padureso, Kebumen</option>
+                                    <option value="Kutowinangun, Kebumen">Kutowinangun, Kebumen</option>
+                                    <option value="Alian, Kebumen">Alian, Kebumen</option>
+                                    <option value="Poncowarno, Kebumen">Poncowarno, Kebumen</option>
+                                    <option value="Kebumen, Kebumen">Kebumen, Kebumen</option>
+                                    <option value="Pejagoan, Kebumen">Pejagoan, Kebumen</option>
+                                    <option value="Sruweng, Kebumen">Sruweng, Kebumen</option>
+                                    <option value="Adimulyo, Kebumen">Adimulyo, Kebumen</option>
+                                    <option value="Kuwarasan, Kebumen">Kuwarasan, Kebumen</option>
+                                    <option value="Rowokele, Kebumen">Rowokele, Kebumen</option>
+                                    <option value="Sempor, Kebumen">Sempor, Kebumen</option>
+                                    <option value="Gombong, Kebumen">Gombong, Kebumen</option>
+                                    <option value="Karanganyar, Kebumen">Karanganyar, Kebumen</option>
+                                    <option value="Karanggayam, Kebumen">Karanggayam, Kebumen</option>
+                                    <option value="Sadang, Kebumen">Sadang, Kebumen</option>
+                                    <option value="Karangsambung, Kebumen">Karangsambung, Kebumen</option>
+                                </optgroup>
+                                <optgroup label="Purbalingga">
+                                    <option value="Kemangkon, Purbalingga">Kemangkon, Purbalingga</option>
+                                    <option value="Bukateja, Purbalingga">Bukateja, Purbalingga</option>
+                                    <option value="Kejobong, Purbalingga">Kejobong, Purbalingga</option>
+                                    <option value="Pengadegan, Purbalingga">Pengadegan, Purbalingga</option>
+                                    <option value="Kaligondang, Purbalingga">Kaligondang, Purbalingga</option>
+                                    <option value="Purbalingga, Purbalingga">Purbalingga, Purbalingga</option>
+                                    <option value="Kalimanah, Purbalingga">Kalimanah, Purbalingga</option>
+                                    <option value="Padamara, Purbalingga">Padamara, Purbalingga</option>
+                                    <option value="Kutasari, Purbalingga">Kutasari, Purbalingga</option>
+                                    <option value="Bojongsari, Purbalingga">Bojongsari, Purbalingga</option>
+                                    <option value="Mrebet, Purbalingga">Mrebet, Purbalingga</option>
+                                    <option value="Bobotsari, Purbalingga">Bobotsari, Purbalingga</option>
+                                    <option value="Karangreja, Purbalingga">Karangreja, Purbalingga</option>
+                                    <option value="Karangjambu, Purbalingga">Karangjambu, Purbalingga</option>
+                                    <option value="Karanganyar, Purbalingga">Karanganyar, Purbalingga</option>
+                                    <option value="Kertanegara, Purbalingga">Kertanegara, Purbalingga</option>
+                                    <option value="Karangmoncol, Purbalingga">Karangmoncol, Purbalingga</option>
+                                    <option value="Rembang, Purbalingga">Rembang, Purbalingga</option>
+                                </optgroup>
                                 <option value="Lainnya">Lainnya</option>
                             </select>
                         </div>
                         <div class="form-group">
                             <label for="regKonBirthDate">Tanggal Lahir</label>
-                            <input type="date" id="regKonBirthDate" onchange="syncAgeField('regKonBirthDate', 'regKonAge')">
+                            <input type="date" id="regKonBirthDate" data-manual-target="regKonBirthDateManual" onchange="syncAgeField('regKonBirthDate', 'regKonAge')">
+                            <input type="text" id="regKonBirthDateManual" class="birth-date-manual-input" inputmode="numeric" maxlength="10" placeholder="dd/mm/yyyy" oninput="handleManualBirthDateInput(this)" onblur="applyManualBirthDate('regKonBirthDateManual', 'regKonBirthDate', 'regKonAge')">
+                            <p class="text-muted text-sm birth-date-helper">Bisa isi manual dengan format tanggal/bulan/tahun, misalnya 31/12/2000.</p>
                         </div>
                         <div class="form-group">
                             <label for="regKonAge">Usia</label>
@@ -229,13 +333,13 @@
                         </div>
                         <div class="form-group full-width">
                             <label for="regKonAddress">Alamat Lengkap <span class="required">*</span></label>
-                            <textarea id="regKonAddress" rows="2" required placeholder="Jl. ..., RT/RW, Kelurahan, Banyumas"></textarea>
+                            <textarea id="regKonAddress" rows="2" required placeholder="Jl. ..., RT/RW, Kelurahan/Desa, Kecamatan, Kabupaten/Kota"></textarea>
                         </div>
                     </div>
 
                     <!-- Share Location -->
                     <div class="sharelok-section">
-                        <h4>ðŸ“ Share Lokasi (Sharelok)</h4>
+                        <h4>Share Lokasi (Sharelok)</h4>
                         <p class="text-muted text-sm">Bagikan lokasi Anda agar teknisi lebih mudah menemukan alamat</p>
                         <div class="sharelok-row">
                             <button type="button" class="btn btn-info" onclick="getShareLocation('regKon')">
@@ -243,9 +347,9 @@
                                 Ambil Lokasi GPS
                             </button>
                             <div class="sharelok-result" id="regKonLocationResult" style="display:none;">
-                                <span class="sharelok-badge">âœ… Lokasi berhasil diambil</span>
+                                <span class="sharelok-badge">Lokasi berhasil diambil</span>
                                 <span class="sharelok-coords" id="regKonCoords"></span>
-                                <a id="regKonMapLink" href="#" target="_blank" class="sharelok-map-link">Lihat di Google Maps â†—</a>
+                                <a id="regKonMapLink" href="#" target="_blank" class="sharelok-map-link">Lihat di Google Maps -&gt;</a>
                             </div>
                         </div>
                         <div class="form-group full-width" style="margin-top:1rem;">
@@ -258,7 +362,7 @@
 
                     <!-- Upload Foto Unit AC -->
                     <div class="upload-section">
-                        <h4>ðŸ“· Foto Unit AC (Opsional)</h4>
+                        <h4>Foto Unit AC (Opsional)</h4>
                         <p class="text-muted text-sm">Upload foto AC Anda agar teknisi bisa mempersiapkan peralatan yang tepat</p>
                         <div class="upload-options">
                             <div class="upload-option">
@@ -291,7 +395,7 @@
             <!-- === FORM DAFTAR TEKNISI === -->
             <div class="register-form-card" id="regFormTeknisi" style="display:none;">
                 <form id="formRegTeknisi" onsubmit="return handleRegisterTeknisi(event)">
-                    <h3 class="reg-form-title">ðŸ”§ Data Diri Teknisi</h3>
+                    <h3 class="reg-form-title">Data Diri Teknisi</h3>
                     <div class="reg-form-grid">
                         <div class="form-group">
                             <label for="regTekName">Nama Lengkap <span class="required">*</span></label>
@@ -319,7 +423,9 @@
                         </div>
                         <div class="form-group">
                             <label for="regTekBirthDate">Tanggal Lahir <span class="required">*</span></label>
-                            <input type="date" id="regTekBirthDate" required onchange="syncAgeField('regTekBirthDate', 'regTekAge')">
+                            <input type="date" id="regTekBirthDate" required data-manual-target="regTekBirthDateManual" onchange="syncAgeField('regTekBirthDate', 'regTekAge')">
+                            <input type="text" id="regTekBirthDateManual" class="birth-date-manual-input" inputmode="numeric" maxlength="10" placeholder="dd/mm/yyyy" oninput="handleManualBirthDateInput(this)" onblur="applyManualBirthDate('regTekBirthDateManual', 'regTekBirthDate', 'regTekAge')">
+                            <p class="text-muted text-sm birth-date-helper">Bisa isi manual dengan format tanggal/bulan/tahun, misalnya 31/12/2000.</p>
                         </div>
                         <div class="form-group">
                             <label for="regTekAge">Usia</label>
@@ -344,7 +450,7 @@
 
                     <!-- Share Location -->
                     <div class="sharelok-section">
-                        <h4>ðŸ“ Share Lokasi Domisili (Sharelok)</h4>
+                        <h4>Share Lokasi Domisili (Sharelok)</h4>
                         <p class="text-muted text-sm">Lokasi akan membantu penugasan berdasarkan area terdekat</p>
                         <div class="sharelok-row">
                             <button type="button" class="btn btn-info" onclick="getShareLocation('regTek')">
@@ -352,9 +458,9 @@
                                 Ambil Lokasi GPS
                             </button>
                             <div class="sharelok-result" id="regTekLocationResult" style="display:none;">
-                                <span class="sharelok-badge">âœ… Lokasi berhasil diambil</span>
+                                <span class="sharelok-badge">Lokasi berhasil diambil</span>
                                 <span class="sharelok-coords" id="regTekCoords"></span>
-                                <a id="regTekMapLink" href="#" target="_blank" class="sharelok-map-link">Lihat di Google Maps â†—</a>
+                                <a id="regTekMapLink" href="#" target="_blank" class="sharelok-map-link">Lihat di Google Maps -&gt;</a>
                             </div>
                         </div>
                         <div class="form-group full-width" style="margin-top:1rem;">
@@ -367,7 +473,7 @@
 
                     <!-- Upload KTP -->
                     <div class="upload-section">
-                        <h4>ðŸªª Upload Foto KTP <span class="required">*</span></h4>
+                        <h4>Upload Foto KTP <span class="required">*</span></h4>
                         <p class="text-muted text-sm">Foto KTP yang jelas untuk verifikasi identitas dan OCR.</p>
                         <div class="upload-section-header-actions">
                             <button type="button" class="btn btn-outline btn-sm" id="btnScanKtp" onclick="runTechnicianKtpOcr()">Scan KTP / OCR</button>
@@ -401,7 +507,7 @@
 
                     <!-- Upload Foto Diri -->
                     <div class="upload-section">
-                        <h4>ðŸ¤³ Upload Foto Diri <span class="required">*</span></h4>
+                        <h4>Upload Foto Diri <span class="required">*</span></h4>
                         <p class="text-muted text-sm">Foto setengah badan yang jelas untuk profil teknisi (untuk kepercayaan konsumen)</p>
                         <div class="upload-options">
                             <div class="upload-option">
@@ -538,7 +644,7 @@
             <!-- Konsumen: Order Form -->
             <section class="view" id="viewKonsumenOrder" style="display:none;">
                 <div class="page-header">
-                    <button class="btn-back" onclick="navigateTo('konsumen-home')">â† Kembali</button>
+                    <button class="btn-back" onclick="navigateTo('konsumen-home')">&lt; Kembali</button>
                     <h2>Pesan Layanan Service AC</h2>
                     <p>Isi formulir di bawah ini untuk memesan layanan service AC</p>
                 </div>
@@ -606,8 +712,8 @@
                                 <input type="date" id="orderDate" required>
                             </div>
                             <div class="form-group full-width">
-                                <label for="orderAddress">Alamat Lengkap (Banyumas) <span class="required">*</span></label>
-                                <textarea id="orderAddress" rows="3" required placeholder="Contoh: Jl. Jenderal Sudirman No. 10, Purwokerto, Banyumas"></textarea>
+                                <label for="orderAddress">Alamat Lengkap <span class="required">*</span></label>
+                                <textarea id="orderAddress" rows="3" required placeholder="Contoh: Jl. Jenderal Sudirman No. 10, Purwokerto, Banyumas / wilayah layanan Anda"></textarea>
                             </div>
                             <div class="form-group full-width">
                                 <label for="orderNotes">Catatan Tambahan</label>
@@ -710,7 +816,7 @@
                 </div>
                 <div class="card form-card">
                     <div class="upload-section">
-                        <h4>ðŸ“· Pilih Metode Upload</h4>
+                        <h4>Pilih Metode Upload</h4>
                         <div class="upload-options">
                             <div class="upload-option">
                                 <label class="upload-option-btn" for="konUnitCamera">
@@ -878,7 +984,7 @@
             <!-- Teknisi: Upload Bukti -->
             <section class="view" id="viewTeknisiUpload" style="display:none;">
                 <div class="page-header">
-                    <button class="btn-back" onclick="navigateTo('teknisi-home')">â† Kembali</button>
+                    <button class="btn-back" onclick="navigateTo('teknisi-home')">&lt; Kembali</button>
                     <h2>Upload Bukti Pekerjaan</h2>
                     <p>Unggah foto sebagai bukti penyelesaian pekerjaan</p>
                 </div>
@@ -911,7 +1017,7 @@
                 <div class="card form-card">
                     <!-- Upload KTP -->
                     <div class="upload-section">
-                        <h4>ðŸªª Foto KTP / Identitas</h4>
+                        <h4>Foto KTP / Identitas</h4>
                         <p class="text-muted text-sm">Upload foto KTP yang jelas untuk verifikasi identitas</p>
                         <div class="upload-options">
                             <div class="upload-option">
@@ -934,7 +1040,7 @@
 
                     <!-- Upload Foto Diri -->
                     <div class="upload-section" style="margin-top:1.5rem;">
-                        <h4>ðŸ¤³ Foto Diri</h4>
+                        <h4>Foto Diri</h4>
                         <p class="text-muted text-sm">Foto setengah badan untuk profil teknisi (meningkatkan kepercayaan konsumen)</p>
                         <div class="upload-options">
                             <div class="upload-option">
@@ -1230,12 +1336,12 @@
             <div class="footer-info">
                 <div class="footer-col">
                     <h5>Kontak</h5>
-                    <p>ðŸ“ž 0897-0788-800</p>
-                    <p>ðŸ“§ info@sejukac.com</p>
+                    <p>Telp/WA: 0897-0788-800</p>
+                    <p>Email: info@sejukac.com</p>
                 </div>
                 <div class="footer-col">
                     <h5>Alamat</h5>
-                    <p>ðŸ“ Banyumas, Jawa Tengah</p>
+                    <p>Lokasi: Banyumas, Jawa Tengah</p>
                     <p>Indonesia</p>
                 </div>
             </div>

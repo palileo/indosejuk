@@ -235,12 +235,23 @@ function buildRegistrationWhatsAppMessage(role, formValues = {}) {
         `Username: ${formValues.username || '-'}`,
         `Email: ${formValues.email || '-'}`,
         `WhatsApp: ${formatDisplayPhone(formValues.phone)}`,
-        role === 'konsumen' ? `Kecamatan: ${formValues.district || '-'}` : `Spesialisasi: ${formValues.specialization || '-'}`,
+        role === 'konsumen' ? `Area: ${formValues.district || '-'}` : `Spesialisasi: ${formValues.specialization || '-'}`,
         `Alamat: ${formValues.address || '-'}`,
         `Lokasi teks: ${formValues.locationText || '-'}`,
         formValues.lat && formValues.lng ? `Google Maps: ${getMapsLink(formValues.lat, formValues.lng)}` : '',
         role === 'teknisi' ? `NIK: ${formValues.nik || '-'}` : ''
     ]);
+}
+
+function openCustomerServiceWhatsApp() {
+    return openWhatsAppChat(
+        getAdminWhatsAppNumber(),
+        buildMessageLines([
+            'Halo Indo Sejuk AC, saya ingin konsultasi dengan CS.',
+            '',
+            'Mohon info layanan yang tersedia untuk area saya.'
+        ])
+    );
 }
 
 function notifyAdminNewRegistration(role, formValues = {}, popup = null) {
@@ -729,6 +740,86 @@ function calculateAge(birthDate) {
         age -= 1;
     }
     return age >= 0 ? age : '';
+}
+
+function formatIsoDateToManual(isoDate) {
+    const value = String(isoDate || '').trim();
+    const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!match) return '';
+    return `${match[3]}/${match[2]}/${match[1]}`;
+}
+
+function formatManualDateInput(value) {
+    const digits = String(value || '').replace(/\D/g, '').slice(0, 8);
+    if (digits.length <= 2) return digits;
+    if (digits.length <= 4) return `${digits.slice(0, 2)}/${digits.slice(2)}`;
+    return `${digits.slice(0, 2)}/${digits.slice(2, 4)}/${digits.slice(4)}`;
+}
+
+function parseManualDateToIso(value) {
+    const match = String(value || '').trim().match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    if (!match) return '';
+    const [, dayString, monthString, yearString] = match;
+    const day = Number(dayString);
+    const month = Number(monthString);
+    const year = Number(yearString);
+    const date = new Date(year, month - 1, day);
+    if (
+        Number.isNaN(date.getTime()) ||
+        date.getFullYear() !== year ||
+        date.getMonth() !== month - 1 ||
+        date.getDate() !== day
+    ) {
+        return '';
+    }
+    return `${yearString}-${monthString}-${dayString}`;
+}
+
+function handleManualBirthDateInput(input) {
+    if (!input) return;
+    input.value = formatManualDateInput(input.value);
+    input.setCustomValidity('');
+}
+
+function resolveBirthDateValue(dateInputId, manualInputId) {
+    const dateInput = document.getElementById(dateInputId);
+    const manualInput = document.getElementById(manualInputId);
+    if (!dateInput) return '';
+    const manualValue = manualInput?.value.trim() || '';
+    if (!manualValue) return dateInput.value || '';
+    const isoDate = parseManualDateToIso(manualValue);
+    if (!isoDate) {
+        if (manualInput) manualInput.setCustomValidity('Format tanggal manual harus dd/mm/yyyy yang valid.');
+        return dateInput.value || '';
+    }
+    dateInput.value = isoDate;
+    if (manualInput) {
+        manualInput.value = formatIsoDateToManual(isoDate);
+        manualInput.setCustomValidity('');
+    }
+    return isoDate;
+}
+
+function applyManualBirthDate(manualInputId, dateInputId, ageInputId) {
+    const manualInput = document.getElementById(manualInputId);
+    const dateInput = document.getElementById(dateInputId);
+    if (!manualInput || !dateInput) return;
+    if (!manualInput.value.trim()) {
+        manualInput.setCustomValidity('');
+        dateInput.value = '';
+        syncAgeField(dateInputId, ageInputId);
+        return;
+    }
+    const isoDate = parseManualDateToIso(manualInput.value);
+    if (!isoDate) {
+        manualInput.setCustomValidity('Format tanggal manual harus dd/mm/yyyy yang valid.');
+        manualInput.reportValidity();
+        return;
+    }
+    dateInput.value = isoDate;
+    manualInput.value = formatIsoDateToManual(isoDate);
+    manualInput.setCustomValidity('');
+    syncAgeField(dateInputId, ageInputId);
 }
 
 function slugify(text) {
@@ -1804,13 +1895,24 @@ async function handleLoginSubmit(event) {
 }
 
 function syncAgeField(dateInputId, ageInputId) {
-    const dateValue = document.getElementById(dateInputId)?.value || '';
+    const dateInput = document.getElementById(dateInputId);
+    const dateValue = dateInput?.value || '';
+    const manualTargetId = dateInput?.dataset?.manualTarget || '';
+    if (manualTargetId) {
+        const manualInput = document.getElementById(manualTargetId);
+        if (manualInput && document.activeElement !== manualInput) {
+            manualInput.value = formatIsoDateToManual(dateValue);
+            manualInput.setCustomValidity('');
+        }
+    }
     const age = calculateAge(dateValue);
     const ageInput = document.getElementById(ageInputId);
     if (ageInput) ageInput.value = age;
 }
 
 function collectRegisterKonsumenForm() {
+    const birthDate = resolveBirthDateValue('regKonBirthDate', 'regKonBirthDateManual');
+    syncAgeField('regKonBirthDate', 'regKonAge');
     return {
         name: document.getElementById('regKonName').value.trim(),
         username: document.getElementById('regKonUsername').value.trim(),
@@ -1818,7 +1920,7 @@ function collectRegisterKonsumenForm() {
         email: normalizeEmail(document.getElementById('regKonEmail').value),
         phone: normalizePhone(document.getElementById('regKonPhone').value),
         district: document.getElementById('regKonKecamatan').value,
-        birthDate: document.getElementById('regKonBirthDate').value,
+        birthDate,
         age: document.getElementById('regKonAge').value,
         address: document.getElementById('regKonAddress').value.trim(),
         locationText: document.getElementById('regKonLocationText')?.value.trim() || '',
@@ -1830,6 +1932,11 @@ function collectRegisterKonsumenForm() {
 async function handleRegisterKonsumen(event) {
     event.preventDefault();
     const form = collectRegisterKonsumenForm();
+    const manualBirthDateInput = document.getElementById('regKonBirthDateManual');
+    if (manualBirthDateInput && !manualBirthDateInput.checkValidity()) {
+        manualBirthDateInput.reportValidity();
+        return false;
+    }
     if (!form.name || !form.username || !form.password || !form.email || !form.phone || !form.address) {
         showToast('Lengkapi data wajib konsumen.', 'error');
         return false;
@@ -1889,6 +1996,8 @@ async function handleRegisterKonsumen(event) {
 }
 
 function collectRegisterTeknisiForm() {
+    const birthDate = resolveBirthDateValue('regTekBirthDate', 'regTekBirthDateManual');
+    syncAgeField('regTekBirthDate', 'regTekAge');
     return {
         name: document.getElementById('regTekName').value.trim(),
         username: document.getElementById('regTekUsername').value.trim(),
@@ -1896,7 +2005,7 @@ function collectRegisterTeknisiForm() {
         email: normalizeEmail(document.getElementById('regTekEmail').value),
         phone: normalizePhone(document.getElementById('regTekPhone').value),
         nik: document.getElementById('regTekNIK').value.trim(),
-        birthDate: document.getElementById('regTekBirthDate').value,
+        birthDate,
         age: document.getElementById('regTekAge').value,
         specialization: document.getElementById('regTekSpecialization').value,
         experience: Number(document.getElementById('regTekExperience').value || 0),
@@ -3623,6 +3732,11 @@ async function handleRegisterKonsumen(event) {
     event.preventDefault();
 
     const form = collectRegisterKonsumenForm();
+    const manualBirthDateInput = document.getElementById('regKonBirthDateManual');
+    if (manualBirthDateInput && !manualBirthDateInput.checkValidity()) {
+        manualBirthDateInput.reportValidity();
+        return false;
+    }
     const waPopup = prepareWhatsAppPopup();
     if (!form.name || !form.username || !form.password || !form.email || !form.phone || !form.address || !form.district) {
         closePreparedPopup(waPopup);
@@ -3667,6 +3781,11 @@ async function handleRegisterTeknisi(event) {
     event.preventDefault();
 
     const form = collectRegisterTeknisiForm();
+    const manualBirthDateInput = document.getElementById('regTekBirthDateManual');
+    if (manualBirthDateInput && !manualBirthDateInput.checkValidity()) {
+        manualBirthDateInput.reportValidity();
+        return false;
+    }
     const waPopup = prepareWhatsAppPopup();
     if (!form.name || !form.username || !form.password || !form.email || !form.phone || !form.nik || !form.birthDate || !form.specialization || !form.address) {
         closePreparedPopup(waPopup);
