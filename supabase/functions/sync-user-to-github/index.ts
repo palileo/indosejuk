@@ -129,7 +129,6 @@ async function fetchProfilesWithColumnFallback() {
 
   throw new Error("Gagal membaca profiles setelah retry fallback kolom optional.");
 }
-
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
