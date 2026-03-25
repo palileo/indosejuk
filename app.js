@@ -3536,6 +3536,12 @@ async function getPublicAuthBackendStatus(options = {}) {
     return summary;
 }
 
+function getMissingPublicAuthFunctionsLabel() {
+    const functionsMap = runtimeState.authBackendHealth?.functions || {};
+    const missing = PUBLIC_AUTH_FUNCTION_NAMES.filter((name) => functionsMap[name] && functionsMap[name].ok === false);
+    return missing.length ? missing.map((name) => `\`${name}\``).join(', ') : '';
+}
+
 function renderPublicAuthBackendNotice(message = '') {
     ['authBackendNoticeLogin', 'authBackendNoticeRegister'].forEach((id) => {
         const element = document.getElementById(id);
@@ -3605,8 +3611,12 @@ function toUserFacingError(error, fallback = 'Terjadi kesalahan.') {
     if (normalized.includes('failed to send a request to the edge function') || normalized.includes('functionsfetcherror')) {
         return 'Browser gagal menjangkau Edge Function Supabase. Biasanya karena function belum dideploy, env function belum lengkap, atau koneksi ke endpoint Functions sedang gagal.';
     }
-    if (normalized.includes('function register/login/reset belum aktif')) {
-        return 'Backend auth publik di Supabase belum lengkap. Deploy function register/login/reset atau aktifkan fallback yang aman sesuai README.';
+    if (normalized.includes('backend auth publik belum lengkap')) {
+        const missingLabel = getMissingPublicAuthFunctionsLabel();
+        if (missingLabel) {
+            return `Backend auth publik di Supabase belum lengkap. Function yang belum aktif: ${missingLabel}.`;
+        }
+        return 'Backend auth publik di Supabase belum lengkap. Beberapa function auth publik belum aktif.';
     }
     if (normalized.includes('masih mewajibkan konfirmasi email untuk signup biasa')) {
         return 'Register publik belum bisa dijalankan karena project Supabase masih mewajibkan konfirmasi email dan backend register belum aktif.';
@@ -5436,7 +5446,8 @@ async function registerPublicAccountSupabase(role, formValues) {
 
     const authSettings = await fetchSupabaseAuthSettings();
     if (!authSettings.ok || authSettings.disableSignup || !authSettings.mailerAutoconfirm) {
-        throw new Error('Backend auth publik belum lengkap di project Supabase ini. Function register/login/reset belum aktif, sementara Supabase Auth masih mewajibkan konfirmasi email untuk signup biasa.');
+        const missingFunctionsLabel = getMissingPublicAuthFunctionsLabel() || '`register-public-account`';
+        throw new Error(`Backend auth publik belum lengkap di project Supabase ini. Function yang belum aktif: ${missingFunctionsLabel}. Supabase Auth masih mewajibkan konfirmasi email untuk signup biasa, jadi register publik belum bisa dijalankan tanpa backend register yang aktif.`);
     }
 
     const authEmail = buildSyntheticAuthEmail(role, formValues.phone);
