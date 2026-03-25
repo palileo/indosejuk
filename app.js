@@ -346,6 +346,7 @@ function extractMissingColumnName(error) {
     const message = String(error?.message || error || '');
     const patterns = [
         /column ["']?([a-z_]+)["']? of relation/i,
+        /column\s+(?:(?:["']?[a-z_]+["']?\.)+["']?([a-z_]+)["']?)\s+does not exist/i,
         /column ["']?([a-z_]+)["']? does not exist/i,
         /Could not find the ['"]([a-z_]+)['"] column/i
     ];
