@@ -151,6 +151,17 @@
                         <button type="submit" class="btn btn-primary btn-lg btn-glow">Masuk</button>
                     </div>
                 </form>
+                <div class="verification-help-card" id="verificationHelpCard" hidden>
+                    <div class="verification-help-copy">
+                        <h3>Email verifikasi belum masuk?</h3>
+                        <p id="verificationHelpText">Jika link verifikasi sebelumnya kedaluwarsa, Anda bisa mengirim ulang verifikasi ke email ini.</p>
+                        <p class="verification-help-email">Target email: <strong id="verificationHelpEmail">-</strong></p>
+                    </div>
+                    <div class="verification-help-actions">
+                        <button type="button" class="btn btn-outline btn-sm" id="btnResendVerification">Kirim Ulang Email Verifikasi</button>
+                        <p class="verification-help-status" id="verificationHelpStatus"></p>
+                    </div>
+                </div>
                 <div class="credential-grid" id="defaultAccountList"></div>
                 <div class="landing-session-notice" id="landingSessionNotice" style="display:none;"></div>
             </div>
@@ -407,6 +418,7 @@
                             </div>
                         </div>
                         <div class="upload-preview-grid" id="regKonUnitPreview"></div>
+                        <p class="text-muted text-sm upload-helper-note">Jika sesi login langsung aktif, foto akan dikirim ke Supabase Storage saat pendaftaran selesai. Jika project menahan sesi sampai email terverifikasi, upload final dilakukan setelah login terkonfirmasi.</p>
                     </div>
 
                     <div class="form-actions">
@@ -521,6 +533,7 @@
                             </div>
                         </div>
                         <div class="upload-preview-grid" id="regTekIDPreview" role="list"></div>
+                        <p class="text-muted text-sm upload-helper-note">Dokumen sensitif hanya dikirim ke Supabase Storage lewat sesi login yang sah. Jika email confirmation menunda sesi, dokumen perlu dilanjutkan setelah login terverifikasi.</p>
                         <div class="ocr-panel" id="ocrPanel" data-ocr-panel="true">
                             <div class="ocr-status" id="ocrStatus" aria-live="polite">OCR siap digunakan setelah foto KTP diunggah.</div>
                             <div class="ocr-progress" id="ocrProgress" aria-live="polite"></div>
@@ -867,6 +880,7 @@
                     </div>
                     <div class="upload-preview-grid" id="konUnitPreviewGrid"></div>
                     <div class="unit-gallery" id="konUnitGallery"></div>
+                    <p class="text-muted text-sm" id="konUnitUploadStatus">Foto unit yang diunggah akan tersimpan ke Supabase Storage.</p>
                 </div>
             </section>
 
@@ -1029,7 +1043,12 @@
                     <div class="upload-preview" id="uploadPreview" style="display:none;">
                         <img id="uploadPreviewImg" alt="Preview">
                         <p id="uploadFileName"></p>
+                        <div class="image-card-actions image-card-actions--center">
+                            <button type="button" class="btn btn-danger btn-xs" onclick="clearImagePreviewState('upload-proof-draft')">Hapus Gambar</button>
+                        </div>
                     </div>
+                    <div class="card-subtle" id="existingProofCard" hidden></div>
+                    <p class="text-muted text-sm" id="uploadProofStatus">Belum ada bukti yang dipilih.</p>
                     <div class="form-actions">
                         <button type="button" class="btn btn-primary btn-lg" onclick="submitUploadProof()" id="btnSubmitProof">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
@@ -1368,7 +1387,7 @@
                 <div class="footer-col">
                     <h5>Kontak</h5>
                     <p>Telp/WA: 0897-0788-800</p>
-                    <p>Email: info@sejukac.com</p>
+                    <p>Email: becooloption@gmail.com</p>
                 </div>
                 <div class="footer-col">
                     <h5>Alamat</h5>

@@ -20,6 +20,12 @@ const PROFILE_STATUS_PENDING = 'Menunggu Verifikasi';
 const PROFILE_STATUS_ACTIVE = 'Aktif';
 const PROFILE_SCHEMA_DRIFT_CACHE_KEY = 'indoSejukProfileSchemaDrift';
 const PROFILE_SCHEMA_DRIFT_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+const PENDING_VERIFICATION_EMAIL_KEY = 'indoSejukPendingVerificationEmail';
+const PUBLIC_UPLOAD_BUCKET = 'app-public-uploads';
+const PRIVATE_DOCUMENT_BUCKET = 'app-private-documents';
+const MAX_IMAGE_UPLOAD_BYTES = 8 * 1024 * 1024;
+const IMAGE_MIME_WHITELIST = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif']);
+const REMOTE_STORAGE_SYNC_FUNCTION_NAME = 'sync-storage-to-github';
 const REQUIRED_PROFILE_COLUMNS = [
     'id',
     'role',
@@ -44,17 +50,31 @@ const OPTIONAL_PROFILE_COLUMNS = [
     'experience',
     'verified_at',
     'verified_by',
-    'completed_jobs'
+    'completed_jobs',
+    'unit_image_paths',
+    'unit_image_urls',
+    'ktp_photo_path',
+    'ktp_photo_url',
+    'selfie_photo_path',
+    'selfie_photo_url'
 ];
 const OPTIONAL_PROFILE_COLUMN_SET = new Set(OPTIONAL_PROFILE_COLUMNS);
-const OPTIONAL_ORDER_COLUMNS = new Set(['admin_confirmation_text', 'verified_at', 'verified_by']);
+const OPTIONAL_ORDER_COLUMNS = new Set([
+    'admin_confirmation_text',
+    'verified_at',
+    'verified_by',
+    'proof_image_path',
+    'proof_image_url'
+]);
 const REMOTE_SYNC_FUNCTION_NAME = 'sync-user-to-github';
+const RESEND_VERIFICATION_COOLDOWN_MS = 60 * 1000;
 
 let currentRole = null;
 let currentView = null;
 let currentUserTab = 'konsumen';
 let uploadingOrderId = null;
 let uploadProofImage = null;
+let uploadProofFileMeta = null;
 let appData = null;
 let authBootstrapPromise = null;
 let authSignInInProgress = false;
@@ -77,8 +97,11 @@ const remoteState = {
 
 const draftUploads = {
     regKonUnitImages: [],
+    regKonUnitFiles: [],
     regTekKtpPhoto: '',
+    regTekKtpFile: null,
     regTekSelfiePhoto: '',
+    regTekSelfieFile: null,
     ocrLastResult: null
 };
 
@@ -92,7 +115,13 @@ const runtimeState = {
     deferredInstallPrompt: null,
     serviceWorkerRegistrationPromise: null,
     connectionBannerTimer: null,
-    activeViewRenderToken: 0
+    activeViewRenderToken: 0,
+    resendVerificationInFlight: false,
+    resendVerificationCooldownUntil: 0,
+    resendVerificationTimer: null,
+    pendingVerificationEmail: '',
+    signedImageUrlCache: {},
+    uploadLocks: {}
 };
 
 const ROLE_LABELS = {
@@ -1009,6 +1038,358 @@ function readFileAsDataUrl(file) {
     });
 }
 
+function dataUrlToBlob(dataUrl) {
+    const [header, content = ''] = String(dataUrl || '').split(',');
+    const mimeMatch = header.match(/data:([^;]+);base64/i);
+    const mimeType = mimeMatch?.[1] || 'application/octet-stream';
+    const binary = atob(content);
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) {
+        bytes[index] = binary.charCodeAt(index);
+    }
+    return new Blob([bytes], { type: mimeType });
+}
+
+function inferFileExtension(fileName = '', mimeType = '') {
+    const normalizedName = String(fileName || '').trim();
+    const extensionMatch = normalizedName.match(/\.([a-z0-9]+)$/i);
+    if (extensionMatch?.[1]) return extensionMatch[1].toLowerCase();
+
+    const mimeMap = {
+        'image/jpeg': 'jpg',
+        'image/png': 'png',
+        'image/webp': 'webp',
+        'image/heic': 'heic',
+        'image/heif': 'heif'
+    };
+    return mimeMap[String(mimeType || '').toLowerCase()] || 'jpg';
+}
+
+function sanitizeFilename(fileName = '') {
+    const normalized = String(fileName || '').trim().toLowerCase();
+    const extension = inferFileExtension(normalized);
+    const withoutExtension = normalized.replace(/\.[a-z0-9]+$/i, '');
+    const safeBase = withoutExtension
+        .normalize('NFKD')
+        .replace(/[^\w\s-]/g, '')
+        .trim()
+        .replace(/[-\s]+/g, '-')
+        .replace(/^-+|-+$/g, '')
+        .slice(0, 60) || 'upload';
+    return `${safeBase}.${extension}`;
+}
+
+function slugifyPathSegment(value = '') {
+    return String(value || '')
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9_-]+/g, '-')
+        .replace(/-+/g, '-')
+        .replace(/^-+|-+$/g, '') || 'item';
+}
+
+function normalizeTextArray(value) {
+    if (Array.isArray(value)) {
+        return value
+            .map((item) => String(item || '').trim())
+            .filter(Boolean);
+    }
+    if (typeof value === 'string') {
+        const trimmed = value.trim();
+        if (!trimmed) return [];
+        try {
+            const parsed = JSON.parse(trimmed);
+            return normalizeTextArray(parsed);
+        } catch (_) {
+            return [trimmed];
+        }
+    }
+    return [];
+}
+
+function createFileLikeFromDraft(draft, fallbackName = 'upload.jpg') {
+    if (!draft?.dataUrl) return null;
+    const blob = dataUrlToBlob(draft.dataUrl);
+    const fileName = sanitizeFilename(draft.name || fallbackName);
+    try {
+        return new File([blob], fileName, {
+            type: draft.type || blob.type || 'image/jpeg',
+            lastModified: Number(draft.lastModified || Date.now())
+        });
+    } catch (_) {
+        blob.name = fileName;
+        blob.lastModified = Number(draft.lastModified || Date.now());
+        return blob;
+    }
+}
+
+async function invokeRemoteAssetSync(functionName, payload = {}, options = {}) {
+    if (!canUseSupabase()) {
+        return {
+            ok: false,
+            skipped: true,
+            message: 'Supabase client belum siap untuk memanggil backend sinkronisasi asset.'
+        };
+    }
+
+    try {
+        const { data, error } = await supabaseClient.functions.invoke(functionName, {
+            body: {
+                ...payload,
+                requestedAt: new Date().toISOString(),
+                requestedBy: remoteState.user?.id || payload.userId || payload.profileId || null
+            }
+        });
+        if (error) throw error;
+        return {
+            ok: true,
+            skipped: false,
+            data,
+            message: data?.message || 'Sinkron backend asset berhasil dipicu.'
+        };
+    } catch (error) {
+        const message = String(error?.message || error || '');
+        const looksMissingOrDisabled = /404|not found|edge function|failed to send a request|functionshttperror/i.test(message);
+
+        if (looksMissingOrDisabled) {
+            console.warn(`Edge Function ${functionName} belum tersedia atau belum dikonfigurasi. Supabase tetap menjadi source of truth.`, error);
+            if (options.toastCacheKey && !syncToastCache.has(options.toastCacheKey)) {
+                syncToastCache.add(options.toastCacheKey);
+                showToast(options.missingToastMessage || 'Sinkron backend belum aktif. Data utama tetap tersimpan di Supabase.', 'warning');
+            }
+            return {
+                ok: false,
+                skipped: true,
+                message: `${functionName} belum tersedia atau belum dikonfigurasi.`
+            };
+        }
+
+        console.warn(`Sinkron backend ${functionName} gagal dipanggil.`, error);
+        if (options.showErrorToast && options.errorToastMessage && !syncToastCache.has(`${options.toastCacheKey || functionName}-error`)) {
+            syncToastCache.add(`${options.toastCacheKey || functionName}-error`);
+            showToast(options.errorToastMessage, 'warning');
+        }
+        return {
+            ok: false,
+            skipped: true,
+            message: 'Pemanggilan backend sinkronisasi asset gagal.'
+        };
+    }
+}
+
+async function syncUploadedAssetToRemote(payload = {}, options = {}) {
+    return invokeRemoteAssetSync(REMOTE_STORAGE_SYNC_FUNCTION_NAME, {
+        action: 'upload',
+        ...payload
+    }, {
+        toastCacheKey: 'missing-storage-sync',
+        missingToastMessage: 'Sinkron GitHub untuk upload asset belum dikonfigurasi. Upload Supabase tetap berhasil.',
+        showErrorToast: Boolean(options.showErrorToast),
+        errorToastMessage: 'Sinkron GitHub untuk upload asset gagal, tetapi file utama tetap tersimpan di Supabase.'
+    });
+}
+
+async function syncDeletionToRemote(payload = {}, options = {}) {
+    return invokeRemoteAssetSync(REMOTE_STORAGE_SYNC_FUNCTION_NAME, {
+        action: 'delete',
+        ...payload
+    }, {
+        toastCacheKey: 'missing-storage-sync',
+        missingToastMessage: 'Sinkron GitHub untuk hapus asset belum dikonfigurasi. Penghapusan Supabase tetap dijalankan.',
+        showErrorToast: Boolean(options.showErrorToast),
+        errorToastMessage: 'Sinkron GitHub untuk hapus asset gagal, tetapi data utama di Supabase tetap dibersihkan.'
+    });
+}
+
+function validateImageFile(file, options = {}) {
+    const label = options.label || 'File gambar';
+    if (!file) throw new Error(`${label} belum dipilih.`);
+    const mimeType = String(file.type || '').toLowerCase();
+    if (!IMAGE_MIME_WHITELIST.has(mimeType)) {
+        throw new Error(`${label} harus berupa JPG, PNG, WEBP, HEIC, atau HEIF.`);
+    }
+    if (Number(file.size || 0) > MAX_IMAGE_UPLOAD_BYTES) {
+        throw new Error(`${label} melebihi batas 8 MB.`);
+    }
+    return true;
+}
+
+function getStorageTargetConfig(target) {
+    const targetMap = {
+        'konsumen-unit': { bucket: PUBLIC_UPLOAD_BUCKET, isPrivate: false, folder: 'units' },
+        'teknisi-ktp': { bucket: PRIVATE_DOCUMENT_BUCKET, isPrivate: true, folder: 'ktp' },
+        'teknisi-selfie': { bucket: PRIVATE_DOCUMENT_BUCKET, isPrivate: true, folder: 'selfie' },
+        'order-proof': { bucket: PUBLIC_UPLOAD_BUCKET, isPrivate: false, folder: 'proofs' }
+    };
+    return targetMap[target] || null;
+}
+
+function buildStoragePath(options = {}) {
+    const userId = slugifyPathSegment(options.userId || remoteState.user?.id || '');
+    if (!userId) throw new Error('User auth belum tersedia untuk upload storage.');
+    const fileName = sanitizeFilename(options.originalName || 'upload.jpg');
+    const uniqueSuffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const target = options.target;
+
+    if (target === 'konsumen-unit') {
+        return `users/${userId}/units/${uniqueSuffix}-${fileName}`;
+    }
+    if (target === 'teknisi-ktp') {
+        return `users/${userId}/ktp/${uniqueSuffix}-${fileName}`;
+    }
+    if (target === 'teknisi-selfie') {
+        return `users/${userId}/selfie/${uniqueSuffix}-${fileName}`;
+    }
+    if (target === 'order-proof') {
+        const orderId = slugifyPathSegment(options.orderId || 'manual');
+        return `users/${userId}/orders/${orderId}/proofs/${uniqueSuffix}-${fileName}`;
+    }
+
+    throw new Error('Target upload storage tidak dikenal.');
+}
+
+function getStorageObjectPathFromUrl(url, bucketHint = '') {
+    const raw = String(url || '').trim();
+    if (!raw) return '';
+    try {
+        const parsed = new URL(raw);
+        const marker = '/storage/v1/object/';
+        const markerIndex = parsed.pathname.indexOf(marker);
+        if (markerIndex === -1) return '';
+        const remainder = parsed.pathname.slice(markerIndex + marker.length).split('/').filter(Boolean);
+        if (!remainder.length) return '';
+        if (remainder[0] === 'public' || remainder[0] === 'authenticated') {
+            remainder.shift();
+        } else if (remainder[0] === 'sign') {
+            remainder.shift();
+            if (remainder[0] === 'public' || remainder[0] === 'authenticated') remainder.shift();
+        }
+        if (bucketHint) {
+            if (remainder[0] === bucketHint) remainder.shift();
+        } else if (remainder[0] === PUBLIC_UPLOAD_BUCKET || remainder[0] === PRIVATE_DOCUMENT_BUCKET) {
+            remainder.shift();
+        }
+        return decodeURIComponent(remainder.join('/'));
+    } catch (_) {
+        return '';
+    }
+}
+
+function clearInputFileValue(inputId) {
+    const input = document.getElementById(inputId);
+    if (input) input.value = '';
+}
+
+function setElementText(elementId, message = '') {
+    const node = document.getElementById(elementId);
+    if (node) node.textContent = message;
+}
+
+function getSignedUrlCacheKey(bucket, path) {
+    return `${bucket}:${path}`;
+}
+
+async function resolveStorageImageUrl(bucket, path, options = {}) {
+    const normalizedPath = String(path || '').trim();
+    if (!bucket || !normalizedPath || !canUseSupabase()) return '';
+
+    const cacheKey = getSignedUrlCacheKey(bucket, normalizedPath);
+    if (!options.forceRefresh && runtimeState.signedImageUrlCache[cacheKey]) {
+        return runtimeState.signedImageUrlCache[cacheKey];
+    }
+
+    if (bucket === PUBLIC_UPLOAD_BUCKET) {
+        const { data } = supabaseClient.storage.from(bucket).getPublicUrl(normalizedPath);
+        const publicUrl = data?.publicUrl || '';
+        if (publicUrl) runtimeState.signedImageUrlCache[cacheKey] = publicUrl;
+        return publicUrl;
+    }
+
+    const { data, error } = await supabaseClient.storage.from(bucket).createSignedUrl(normalizedPath, 60 * 60);
+    if (error) {
+        console.warn('Gagal membuat signed URL storage:', error);
+        return '';
+    }
+
+    const signedUrl = data?.signedUrl || '';
+    if (signedUrl) runtimeState.signedImageUrlCache[cacheKey] = signedUrl;
+    return signedUrl;
+}
+
+async function uploadImageToSupabaseStorage(options = {}) {
+    if (!canUseSupabase()) throw new Error('Supabase client belum siap untuk upload storage.');
+
+    const targetConfig = getStorageTargetConfig(options.target);
+    if (!targetConfig) throw new Error('Target upload belum didukung.');
+    if (!options.userId && !remoteState.user?.id) throw new Error('Session login dibutuhkan untuk upload gambar ke storage.');
+
+    validateImageFile(options.file, { label: options.label || 'Gambar' });
+    const path = buildStoragePath({
+        target: options.target,
+        userId: options.userId || remoteState.user?.id,
+        originalName: options.file?.name || options.fileName,
+        orderId: options.orderId
+    });
+
+    const { data, error } = await supabaseClient.storage
+        .from(targetConfig.bucket)
+        .upload(path, options.file, {
+            cacheControl: '3600',
+            upsert: false,
+            contentType: options.file?.type || 'image/jpeg'
+        });
+
+    if (error) throw error;
+
+    const finalPath = data?.path || path;
+    const resolvedUrl = await resolveStorageImageUrl(targetConfig.bucket, finalPath, { forceRefresh: true });
+    return {
+        bucket: targetConfig.bucket,
+        path: finalPath,
+        url: resolvedUrl
+    };
+}
+
+async function deleteImageFromSupabaseStorage(options = {}) {
+    if (!canUseSupabase()) {
+        return {
+            ok: false,
+            skipped: true,
+            message: 'Supabase client belum siap untuk menghapus file storage.'
+        };
+    }
+
+    const bucket = String(options.bucket || '').trim();
+    const path = String(options.path || getStorageObjectPathFromUrl(options.url, bucket)).trim();
+    if (!bucket || !path) {
+        return {
+            ok: true,
+            skipped: true,
+            message: 'Path storage kosong, hanya referensi database/UI yang akan dibersihkan.'
+        };
+    }
+
+    const { error } = await supabaseClient.storage.from(bucket).remove([path]);
+    if (error) {
+        const message = String(error?.message || error || '').toLowerCase();
+        if (message.includes('not found') || message.includes('no object found')) {
+            return {
+                ok: true,
+                skipped: true,
+                message: 'File storage sudah tidak ada; referensi tetap dibersihkan.'
+            };
+        }
+        throw error;
+    }
+
+    delete runtimeState.signedImageUrlCache[getSignedUrlCacheKey(bucket, path)];
+    return {
+        ok: true,
+        skipped: false,
+        message: 'File storage berhasil dihapus.'
+    };
+}
+
 function normalizeImageCatalog(items) {
     const baseMap = new Map(DEFAULT_IMAGE_CATALOG.map((item) => [item.id, deepClone(item)]));
     (items || []).forEach((item) => {
@@ -1257,6 +1638,7 @@ function showLanding() {
     syncConnectionStatusBanner();
     renderDefaultAccountList();
     renderLandingSessionNotice();
+    syncResendVerificationUI();
 }
 
 function openAppLayout() {
@@ -1276,6 +1658,7 @@ function showRegisterPage() {
     setBodyAppMode('register');
     syncInstallPromptUI();
     syncConnectionStatusBanner();
+    syncResendVerificationUI();
     safeScrollTop({ force: true, behavior: 'auto' });
 }
 
@@ -1656,45 +2039,237 @@ function collectRegisterTeknisiForm() {
     };
 }
 
+function createPreviewCardHtml(src, options = {}) {
+    const deleteTarget = String(options.deleteTarget || '').trim();
+    const deleteLabel = options.deleteLabel || 'Hapus Gambar';
+    const deleteArgs = Array.isArray(options.deleteArgs) ? options.deleteArgs.map((item) => JSON.stringify(item)).join(', ') : '';
+    return `
+        <div class="image-card image-card--with-actions">
+            <img src="${escapeHtml(src)}" alt="${escapeHtml(options.alt || 'Preview upload')}" loading="lazy" decoding="async">
+            ${options.caption ? `<p class="image-card-caption">${escapeHtml(options.caption)}</p>` : ''}
+            ${deleteTarget ? `
+                <div class="image-card-actions">
+                    <button type="button" class="btn btn-danger btn-xs full-width-mobile" onclick="${deleteTarget}(${deleteArgs})">${escapeHtml(deleteLabel)}</button>
+                </div>
+            ` : ''}
+        </div>
+    `;
+}
+
 async function previewRegUpload(event, previewId) {
     const file = event.target.files?.[0];
     if (!file) return;
+    validateImageFile(file, { label: 'Gambar pendaftaran' });
     const dataUrl = await readFileAsDataUrl(file);
     const preview = document.getElementById(previewId);
-    preview.innerHTML = `<div class="image-card"><img src="${escapeHtml(dataUrl)}" alt="Preview upload" loading="lazy" decoding="async"></div>`;
-    if (previewId === 'regKonUnitPreview') draftUploads.regKonUnitImages = [dataUrl];
+    if (!preview) return;
+    preview.innerHTML = createPreviewCardHtml(dataUrl, {
+        alt: 'Preview upload',
+        deleteTarget: 'clearImagePreviewState',
+        deleteArgs: [
+            previewId === 'regKonUnitPreview'
+                ? 'register-konsumen-unit'
+                : previewId === 'regTekIDPreview'
+                    ? 'register-teknisi-ktp'
+                    : 'register-teknisi-selfie'
+        ],
+        deleteLabel: 'Hapus Gambar'
+    });
+    if (previewId === 'regKonUnitPreview') {
+        draftUploads.regKonUnitImages = [dataUrl];
+        draftUploads.regKonUnitFiles = [{
+            dataUrl,
+            name: file.name,
+            type: file.type,
+            size: file.size,
+            lastModified: file.lastModified
+        }];
+    }
     if (previewId === 'regTekIDPreview') {
         draftUploads.regTekKtpPhoto = dataUrl;
+        draftUploads.regTekKtpFile = {
+            dataUrl,
+            name: file.name,
+            type: file.type,
+            size: file.size,
+            lastModified: file.lastModified
+        };
         scheduleOcrWarmup();
     }
-    if (previewId === 'regTekSelfiePreview') draftUploads.regTekSelfiePhoto = dataUrl;
+    if (previewId === 'regTekSelfiePreview') {
+        draftUploads.regTekSelfiePhoto = dataUrl;
+        draftUploads.regTekSelfieFile = {
+            dataUrl,
+            name: file.name,
+            type: file.type,
+            size: file.size,
+            lastModified: file.lastModified
+        };
+    }
 }
 
 async function handleKonUnitUpload(event) {
     const file = event.target.files?.[0];
     const profile = getCurrentUser();
     if (!file || !profile) return;
-    const dataUrl = await readFileAsDataUrl(file);
-    updateLocalUiCache((cache) => {
-        cache.unitImagesByUser[profile.id] = cache.unitImagesByUser[profile.id] || [];
-        cache.unitImagesByUser[profile.id].push(dataUrl);
-    });
-    renderKonsumenUnit();
-    showToast('Foto unit disimpan sebagai cache UI lokal.', 'success');
+    const lockKey = `upload:konsumen-unit:${profile.id}`;
+    if (runtimeState.uploadLocks[lockKey]) return;
+    runtimeState.uploadLocks[lockKey] = true;
+    setElementText('konUnitUploadStatus', 'Mengunggah foto unit ke Supabase Storage...');
+
+    try {
+        const uploaded = await uploadImageToSupabaseStorage({
+            file,
+            target: 'konsumen-unit',
+            userId: profile.id,
+            label: 'Foto unit'
+        });
+        const nextPaths = [...normalizeTextArray(profile.unitImagePaths), uploaded.path];
+        const nextUrls = [...normalizeTextArray(profile.unitImageUrls), uploaded.url];
+        const updatedProfile = await persistUploadedImageReference({
+            target: 'konsumen-unit',
+            paths: nextPaths,
+            urls: nextUrls
+        });
+        await syncUploadedAssetToRemote({
+            target: 'konsumen-unit',
+            profileId: profile.id,
+            bucket: uploaded.bucket,
+            path: uploaded.path
+        });
+        clearInputFileValue(event.target.id);
+        setElementText('konUnitUploadStatus', 'Foto unit berhasil tersimpan di Supabase Storage.');
+        await renderKonsumenUnit();
+        showToast(`Foto unit berhasil diunggah untuk ${updatedProfile.name}.`, 'success');
+    } catch (error) {
+        console.error('Gagal upload foto unit:', error);
+        setElementText('konUnitUploadStatus', toUserFacingError(error, 'Upload foto unit gagal.'));
+        showToast(toUserFacingError(error, 'Upload foto unit gagal.'), 'error');
+    } finally {
+        runtimeState.uploadLocks[lockKey] = false;
+    }
 }
 
 async function handleTekDocUpload(event, type) {
     const file = event.target.files?.[0];
     const profile = getCurrentUser();
     if (!file || !profile) return;
-    const dataUrl = await readFileAsDataUrl(file);
-    updateLocalUiCache((cache) => {
-        cache.teknisiDocsByUser[profile.id] = cache.teknisiDocsByUser[profile.id] || { ktpPhoto: '', selfiePhoto: '' };
-        if (type === 'ktp') cache.teknisiDocsByUser[profile.id].ktpPhoto = dataUrl;
-        if (type === 'selfie') cache.teknisiDocsByUser[profile.id].selfiePhoto = dataUrl;
-    });
-    renderTeknisiDocs();
-    document.getElementById('teknisiDocStatus').textContent = `Dokumen ${type === 'ktp' ? 'KTP' : 'foto diri'} tersimpan sebagai cache UI lokal.`;
+    const target = type === 'ktp' ? 'teknisi-ktp' : 'teknisi-selfie';
+    const label = type === 'ktp' ? 'Foto KTP' : 'Foto diri';
+    const lockKey = `upload:${target}:${profile.id}`;
+    if (runtimeState.uploadLocks[lockKey]) return;
+    runtimeState.uploadLocks[lockKey] = true;
+    setElementText('teknisiDocStatus', `Mengunggah ${label.toLowerCase()} ke Supabase Storage...`);
+
+    try {
+        const uploaded = await uploadImageToSupabaseStorage({
+            file,
+            target,
+            userId: profile.id,
+            label
+        });
+        await persistUploadedImageReference({
+            target,
+            path: uploaded.path,
+            url: uploaded.url
+        });
+        await syncUploadedAssetToRemote({
+            target,
+            profileId: profile.id,
+            bucket: uploaded.bucket,
+            path: uploaded.path
+        });
+        clearInputFileValue(event.target.id);
+        await renderTeknisiDocs();
+        setElementText('teknisiDocStatus', `${label} berhasil tersimpan di Supabase Storage.`);
+        showToast(`${label} berhasil diunggah.`, 'success');
+    } catch (error) {
+        console.error(`Gagal upload dokumen teknisi (${type}):`, error);
+        setElementText('teknisiDocStatus', toUserFacingError(error, `Upload ${label.toLowerCase()} gagal.`));
+        showToast(toUserFacingError(error, `Upload ${label.toLowerCase()} gagal.`), 'error');
+    } finally {
+        runtimeState.uploadLocks[lockKey] = false;
+    }
+}
+
+async function finalizeSignupUploadsAfterSession(role) {
+    const profile = await requireAuthenticatedProfile(false);
+    if (!profile) return null;
+
+    if (role === 'konsumen' && draftUploads.regKonUnitFiles.length) {
+        const uploads = [];
+        for (const draft of draftUploads.regKonUnitFiles) {
+            const file = createFileLikeFromDraft(draft, draft.name || 'foto-unit.jpg');
+            const uploaded = await uploadImageToSupabaseStorage({
+                file,
+                target: 'konsumen-unit',
+                userId: profile.id,
+                label: 'Foto unit'
+            });
+            uploads.push(uploaded);
+        }
+
+        const updatedProfile = await persistUploadedImageReference({
+            target: 'konsumen-unit',
+            paths: uploads.map((item) => item.path),
+            urls: uploads.map((item) => item.url)
+        });
+        await syncUploadedAssetToRemote({
+            target: 'konsumen-unit',
+            profileId: profile.id,
+            bucket: PUBLIC_UPLOAD_BUCKET,
+            paths: uploads.map((item) => item.path)
+        });
+        return updatedProfile;
+    }
+
+    if (role === 'teknisi') {
+        let updatedProfile = profile;
+
+        if (draftUploads.regTekKtpFile) {
+            const ktpUpload = await uploadImageToSupabaseStorage({
+                file: createFileLikeFromDraft(draftUploads.regTekKtpFile, draftUploads.regTekKtpFile.name || 'ktp.jpg'),
+                target: 'teknisi-ktp',
+                userId: profile.id,
+                label: 'Foto KTP'
+            });
+            updatedProfile = await persistUploadedImageReference({
+                target: 'teknisi-ktp',
+                path: ktpUpload.path,
+                url: ktpUpload.url
+            });
+            await syncUploadedAssetToRemote({
+                target: 'teknisi-ktp',
+                profileId: profile.id,
+                bucket: PRIVATE_DOCUMENT_BUCKET,
+                path: ktpUpload.path
+            });
+        }
+
+        if (draftUploads.regTekSelfieFile) {
+            const selfieUpload = await uploadImageToSupabaseStorage({
+                file: createFileLikeFromDraft(draftUploads.regTekSelfieFile, draftUploads.regTekSelfieFile.name || 'selfie.jpg'),
+                target: 'teknisi-selfie',
+                userId: profile.id,
+                label: 'Foto diri'
+            });
+            updatedProfile = await persistUploadedImageReference({
+                target: 'teknisi-selfie',
+                path: selfieUpload.path,
+                url: selfieUpload.url
+            });
+            await syncUploadedAssetToRemote({
+                target: 'teknisi-selfie',
+                profileId: profile.id,
+                bucket: PRIVATE_DOCUMENT_BUCKET,
+                path: selfieUpload.path
+            });
+        }
+
+        return updatedProfile;
+    }
+
+    return profile;
 }
 
 function getShareLocation(prefix) {
@@ -2089,15 +2664,26 @@ function findVisibleOrderById(orderId) {
     return [...remoteState.currentOrders, ...remoteState.adminOrders].find((item) => item.id === orderId) || null;
 }
 
-function openOrderDetail(orderId) {
+async function openOrderDetail(orderId) {
     const order = findVisibleOrderById(orderId);
     if (!order) {
         showToast('Detail pesanan tidak ditemukan.', 'warning');
         return;
     }
 
-    const proof = order.proofImage
-        ? `<div class="image-card"><img src="${escapeHtml(order.proofImage)}" alt="Bukti pekerjaan"></div>`
+    const proofUrl = order.proofImageUrl || order.proofImage || await resolveStorageImageUrl(PUBLIC_UPLOAD_BUCKET, order.proofImagePath);
+    const canRemoveProof = remoteState.profile?.role === 'teknisi' && remoteState.profile?.id === order.teknisiId && proofUrl;
+    const proof = proofUrl
+        ? `
+            <div class="image-card">
+                <img src="${escapeHtml(proofUrl)}" alt="Bukti pekerjaan">
+                ${canRemoveProof ? `
+                    <div class="image-card-actions">
+                        <button type="button" class="btn btn-danger btn-xs" onclick="confirmRemoveOrderProof('${order.id}')">Hapus Gambar</button>
+                    </div>
+                ` : ''}
+            </div>
+        `
         : '<p class="text-muted">Belum ada bukti pekerjaan.</p>';
 
     document.getElementById('modalDetailBody').innerHTML = `
@@ -2117,6 +2703,51 @@ function openOrderDetail(orderId) {
         <div class="detail-proof">${proof}</div>
     `;
     document.getElementById('modalDetail').style.display = 'flex';
+}
+
+async function confirmRemoveKonsumenUnitImage(index) {
+    if (!window.confirm('Hapus gambar unit ini dari Supabase Storage dan profil Anda?')) return;
+    try {
+        await removeUploadedImage({ target: 'konsumen-unit', index });
+        setElementText('konUnitUploadStatus', 'Gambar unit berhasil dihapus.');
+        await renderKonsumenUnit();
+        showToast('Gambar unit berhasil dihapus.', 'success');
+    } catch (error) {
+        console.error('Gagal menghapus gambar unit:', error);
+        showToast(toUserFacingError(error, 'Gagal menghapus gambar unit.'), 'error');
+    }
+}
+
+async function confirmRemoveTeknisiDocument(type) {
+    const target = type === 'ktp' ? 'teknisi-ktp' : 'teknisi-selfie';
+    const label = type === 'ktp' ? 'foto KTP' : 'foto diri';
+    if (!window.confirm(`Hapus ${label} ini dari Storage dan profil teknisi?`)) return;
+    try {
+        await removeUploadedImage({ target });
+        await renderTeknisiDocs();
+        setElementText('teknisiDocStatus', `${label} berhasil dihapus.`);
+        showToast(`${label.charAt(0).toUpperCase()}${label.slice(1)} berhasil dihapus.`, 'success');
+    } catch (error) {
+        console.error('Gagal menghapus dokumen teknisi:', error);
+        showToast(toUserFacingError(error, `Gagal menghapus ${label}.`), 'error');
+    }
+}
+
+async function confirmRemoveOrderProof(orderId) {
+    if (!window.confirm('Hapus bukti pekerjaan ini? Status pesanan akan dikembalikan ke dikerjakan agar tidak menipu seolah sudah selesai.')) return;
+    try {
+        await removeUploadedImage({ target: 'order-proof', orderId });
+        closeModal('modalDetail');
+        setElementText('uploadProofStatus', 'Bukti pekerjaan berhasil dihapus dan status pesanan dikembalikan ke dikerjakan.');
+        if (currentView === 'teknisi-upload') {
+            uploadingOrderId = orderId;
+            await renderTeknisiUpload();
+        }
+        showToast('Bukti pekerjaan berhasil dihapus.', 'success');
+    } catch (error) {
+        console.error('Gagal menghapus bukti pekerjaan:', error);
+        showToast(toUserFacingError(error, 'Gagal menghapus bukti pekerjaan.'), 'error');
+    }
 }
 
 async function startJob(orderId) {
@@ -2145,18 +2776,26 @@ async function startJob(orderId) {
 function openUploadProof(orderId) {
     if (!requireRole('teknisi')) return;
     uploadingOrderId = orderId;
-    uploadProofImage = null;
-    document.getElementById('uploadPreview').style.display = 'none';
+    clearImagePreviewState('upload-proof-draft');
     navigateTo('teknisi-upload');
 }
 
 async function handleFileUpload(event) {
     const file = event.target.files?.[0];
     if (!file) return;
+    validateImageFile(file, { label: 'Bukti pekerjaan' });
     uploadProofImage = await readFileAsDataUrl(file);
+    uploadProofFileMeta = {
+        dataUrl: uploadProofImage,
+        name: file.name,
+        type: file.type,
+        size: file.size,
+        lastModified: file.lastModified
+    };
     document.getElementById('uploadPreviewImg').src = uploadProofImage;
     document.getElementById('uploadFileName').textContent = file.name;
     document.getElementById('uploadPreview').style.display = 'block';
+    setElementText('uploadProofStatus', 'Preview bukti siap dikirim ke Supabase Storage.');
 }
 
 async function submitUploadProof() {
@@ -2168,26 +2807,52 @@ async function submitUploadProof() {
         return;
     }
 
+    const lockKey = `upload:order-proof:${uploadingOrderId}`;
+    if (runtimeState.uploadLocks[lockKey]) return;
+    runtimeState.uploadLocks[lockKey] = true;
+    setElementText('uploadProofStatus', 'Mengunggah bukti pekerjaan ke Supabase Storage...');
+
     try {
-        const { error } = await supabaseClient
-            .from('orders')
-            .update({
-                proof_image_data: uploadProofImage,
-                status: 'Selesai'
-            })
-            .eq('id', uploadingOrderId)
-            .eq('teknisi_id', profile.id);
+        const file = createFileLikeFromDraft(uploadProofFileMeta || {
+            dataUrl: uploadProofImage,
+            name: `bukti-${uploadingOrderId}.jpg`,
+            type: 'image/jpeg'
+        }, `bukti-${uploadingOrderId}.jpg`);
+        const uploaded = await uploadImageToSupabaseStorage({
+            file,
+            target: 'order-proof',
+            userId: profile.id,
+            orderId: uploadingOrderId,
+            label: 'Bukti pekerjaan'
+        });
+        await persistUploadedImageReference({
+            target: 'order-proof',
+            orderId: uploadingOrderId,
+            path: uploaded.path,
+            url: uploaded.url,
+            status: 'Selesai'
+        });
+        await syncUploadedAssetToRemote({
+            target: 'order-proof',
+            profileId: profile.id,
+            orderId: uploadingOrderId,
+            bucket: uploaded.bucket,
+            path: uploaded.path
+        });
 
-        if (error) throw error;
-
-        uploadProofImage = null;
+        clearImagePreviewState('upload-proof-draft', {
+            message: 'Bukti pekerjaan berhasil dikirim ke Supabase.'
+        });
         uploadingOrderId = null;
         await loadCurrentOrdersForProfile();
         await navigateTo('teknisi-home');
         showToast('Bukti pekerjaan berhasil dikirim ke Supabase.', 'success');
     } catch (error) {
         console.error('Gagal upload bukti pekerjaan:', error);
+        setElementText('uploadProofStatus', toUserFacingError(error, 'Gagal mengirim bukti pekerjaan.'));
         showToast(toUserFacingError(error, 'Gagal mengirim bukti pekerjaan.'), 'error');
+    } finally {
+        runtimeState.uploadLocks[lockKey] = false;
     }
 }
 
@@ -2430,14 +3095,151 @@ function toUserFacingError(error, fallback = 'Terjadi kesalahan.') {
     if (normalized.includes('invalid login credentials')) return 'Email atau password salah.';
     if (normalized.includes('email not confirmed')) return 'Email belum dikonfirmasi. Cek inbox Anda lalu login kembali.';
     if (normalized.includes('user already registered')) return 'Email sudah terdaftar. Silakan login langsung.';
+    if (normalized.includes('email rate limit exceeded') || normalized.includes('over_email_send_rate_limit')) return 'Tunggu sebentar sebelum meminta email verifikasi lagi.';
+    if (normalized.includes('429')) return 'Terlalu banyak permintaan. Tunggu sebentar lalu coba lagi.';
     if (normalized.includes('duplicate key') && normalized.includes('username')) return 'Username sudah digunakan akun lain.';
     if (normalized.includes('violates row-level security')) return 'Policy Supabase untuk profile/order belum sesuai. Jalankan SQL final di README lalu coba lagi.';
+    if (normalized.includes('mime') || normalized.includes('content type')) return 'Format file belum sesuai. Gunakan JPG, PNG, WEBP, HEIC, atau HEIF.';
+    if (normalized.includes('payload too large') || normalized.includes('file too large')) return 'Ukuran file terlalu besar. Maksimal 8 MB per gambar.';
     if (missingColumn && OPTIONAL_PROFILE_COLUMN_SET.has(missingColumn)) {
         return 'Struktur profile Supabase sedang menyesuaikan schema. Aplikasi akan lanjut memakai fallback aman dan data inti tetap bisa dipakai.';
     }
     if (normalized.includes('menunggu verifikasi admin')) return 'Status profile lama masih pending. Setelah email confirmed, app akan mengaktifkan profile publik otomatis.';
 
     return message || fallback;
+}
+
+function setPendingVerificationEmail(email = '') {
+    const normalized = normalizeEmail(email);
+    runtimeState.pendingVerificationEmail = normalized;
+    try {
+        if (normalized) {
+            localStorage.setItem(PENDING_VERIFICATION_EMAIL_KEY, normalized);
+        } else {
+            localStorage.removeItem(PENDING_VERIFICATION_EMAIL_KEY);
+        }
+    } catch (_) {}
+}
+
+function hydratePendingVerificationEmail() {
+    try {
+        const stored = localStorage.getItem(PENDING_VERIFICATION_EMAIL_KEY);
+        if (stored) runtimeState.pendingVerificationEmail = normalizeEmail(stored);
+    } catch (_) {}
+}
+
+function scheduleResendVerificationUiRefresh() {
+    window.clearTimeout(runtimeState.resendVerificationTimer);
+    const remaining = runtimeState.resendVerificationCooldownUntil - Date.now();
+    if (remaining <= 0) {
+        runtimeState.resendVerificationTimer = null;
+        syncResendVerificationUI();
+        return;
+    }
+    runtimeState.resendVerificationTimer = window.setTimeout(() => {
+        scheduleResendVerificationUiRefresh();
+    }, Math.min(1000, remaining));
+}
+
+function syncResendVerificationUI(options = {}) {
+    const card = document.getElementById('verificationHelpCard');
+    const emailNode = document.getElementById('verificationHelpEmail');
+    const textNode = document.getElementById('verificationHelpText');
+    const statusNode = document.getElementById('verificationHelpStatus');
+    const actionButton = document.getElementById('btnResendVerification');
+    if (!card || !emailNode || !textNode || !statusNode || !actionButton) return;
+
+    const typedEmail = normalizeEmail(document.getElementById('loginIdentifier')?.value || '');
+    const email = normalizeEmail(options.email || runtimeState.pendingVerificationEmail || typedEmail);
+    const loginPageVisible = document.getElementById('loginPage')?.style.display !== 'none';
+    const shouldShow = Boolean(email) && loginPageVisible;
+    const remainingMs = Math.max(0, runtimeState.resendVerificationCooldownUntil - Date.now());
+
+    card.hidden = !shouldShow;
+    if (!shouldShow) {
+        statusNode.textContent = '';
+        return;
+    }
+
+    emailNode.textContent = email;
+    textNode.textContent = options.message || 'Jika link verifikasi sebelumnya kedaluwarsa atau email belum masuk, kirim ulang verifikasi ke alamat ini.';
+    actionButton.disabled = runtimeState.resendVerificationInFlight || remainingMs > 0;
+    actionButton.dataset.email = email;
+    statusNode.textContent = runtimeState.resendVerificationInFlight
+        ? 'Mengirim ulang email verifikasi...'
+        : remainingMs > 0
+            ? `Tunggu ${Math.ceil(remainingMs / 1000)} detik sebelum kirim ulang lagi.`
+            : 'Email verifikasi akan dikirim lewat jalur resmi Supabase Auth.';
+}
+
+async function resendSignupVerificationEmail(email) {
+    if (!canUseSupabase()) throw new Error('Supabase client belum siap.');
+    const normalizedEmail = normalizeEmail(email);
+    if (!normalizedEmail) throw new Error('Email verifikasi belum tersedia.');
+
+    if (typeof supabaseClient.auth.resend === 'function') {
+        const { error } = await supabaseClient.auth.resend({
+            type: 'signup',
+            email: normalizedEmail,
+            options: {
+                emailRedirectTo: getAppBaseUrl()
+            }
+        });
+        if (error) throw error;
+        return { ok: true, via: 'client' };
+    }
+
+    const { data, error } = await supabaseClient.functions.invoke('resend-signup-verification', {
+        body: {
+            email: normalizedEmail,
+            redirectTo: getAppBaseUrl()
+        }
+    });
+    if (error) throw error;
+    return {
+        ok: true,
+        via: 'edge-function',
+        data
+    };
+}
+
+async function handleResendVerificationEmail() {
+    const button = document.getElementById('btnResendVerification');
+    if (runtimeState.resendVerificationInFlight) return false;
+    if ((runtimeState.resendVerificationCooldownUntil - Date.now()) > 0) {
+        syncResendVerificationUI();
+        return false;
+    }
+
+    const email = normalizeEmail(button?.dataset?.email || document.getElementById('loginIdentifier')?.value || runtimeState.pendingVerificationEmail);
+    if (!email) {
+        showToast('Masukkan email yang belum terverifikasi terlebih dahulu.', 'warning');
+        return false;
+    }
+
+    runtimeState.resendVerificationInFlight = true;
+    syncResendVerificationUI({ email });
+
+    try {
+        await resendSignupVerificationEmail(email);
+        setPendingVerificationEmail(email);
+        runtimeState.resendVerificationCooldownUntil = Date.now() + RESEND_VERIFICATION_COOLDOWN_MS;
+        scheduleResendVerificationUiRefresh();
+        syncResendVerificationUI({
+            email,
+            message: 'Email verifikasi baru sedang dikirim. Cek inbox dan folder spam Anda.'
+        });
+        showToast(`Email verifikasi baru dikirim ke ${email}.`, 'success');
+    } catch (error) {
+        console.error('Gagal kirim ulang email verifikasi:', error);
+        showToast(toUserFacingError(error, 'Gagal mengirim ulang email verifikasi.'), 'error');
+        syncResendVerificationUI({ email });
+    } finally {
+        runtimeState.resendVerificationInFlight = false;
+        syncResendVerificationUI({ email });
+    }
+
+    return false;
 }
 
 function getLocalUiCache() {
@@ -2456,12 +3258,245 @@ function updateLocalUiCache(mutator) {
 
 function getUnitImagesForUser(userId) {
     const cache = getLocalUiCache();
-    return Array.isArray(cache.unitImagesByUser?.[userId]) ? cache.unitImagesByUser[userId] : [];
+    const localImages = Array.isArray(cache.unitImagesByUser?.[userId]) ? cache.unitImagesByUser[userId] : [];
+    const remoteImages = remoteState.profile?.id === userId ? normalizeTextArray(remoteState.profile.unitImageUrls) : [];
+    return Array.from(new Set([...remoteImages, ...localImages].filter(Boolean)));
 }
 
 function getTeknisiDocsForUser(userId) {
     const cache = getLocalUiCache();
-    return cache.teknisiDocsByUser?.[userId] || { ktpPhoto: '', selfiePhoto: '' };
+    const localDocs = cache.teknisiDocsByUser?.[userId] || { ktpPhoto: '', selfiePhoto: '' };
+    if (remoteState.profile?.id !== userId) return localDocs;
+    return {
+        ktpPhoto: remoteState.profile.ktpPhotoUrl || localDocs.ktpPhoto || '',
+        selfiePhoto: remoteState.profile.selfiePhotoUrl || localDocs.selfiePhoto || '',
+        ktpPhotoPath: remoteState.profile.ktpPhotoPath || '',
+        selfiePhotoPath: remoteState.profile.selfiePhotoPath || ''
+    };
+}
+
+function clearImagePreviewState(target, options = {}) {
+    switch (target) {
+    case 'register-konsumen-unit':
+        draftUploads.regKonUnitImages = [];
+        draftUploads.regKonUnitFiles = [];
+        const regKonPreview = document.getElementById('regKonUnitPreview');
+        if (regKonPreview) regKonPreview.innerHTML = '';
+        clearInputFileValue('regKonUnitCamera');
+        clearInputFileValue('regKonUnitDevice');
+        break;
+    case 'register-teknisi-ktp':
+        draftUploads.regTekKtpPhoto = '';
+        draftUploads.regTekKtpFile = null;
+        draftUploads.ocrLastResult = null;
+        const regKtpPreview = document.getElementById('regTekIDPreview');
+        const ocrPreviewCard = document.getElementById('ocrPreviewCard');
+        if (regKtpPreview) regKtpPreview.innerHTML = '';
+        clearInputFileValue('regTekIDCamera');
+        clearInputFileValue('regTekIDDevice');
+        setElementText('ocrStatus', 'OCR siap digunakan setelah foto KTP diunggah.');
+        setElementText('ocrProgress', '');
+        if (ocrPreviewCard) ocrPreviewCard.style.display = 'none';
+        break;
+    case 'register-teknisi-selfie':
+        draftUploads.regTekSelfiePhoto = '';
+        draftUploads.regTekSelfieFile = null;
+        const regSelfiePreview = document.getElementById('regTekSelfiePreview');
+        if (regSelfiePreview) regSelfiePreview.innerHTML = '';
+        clearInputFileValue('regTekSelfieCamera');
+        clearInputFileValue('regTekSelfieDevice');
+        break;
+    case 'upload-proof-draft':
+        uploadProofImage = null;
+        uploadProofFileMeta = null;
+        const proofPreview = document.getElementById('uploadPreview');
+        if (proofPreview) proofPreview.style.display = 'none';
+        const proofImage = document.getElementById('uploadPreviewImg');
+        if (proofImage) proofImage.removeAttribute('src');
+        setElementText('uploadFileName', '');
+        setElementText('uploadProofStatus', options.message || 'Belum ada bukti yang dipilih.');
+        clearInputFileValue('uploadFileInput');
+        break;
+    default:
+        break;
+    }
+}
+
+async function updateOrderForCurrentTeknisi(orderId, payload = {}) {
+    const profile = await requireAuthenticatedProfile(false);
+    if (!profile || profile.role !== 'teknisi') throw new Error('Session teknisi dibutuhkan.');
+
+    const workingPayload = { ...payload };
+    while (true) {
+        const { data, error } = await supabaseClient
+            .from('orders')
+            .update(workingPayload)
+            .eq('id', orderId)
+            .eq('teknisi_id', profile.id)
+            .select('*')
+            .single();
+
+        if (!error) return mapOrderRecord(data);
+
+        const missingColumn = extractMissingColumnName(error);
+        if (missingColumn && OPTIONAL_ORDER_COLUMNS.has(missingColumn) && missingColumn in workingPayload) {
+            delete workingPayload[missingColumn];
+            continue;
+        }
+
+        throw error;
+    }
+}
+
+async function persistUploadedImageReference(options = {}) {
+    const profile = await requireAuthenticatedProfile(false);
+    if (!profile) throw new Error('Session login dibutuhkan untuk menyimpan referensi gambar.');
+
+    if (options.target === 'konsumen-unit') {
+        const nextPaths = normalizeTextArray(options.paths);
+        const nextUrls = normalizeTextArray(options.urls);
+        const updatedProfile = await upsertOwnProfile(validateProfilePayloadForRole('konsumen', {
+            ...profile,
+            unit_image_paths: nextPaths,
+            unit_image_urls: nextUrls
+        }));
+        if (nextPaths.length && updatedProfile.unitImagePaths.length < nextPaths.length) {
+            const newestPath = nextPaths[nextPaths.length - 1];
+            const newestUrl = nextUrls[nextUrls.length - 1] || '';
+            await deleteImageFromSupabaseStorage({ bucket: PUBLIC_UPLOAD_BUCKET, path: newestPath, url: newestUrl });
+            throw new Error('Kolom storage foto unit belum siap di schema profiles. Jalankan migration storage terlebih dahulu.');
+        }
+        applySupabaseSession(updatedProfile);
+        updateLocalUiCache((cache) => {
+            cache.unitImagesByUser[profile.id] = nextUrls;
+        });
+        return updatedProfile;
+    }
+
+    if (options.target === 'teknisi-ktp' || options.target === 'teknisi-selfie') {
+        const updatedProfile = await upsertOwnProfile(validateProfilePayloadForRole('teknisi', {
+            ...profile,
+            ktp_photo_path: options.target === 'teknisi-ktp' ? options.path : profile.ktpPhotoPath,
+            ktp_photo_url: options.target === 'teknisi-ktp' ? options.url : profile.ktpPhotoUrl,
+            selfie_photo_path: options.target === 'teknisi-selfie' ? options.path : profile.selfiePhotoPath,
+            selfie_photo_url: options.target === 'teknisi-selfie' ? options.url : profile.selfiePhotoUrl
+        }));
+        if (options.target === 'teknisi-ktp' && options.path && updatedProfile.ktpPhotoPath !== options.path) {
+            await deleteImageFromSupabaseStorage({ bucket: PRIVATE_DOCUMENT_BUCKET, path: options.path, url: options.url });
+            throw new Error('Kolom storage foto KTP belum siap di schema profiles. Jalankan migration storage terlebih dahulu.');
+        }
+        if (options.target === 'teknisi-selfie' && options.path && updatedProfile.selfiePhotoPath !== options.path) {
+            await deleteImageFromSupabaseStorage({ bucket: PRIVATE_DOCUMENT_BUCKET, path: options.path, url: options.url });
+            throw new Error('Kolom storage foto diri belum siap di schema profiles. Jalankan migration storage terlebih dahulu.');
+        }
+        applySupabaseSession(updatedProfile);
+        updateLocalUiCache((cache) => {
+            cache.teknisiDocsByUser[profile.id] = cache.teknisiDocsByUser[profile.id] || { ktpPhoto: '', selfiePhoto: '' };
+            if (options.target === 'teknisi-ktp') cache.teknisiDocsByUser[profile.id].ktpPhoto = options.url || '';
+            if (options.target === 'teknisi-selfie') cache.teknisiDocsByUser[profile.id].selfiePhoto = options.url || '';
+        });
+        return updatedProfile;
+    }
+
+    if (options.target === 'order-proof') {
+        const updatedOrder = await updateOrderForCurrentTeknisi(options.orderId, {
+            proof_image_path: options.path || null,
+            proof_image_url: options.url || null,
+            proof_image_data: null,
+            status: options.status || 'Selesai'
+        });
+        if (options.path && updatedOrder.proofImagePath !== options.path) {
+            await deleteImageFromSupabaseStorage({ bucket: PUBLIC_UPLOAD_BUCKET, path: options.path, url: options.url });
+            throw new Error('Kolom storage bukti pekerjaan belum siap di schema orders. Jalankan migration storage terlebih dahulu.');
+        }
+        return updatedOrder;
+    }
+
+    throw new Error('Persist referensi gambar belum didukung untuk target ini.');
+}
+
+async function removeUploadedImage(options = {}) {
+    const profile = await requireAuthenticatedProfile(false);
+    if (!profile) throw new Error('Session login dibutuhkan untuk menghapus gambar.');
+
+    if (options.target === 'konsumen-unit') {
+        const currentPaths = normalizeTextArray(profile.unitImagePaths);
+        const currentUrls = normalizeTextArray(profile.unitImageUrls);
+        const targetIndex = Number(options.index);
+        if (!Number.isInteger(targetIndex) || targetIndex < 0) throw new Error('Index gambar unit tidak valid.');
+        const path = currentPaths[targetIndex] || '';
+        const url = currentUrls[targetIndex] || '';
+        await deleteImageFromSupabaseStorage({
+            bucket: PUBLIC_UPLOAD_BUCKET,
+            path,
+            url
+        });
+        const nextPaths = currentPaths.filter((_, index) => index !== targetIndex);
+        const nextUrls = currentUrls.filter((_, index) => index !== targetIndex);
+        const updatedProfile = await persistUploadedImageReference({
+            target: 'konsumen-unit',
+            paths: nextPaths,
+            urls: nextUrls
+        });
+        await syncDeletionToRemote({
+            target: 'konsumen-unit',
+            profileId: profile.id,
+            path,
+            bucket: PUBLIC_UPLOAD_BUCKET
+        });
+        return updatedProfile;
+    }
+
+    if (options.target === 'teknisi-ktp' || options.target === 'teknisi-selfie') {
+        const isKtp = options.target === 'teknisi-ktp';
+        const path = isKtp ? profile.ktpPhotoPath : profile.selfiePhotoPath;
+        const url = isKtp ? profile.ktpPhotoUrl : profile.selfiePhotoUrl;
+        await deleteImageFromSupabaseStorage({
+            bucket: PRIVATE_DOCUMENT_BUCKET,
+            path,
+            url
+        });
+        const updatedProfile = await persistUploadedImageReference({
+            target: options.target,
+            path: '',
+            url: ''
+        });
+        await syncDeletionToRemote({
+            target: options.target,
+            profileId: profile.id,
+            path,
+            bucket: PRIVATE_DOCUMENT_BUCKET
+        });
+        return updatedProfile;
+    }
+
+    if (options.target === 'order-proof') {
+        const order = findVisibleOrderById(options.orderId);
+        if (!order) throw new Error('Pesanan bukti tidak ditemukan.');
+        await deleteImageFromSupabaseStorage({
+            bucket: PUBLIC_UPLOAD_BUCKET,
+            path: order.proofImagePath,
+            url: order.proofImageUrl || order.proofImage
+        });
+        const updatedOrder = await persistUploadedImageReference({
+            target: 'order-proof',
+            orderId: order.id,
+            path: '',
+            url: '',
+            status: order.status === 'Selesai' ? 'Dikerjakan' : (order.status || 'Dikerjakan')
+        });
+        await syncDeletionToRemote({
+            target: 'order-proof',
+            orderId: order.id,
+            profileId: profile.id,
+            path: order.proofImagePath,
+            bucket: PUBLIC_UPLOAD_BUCKET
+        });
+        remoteState.currentOrders = remoteState.currentOrders.map((item) => item.id === updatedOrder.id ? updatedOrder : item);
+        return updatedOrder;
+    }
+
+    throw new Error('Target hapus gambar belum didukung.');
 }
 
 function clearRemoteSessionState(options = {}) {
@@ -2503,7 +3538,16 @@ function sanitizeProfileRecord(profile) {
         specialization: String(profile.specialization || '').trim(),
         verifiedAt: profile.verified_at || profile.verifiedAt || '',
         verifiedBy: profile.verified_by || profile.verifiedBy || '',
-        verifiedByName: profile.verified_by_name || profile.verifiedByName || ''
+        verifiedByName: profile.verified_by_name || profile.verifiedByName || '',
+        unitImagePaths: normalizeTextArray(profile.unit_image_paths || profile.unitImagePaths),
+        unitImageUrls: normalizeTextArray(profile.unit_image_urls || profile.unitImageUrls),
+        unitImages: normalizeTextArray(profile.unit_image_urls || profile.unitImageUrls || profile.unitImages),
+        ktpPhotoPath: String(profile.ktp_photo_path || profile.ktpPhotoPath || '').trim(),
+        ktpPhotoUrl: String(profile.ktp_photo_url || profile.ktpPhotoUrl || '').trim(),
+        selfiePhotoPath: String(profile.selfie_photo_path || profile.selfiePhotoPath || '').trim(),
+        selfiePhotoUrl: String(profile.selfie_photo_url || profile.selfiePhotoUrl || '').trim(),
+        ktpPhoto: String(profile.ktp_photo_url || profile.ktpPhotoUrl || profile.ktpPhoto || '').trim(),
+        selfiePhoto: String(profile.selfie_photo_url || profile.selfiePhotoUrl || profile.selfiePhoto || '').trim()
     };
 }
 
@@ -2519,6 +3563,8 @@ function mapOrderRecord(order) {
         konsumenName: order.konsumen_name || order.konsumenName || '-',
         teknisiId: order.teknisi_id || order.teknisiId || null,
         teknisiName: order.teknisi_name || order.teknisiName || null,
+        proofImagePath: order.proof_image_path || order.proofImagePath || '',
+        proofImageUrl: order.proof_image_url || order.proofImageUrl || '',
         proofImage: order.proof_image_data || order.proof_image_url || order.proofImage || '',
         createdAt: order.created_at || order.createdAt || '',
         adminConfirmationText: order.admin_confirmation_text || order.adminConfirmationText || '',
@@ -2715,6 +3761,7 @@ function getCurrentUser() {
 function applySupabaseSession(profile) {
     remoteState.profile = sanitizeProfileRecord(profile);
     currentRole = remoteState.profile?.role || null;
+    setPendingVerificationEmail('');
     return remoteState.profile;
 }
 
@@ -2830,7 +3877,13 @@ function validateProfilePayloadForRole(role, payload = {}, options = {}) {
         status: String(payload.status || PROFILE_STATUS_ACTIVE).trim(),
         verified_at: payload.verified_at || payload.verifiedAt || '',
         verified_by: payload.verified_by || payload.verifiedBy || '',
-        completed_jobs: payload.completed_jobs ?? payload.completedJobs
+        completed_jobs: payload.completed_jobs ?? payload.completedJobs,
+        unit_image_paths: normalizeTextArray(payload.unit_image_paths ?? payload.unitImagePaths),
+        unit_image_urls: normalizeTextArray(payload.unit_image_urls ?? payload.unitImageUrls),
+        ktp_photo_path: payload.ktp_photo_path || payload.ktpPhotoPath || '',
+        ktp_photo_url: payload.ktp_photo_url || payload.ktpPhotoUrl || '',
+        selfie_photo_path: payload.selfie_photo_path || payload.selfiePhotoPath || '',
+        selfie_photo_url: payload.selfie_photo_url || payload.selfiePhotoUrl || ''
     };
 
     if (!cleanPayload.id) throw new Error('User auth belum tersedia untuk profile.');
@@ -2855,13 +3908,19 @@ function validateProfilePayloadForRole(role, payload = {}, options = {}) {
         status: cleanPayload.status,
         verified_at: toNullableText(cleanPayload.verified_at),
         verified_by: toNullableText(cleanPayload.verified_by),
-        completed_jobs: toNullableNumber(cleanPayload.completed_jobs)
+        completed_jobs: toNullableNumber(cleanPayload.completed_jobs),
+        unit_image_paths: cleanPayload.unit_image_paths,
+        unit_image_urls: cleanPayload.unit_image_urls
     };
 
     if (normalizedRole === 'teknisi') {
         result.nik = toNullableText(payload.nik);
         result.specialization = toNullableText(payload.specialization || 'Semua Layanan');
         result.experience = toNullableNumber(payload.experience);
+        result.ktp_photo_path = toNullableText(cleanPayload.ktp_photo_path);
+        result.ktp_photo_url = toNullableText(cleanPayload.ktp_photo_url);
+        result.selfie_photo_path = toNullableText(cleanPayload.selfie_photo_path);
+        result.selfie_photo_url = toNullableText(cleanPayload.selfie_photo_url);
     }
 
     return result;
@@ -3401,6 +4460,8 @@ async function handleLoginSubmit(event) {
     try {
         const profile = await handleSupabaseLogin(email, password);
         if (!profile) return false;
+        setPendingVerificationEmail('');
+        syncResendVerificationUI();
         if (selectedRole && selectedRole !== profile.role) {
             showToast(`Akun Anda terdaftar sebagai ${ROLE_LABELS[profile.role] || profile.role}. Dashboard disesuaikan otomatis.`, 'warning');
         } else {
@@ -3408,6 +4469,13 @@ async function handleLoginSubmit(event) {
         }
     } catch (error) {
         console.error('Login Supabase gagal:', error);
+        if (String(error?.message || '').toLowerCase().includes('email not confirmed')) {
+            setPendingVerificationEmail(email);
+            syncResendVerificationUI({
+                email,
+                message: 'Akun ini belum terverifikasi email. Anda bisa kirim ulang email verifikasi dari tombol di bawah.'
+            });
+        }
         showToast(toUserFacingError(error, 'Login gagal. Periksa email dan password Anda.'), 'error');
     }
 
@@ -3521,10 +4589,15 @@ async function handleRegisterKonsumen(event) {
 
         if (hasSession) {
             await ensureProfileAfterAuth('konsumen', form);
+            try {
+                await finalizeSignupUploadsAfterSession('konsumen');
+            } catch (uploadError) {
+                console.warn('Upload draft konsumen setelah signup belum berhasil:', uploadError);
+                showToast('Akun berhasil dibuat, tetapi foto unit belum sempat tersimpan. Anda bisa upload ulang setelah login.', 'warning');
+            }
             await logoutSupabase();
             document.getElementById('formRegKonsumen').reset();
-            draftUploads.regKonUnitImages = [];
-            document.getElementById('regKonUnitPreview').innerHTML = '';
+            clearImagePreviewState('register-konsumen-unit');
             document.getElementById('regKonLocationResult').style.display = 'none';
             resetToPublicLanding(`Pendaftaran konsumen ${form.name} berhasil. Profile publik aktif dan siap dipakai login.`);
             document.getElementById('loginIdentifier').value = form.email;
@@ -3532,11 +4605,15 @@ async function handleRegisterKonsumen(event) {
         }
 
         document.getElementById('formRegKonsumen').reset();
-        draftUploads.regKonUnitImages = [];
-        document.getElementById('regKonUnitPreview').innerHTML = '';
+        clearImagePreviewState('register-konsumen-unit');
         document.getElementById('regKonLocationResult').style.display = 'none';
         document.getElementById('loginIdentifier').value = form.email;
+        setPendingVerificationEmail(form.email);
         showLoginPage();
+        syncResendVerificationUI({
+            email: form.email,
+            message: 'Pendaftaran sudah dibuat. Jika email verifikasi timeout, kirim ulang dari sini. Foto unit baru bisa dikirim ke Storage saat sesi login terverifikasi sudah aktif.'
+        });
         showToast('Pendaftaran konsumen berhasil dikirim. Cek email Anda; setelah email confirmed, profile publik aktif otomatis dan login langsung bisa dipakai.', 'success');
     } catch (error) {
         closePreparedPopup(waPopup);
@@ -3582,13 +4659,16 @@ async function handleRegisterTeknisi(event) {
 
         if (hasSession) {
             await ensureProfileAfterAuth('teknisi', form);
+            try {
+                await finalizeSignupUploadsAfterSession('teknisi');
+            } catch (uploadError) {
+                console.warn('Upload draft teknisi setelah signup belum berhasil:', uploadError);
+                showToast('Akun berhasil dibuat, tetapi dokumen teknisi belum sempat tersimpan. Upload ulang tersedia setelah login.', 'warning');
+            }
             await logoutSupabase();
             document.getElementById('formRegTeknisi').reset();
-            draftUploads.regTekKtpPhoto = '';
-            draftUploads.regTekSelfiePhoto = '';
-            draftUploads.ocrLastResult = null;
-            document.getElementById('regTekIDPreview').innerHTML = '';
-            document.getElementById('regTekSelfiePreview').innerHTML = '';
+            clearImagePreviewState('register-teknisi-ktp');
+            clearImagePreviewState('register-teknisi-selfie');
             document.getElementById('regTekLocationResult').style.display = 'none';
             resetToPublicLanding(`Pendaftaran teknisi ${form.name} berhasil. Profile publik aktif dan siap dipakai login.`);
             document.getElementById('loginIdentifier').value = form.email;
@@ -3596,14 +4676,16 @@ async function handleRegisterTeknisi(event) {
         }
 
         document.getElementById('formRegTeknisi').reset();
-        draftUploads.regTekKtpPhoto = '';
-        draftUploads.regTekSelfiePhoto = '';
-        draftUploads.ocrLastResult = null;
-        document.getElementById('regTekIDPreview').innerHTML = '';
-        document.getElementById('regTekSelfiePreview').innerHTML = '';
+        clearImagePreviewState('register-teknisi-ktp');
+        clearImagePreviewState('register-teknisi-selfie');
         document.getElementById('regTekLocationResult').style.display = 'none';
         document.getElementById('loginIdentifier').value = form.email;
+        setPendingVerificationEmail(form.email);
         showLoginPage();
+        syncResendVerificationUI({
+            email: form.email,
+            message: 'Pendaftaran teknisi sudah dibuat. Jika email verifikasi timeout, kirim ulang dari sini. Dokumen sensitif baru diunggah ke Storage saat sesi login terverifikasi aktif.'
+        });
         showToast('Pendaftaran teknisi berhasil dikirim. Cek email Anda; setelah email confirmed, profile publik aktif otomatis dan login langsung bisa dipakai.', 'success');
     } catch (error) {
         closePreparedPopup(waPopup);
@@ -3736,15 +4818,45 @@ function renderKonsumenProfile() {
     document.getElementById('konsumenProfileAutosave').textContent = 'Profil akan sinkron otomatis ke Supabase.';
 }
 
-function renderKonsumenUnit() {
+async function renderKonsumenUnit() {
     const user = getCurrentUser();
     const gallery = document.getElementById('konUnitGallery');
-    const images = user ? getUnitImagesForUser(user.id) : [];
-    gallery.innerHTML = images.length ? images.map((image, index) => `
-        <div class="image-card">
-            <img src="${escapeHtml(image)}" alt="Foto unit ${index + 1}" loading="lazy" decoding="async">
-        </div>
-    `).join('') : '<div class="empty-state-box"><p>Belum ada foto unit.</p></div>';
+    if (!gallery) return;
+    if (!user) {
+        gallery.innerHTML = '<div class="empty-state-box"><p>Belum ada foto unit.</p></div>';
+        return;
+    }
+
+    const imageSources = [];
+    const remotePaths = normalizeTextArray(user.unitImagePaths);
+    const remoteUrls = normalizeTextArray(user.unitImageUrls);
+    for (let index = 0; index < remotePaths.length; index += 1) {
+        const path = remotePaths[index];
+        const existingUrl = remoteUrls[index] || '';
+        const resolvedUrl = existingUrl || await resolveStorageImageUrl(PUBLIC_UPLOAD_BUCKET, path);
+        if (resolvedUrl) {
+            imageSources.push({
+                path,
+                url: resolvedUrl
+            });
+        }
+    }
+
+    if (!imageSources.length) {
+        getUnitImagesForUser(user.id).forEach((image) => {
+            imageSources.push({
+                path: '',
+                url: image
+            });
+        });
+    }
+
+    gallery.innerHTML = imageSources.length ? imageSources.map((image, index) => createPreviewCardHtml(image.url, {
+        alt: `Foto unit ${index + 1}`,
+        deleteTarget: 'confirmRemoveKonsumenUnitImage',
+        deleteArgs: [index],
+        deleteLabel: 'Hapus Gambar'
+    })).join('') : '<div class="empty-state-box"><p>Belum ada foto unit.</p></div>';
 }
 
 async function renderTeknisiHome() {
@@ -3827,22 +4939,76 @@ function renderTeknisiProfile() {
     document.getElementById('teknisiProfileAutosave').textContent = 'Profil akan sinkron otomatis ke Supabase.';
 }
 
-function renderTeknisiDocs() {
+async function renderTeknisiDocs() {
     const user = getCurrentUser();
-    const docs = user ? getTeknisiDocsForUser(user.id) : { ktpPhoto: '', selfiePhoto: '' };
+    const cachedDocs = user ? getTeknisiDocsForUser(user.id) : { ktpPhoto: '', selfiePhoto: '' };
     const ktpGrid = document.getElementById('tekIDPreviewGrid');
     const selfieGrid = document.getElementById('tekSelfiePreviewGrid');
-    ktpGrid.innerHTML = docs.ktpPhoto ? `<div class="image-card"><img src="${escapeHtml(docs.ktpPhoto)}" alt="Foto KTP" loading="lazy" decoding="async"></div>` : '';
-    selfieGrid.innerHTML = docs.selfiePhoto ? `<div class="image-card"><img src="${escapeHtml(docs.selfiePhoto)}" alt="Foto Diri" loading="lazy" decoding="async"></div>` : '';
+    if (!ktpGrid || !selfieGrid) return;
+    if (!user) {
+        ktpGrid.innerHTML = '';
+        selfieGrid.innerHTML = '';
+        return;
+    }
+
+    const ktpUrl = user.ktpPhotoUrl || (user.ktpPhotoPath ? await resolveStorageImageUrl(PRIVATE_DOCUMENT_BUCKET, user.ktpPhotoPath, { forceRefresh: true }) : '') || cachedDocs.ktpPhoto || '';
+    const selfieUrl = user.selfiePhotoUrl || (user.selfiePhotoPath ? await resolveStorageImageUrl(PRIVATE_DOCUMENT_BUCKET, user.selfiePhotoPath, { forceRefresh: true }) : '') || cachedDocs.selfiePhoto || '';
+
+    if (ktpUrl && ktpUrl !== user.ktpPhotoUrl) {
+        user.ktpPhotoUrl = ktpUrl;
+    }
+    if (selfieUrl && selfieUrl !== user.selfiePhotoUrl) {
+        user.selfiePhotoUrl = selfieUrl;
+    }
+
+    ktpGrid.innerHTML = ktpUrl ? createPreviewCardHtml(ktpUrl, {
+        alt: 'Foto KTP',
+        deleteTarget: 'confirmRemoveTeknisiDocument',
+        deleteArgs: ['ktp'],
+        deleteLabel: 'Hapus Gambar'
+    }) : '<div class="empty-state-box"><p>Belum ada foto KTP.</p></div>';
+    selfieGrid.innerHTML = selfieUrl ? createPreviewCardHtml(selfieUrl, {
+        alt: 'Foto Diri',
+        deleteTarget: 'confirmRemoveTeknisiDocument',
+        deleteArgs: ['selfie'],
+        deleteLabel: 'Hapus Gambar'
+    }) : '<div class="empty-state-box"><p>Belum ada foto diri.</p></div>';
 }
 
-function renderTeknisiUpload() {
+async function renderTeknisiUpload() {
     const info = document.getElementById('uploadOrderInfo');
     const order = remoteState.currentOrders.find((item) => item.id === uploadingOrderId);
-    info.innerHTML = order ? `
+    if (info) {
+        info.innerHTML = order ? `
         <div class="detail-row"><span class="detail-label">Pesanan</span><span class="detail-value">${escapeHtml(getOrderLabel(order))}</span></div>
         <div class="detail-row"><span class="detail-label">Layanan</span><span class="detail-value">${escapeHtml(order.serviceName)}</span></div>
         <div class="detail-row"><span class="detail-label">Konsumen</span><span class="detail-value">${escapeHtml(order.konsumenName)}</span></div>
+    ` : '';
+    }
+    const existingProof = document.getElementById('existingProofCard');
+    setElementText('uploadProofStatus', order?.proofImagePath || order?.proofImageUrl || order?.proofImage
+        ? 'Bukti pekerjaan yang tersimpan bisa diganti atau dihapus dari sini.'
+        : 'Belum ada bukti yang dipilih.');
+    if (!existingProof) return;
+    if (!order?.proofImagePath && !order?.proofImageUrl && !order?.proofImage) {
+        existingProof.hidden = true;
+        existingProof.innerHTML = '';
+        return;
+    }
+
+    const proofUrl = order.proofImageUrl || order.proofImage || await resolveStorageImageUrl(PUBLIC_UPLOAD_BUCKET, order.proofImagePath);
+    if (proofUrl && !order.proofImageUrl) order.proofImageUrl = proofUrl;
+    existingProof.hidden = !proofUrl;
+    existingProof.innerHTML = proofUrl ? `
+        <div class="upload-existing-proof">
+            <h4>Bukti yang sudah tersimpan</h4>
+            ${createPreviewCardHtml(proofUrl, {
+                alt: 'Bukti pekerjaan tersimpan',
+                deleteTarget: 'confirmRemoveOrderProof',
+                deleteArgs: [order.id],
+                deleteLabel: 'Hapus Gambar'
+            })}
+        </div>
     ` : '';
 }
 
@@ -3851,12 +5017,12 @@ async function renderCurrentView(prefill = '') {
     if (currentView === 'konsumen-order') renderKonsumenOrder(prefill);
     if (currentView === 'konsumen-history') await renderKonsumenHistory();
     if (currentView === 'konsumen-profile') renderKonsumenProfile();
-    if (currentView === 'konsumen-unit') renderKonsumenUnit();
+    if (currentView === 'konsumen-unit') await renderKonsumenUnit();
     if (currentView === 'teknisi-home') await renderTeknisiHome();
     if (currentView === 'teknisi-jobs') await renderTeknisiJobs();
     if (currentView === 'teknisi-profile') renderTeknisiProfile();
-    if (currentView === 'teknisi-docs') renderTeknisiDocs();
-    if (currentView === 'teknisi-upload') renderTeknisiUpload();
+    if (currentView === 'teknisi-docs') await renderTeknisiDocs();
+    if (currentView === 'teknisi-upload') await renderTeknisiUpload();
     if (currentView === 'admin-home') await renderAdminHome();
     if (currentView === 'admin-orders') await renderAdminOrders();
     if (currentView === 'admin-users') await renderAdminUsers();
@@ -4195,6 +5361,10 @@ function initDomEvents() {
     document.getElementById('imageCatalogFormFile')?.addEventListener('change', handleImageCatalogUpload);
     document.getElementById('formKonsumenProfile')?.addEventListener('input', () => handleProfileFormInput('konsumen'));
     document.getElementById('formTeknisiProfile')?.addEventListener('input', () => handleProfileFormInput('teknisi'));
+    document.getElementById('loginIdentifier')?.addEventListener('input', debounce(() => syncResendVerificationUI(), 120));
+    document.getElementById('btnResendVerification')?.addEventListener('click', () => {
+        void handleResendVerificationEmail();
+    });
     document.getElementById('btnInstallApp')?.addEventListener('click', () => {
         void promptInstallApp();
     });
@@ -4208,8 +5378,12 @@ function initDomEvents() {
 }
 
 function handleStorageSync(event) {
-    if (event.key !== STORAGE_KEY && event.key !== LEGACY_STORAGE_KEY) return;
+    if (event.key !== STORAGE_KEY && event.key !== LEGACY_STORAGE_KEY && event.key !== PENDING_VERIFICATION_EMAIL_KEY) return;
     appData = loadStoredData();
+    if (event.key === PENDING_VERIFICATION_EMAIL_KEY) {
+        hydratePendingVerificationEmail();
+        syncResendVerificationUI();
+    }
     if (remoteState.profile && currentView) {
         renderAppShell();
         syncActiveNavState();
@@ -4246,6 +5420,7 @@ async function initApp() {
     saveData(appData);
     purgeLegacyKonsumenTeknisiCache();
     hydrateMissingProfileColumnsCache();
+    hydratePendingVerificationEmail();
     populateSpecializationOptions('regTekSpecialization', 'Semua Layanan');
     syncAdminAccessUI();
     initDomEvents();

@@ -1482,6 +1482,14 @@ body {
     color: var(--gray-500);
 }
 
+.card-subtle {
+    margin-top: 1rem;
+    padding: 1rem;
+    border-radius: var(--border-radius-sm);
+    border: 1px solid var(--gray-200);
+    background: var(--gray-50);
+}
+
 /* =========================================
    MODALS
    ========================================= */
@@ -2474,6 +2482,12 @@ body {
     background: white;
 }
 
+.image-card--with-actions {
+    display: grid;
+    gap: 0.75rem;
+    padding-bottom: 0.9rem;
+}
+
 .image-card img {
     width: 100%;
     height: 100%;
@@ -2561,6 +2575,15 @@ body {
 @media (max-width: 900px) {
     .page-header-with-actions {
         flex-direction: column;
+    }
+
+    .verification-help-card {
+        flex-direction: column;
+    }
+
+    .verification-help-actions {
+        width: 100%;
+        min-width: 0;
     }
 }
 
@@ -2712,6 +2735,11 @@ th,
 
 .btn-install-app {
     flex-shrink: 0;
+}
+
+.verification-help-card,
+.card-subtle {
+    width: 100%;
 }
 
 .skeleton,
@@ -2866,6 +2894,73 @@ th,
 
 .service-card img {
     aspect-ratio: 4 / 3;
+}
+
+.image-card-caption {
+    margin: 0;
+    padding: 0 0.9rem;
+    font-size: 0.8rem;
+    color: var(--gray-500);
+}
+
+.image-card-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.6rem;
+    padding: 0 0.9rem;
+}
+
+.image-card-actions--center {
+    justify-content: center;
+}
+
+.upload-helper-note {
+    margin-top: 0.75rem;
+}
+
+.verification-help-card {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-top: 1rem;
+    padding: 1rem 1.1rem;
+    border-radius: 16px;
+    border: 1px solid rgba(245, 158, 11, 0.28);
+    background: rgba(254, 243, 199, 0.65);
+}
+
+.verification-help-card[hidden] {
+    display: none !important;
+}
+
+.verification-help-copy h3 {
+    font-size: 0.95rem;
+    margin-bottom: 0.25rem;
+    color: #92400e;
+}
+
+.verification-help-copy p,
+.verification-help-status {
+    margin: 0;
+    font-size: 0.83rem;
+    color: #92400e;
+}
+
+.verification-help-email {
+    margin-top: 0.35rem !important;
+}
+
+.verification-help-actions {
+    display: grid;
+    gap: 0.45rem;
+    min-width: 220px;
+}
+
+.upload-existing-proof h4 {
+    margin-bottom: 0.75rem;
+    font-size: 0.92rem;
+    color: var(--navy-900);
 }
 
 .image-card img,

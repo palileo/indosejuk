@@ -14,32 +14,10 @@ const GITHUB_TOKEN = Deno.env.get("GITHUB_TOKEN") || "";
 const GITHUB_OWNER = Deno.env.get("GITHUB_OWNER") || "";
 const GITHUB_REPO = Deno.env.get("GITHUB_REPO") || "";
 const GITHUB_BRANCH = Deno.env.get("GITHUB_BRANCH") || "main";
-const GITHUB_SNAPSHOT_PATH = Deno.env.get("GITHUB_SNAPSHOT_PATH") || "data/profiles-snapshot.json";
-const REQUIRED_PROFILE_COLUMNS = [
-  "id",
-  "role",
-  "username",
-  "name",
-  "email",
-  "phone",
-  "address",
-  "age",
-  "status",
-  "created_at",
-  "updated_at",
-];
+const GITHUB_UPLOADS_SNAPSHOT_PATH = Deno.env.get("GITHUB_UPLOADS_SNAPSHOT_PATH") || "data/uploads-snapshot.json";
+
+const REQUIRED_PROFILE_COLUMNS = ["id", "role", "email", "updated_at"];
 const OPTIONAL_PROFILE_COLUMNS = [
-  "birth_date",
-  "district",
-  "location_text",
-  "lat",
-  "lng",
-  "nik",
-  "specialization",
-  "experience",
-  "verified_at",
-  "verified_by",
-  "completed_jobs",
   "unit_image_paths",
   "unit_image_urls",
   "ktp_photo_path",
@@ -47,6 +25,8 @@ const OPTIONAL_PROFILE_COLUMNS = [
   "selfie_photo_path",
   "selfie_photo_url",
 ];
+const REQUIRED_ORDER_COLUMNS = ["id", "order_number", "status", "konsumen_id", "teknisi_id", "updated_at"];
+const OPTIONAL_ORDER_COLUMNS = ["proof_image_path", "proof_image_url"];
 
 const supabaseAdmin = SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY
   ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
@@ -67,7 +47,7 @@ async function githubRequest(path: string, init: RequestInit = {}) {
     headers: {
       Accept: "application/vnd.github+json",
       Authorization: `Bearer ${GITHUB_TOKEN}`,
-      "User-Agent": "indo-sejuk-sync-function",
+      "User-Agent": "indo-sejuk-storage-sync-function",
       ...(init.headers || {}),
     },
   });
@@ -105,36 +85,39 @@ function extractMissingColumnName(error: unknown) {
   return "";
 }
 
-async function fetchProfilesWithColumnFallback() {
+async function fetchWithColumnFallback(
+  table: "profiles" | "orders",
+  requiredColumns: string[],
+  optionalColumns: string[],
+) {
   const missingColumns = new Set<string>();
-  const maxAttempts = OPTIONAL_PROFILE_COLUMNS.length + 2;
+  const maxAttempts = optionalColumns.length + 2;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-    const selectClause = [...REQUIRED_PROFILE_COLUMNS, ...OPTIONAL_PROFILE_COLUMNS]
+    const selectClause = [...requiredColumns, ...optionalColumns]
       .filter((column) => !missingColumns.has(column))
       .join(", ");
 
     const { data, error } = await supabaseAdmin!
-      .from("profiles")
+      .from(table)
       .select(selectClause)
-      .order("created_at", { ascending: true });
+      .order("updated_at", { ascending: false });
 
-    if (!error) {
-      return data || [];
-    }
+    if (!error) return data || [];
 
     const missingColumn = extractMissingColumnName(error);
-    if (missingColumn && OPTIONAL_PROFILE_COLUMNS.includes(missingColumn)) {
+    if (missingColumn && optionalColumns.includes(missingColumn)) {
       missingColumns.add(missingColumn);
-      console.warn(`Optional profile column "${missingColumn}" belum tersedia. Snapshot retry tanpa kolom itu.`);
+      console.warn(`Optional ${table} column "${missingColumn}" belum tersedia. Snapshot retry tanpa kolom itu.`);
       continue;
     }
 
     throw error;
   }
 
-  throw new Error("Gagal membaca profiles setelah retry fallback kolom optional.");
+  throw new Error(`Gagal membaca ${table} setelah retry fallback kolom optional.`);
 }
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -154,17 +137,13 @@ serve(async (req) => {
   const authHeader = req.headers.get("Authorization") || "";
   const jwt = authHeader.replace(/^Bearer\s+/i, "").trim();
   if (!jwt) {
-    return jsonResponse(401, { ok: false, message: "Session pengguna dibutuhkan untuk memicu sinkronisasi." });
+    return jsonResponse(401, { ok: false, message: "Session pengguna dibutuhkan untuk memicu sinkronisasi asset." });
   }
 
   const { data: authData, error: authError } = await supabaseAdmin.auth.getUser(jwt);
   if (authError || !authData.user) {
-    return jsonResponse(401, { ok: false, message: "Session tidak valid untuk sinkronisasi snapshot." });
+    return jsonResponse(401, { ok: false, message: "Session tidak valid untuk sinkronisasi asset." });
   }
-
-  const body = await req.json().catch(() => ({}));
-  const requestedBy = String(body?.requestedBy || authData.user.id || "").trim();
-  const reason = String(body?.reason || "profile-upsert").trim();
 
   const { data: callerProfile, error: callerError } = await supabaseAdmin
     .from("profiles")
@@ -177,15 +156,21 @@ serve(async (req) => {
   }
 
   if (!["admin", "konsumen", "teknisi"].includes(String(callerProfile.role || ""))) {
-    return jsonResponse(403, { ok: false, message: "Role pemanggil tidak diizinkan memicu sinkronisasi." });
+    return jsonResponse(403, { ok: false, message: "Role pemanggil tidak diizinkan memicu sinkronisasi asset." });
   }
 
+  const body = await req.json().catch(() => ({}));
+  const requestedBy = String(body?.requestedBy || authData.user.id || "").trim();
+  const reason = String(body?.action || body?.reason || "storage-change").trim();
+
   let profiles: unknown[] = [];
+  let orders: unknown[] = [];
   try {
-    profiles = await fetchProfilesWithColumnFallback();
+    profiles = await fetchWithColumnFallback("profiles", REQUIRED_PROFILE_COLUMNS, OPTIONAL_PROFILE_COLUMNS);
+    orders = await fetchWithColumnFallback("orders", REQUIRED_ORDER_COLUMNS, OPTIONAL_ORDER_COLUMNS);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error || "Unknown error");
-    return jsonResponse(500, { ok: false, message: `Gagal membaca profiles dari Supabase: ${message}` });
+    return jsonResponse(500, { ok: false, message: `Gagal membaca snapshot asset dari Supabase: ${message}` });
   }
 
   const snapshot = {
@@ -193,15 +178,17 @@ serve(async (req) => {
     source: "supabase",
     requestedBy,
     reason,
-    profileCount: profiles?.length || 0,
-    profiles: profiles || [],
+    profileAssetCount: profiles.length,
+    orderAssetCount: orders.length,
+    profiles,
+    orders,
   };
 
   if (!GITHUB_TOKEN || !GITHUB_OWNER || !GITHUB_REPO) {
     return jsonResponse(202, {
       ok: true,
       skipped: true,
-      message: "GitHub sync belum dikonfigurasi. Snapshot disiapkan, tetapi tidak di-push ke repo.",
+      message: "GitHub sync asset belum dikonfigurasi. Snapshot disiapkan, tetapi tidak di-push ke repo.",
       snapshot,
     });
   }
@@ -209,7 +196,7 @@ serve(async (req) => {
   let sha: string | undefined;
   try {
     const existing = await githubRequest(
-      `/repos/${encodeURIComponent(GITHUB_OWNER)}/${encodeURIComponent(GITHUB_REPO)}/contents/${encodeGitHubPath(GITHUB_SNAPSHOT_PATH)}?ref=${encodeURIComponent(GITHUB_BRANCH)}`,
+      `/repos/${encodeURIComponent(GITHUB_OWNER)}/${encodeURIComponent(GITHUB_REPO)}/contents/${encodeGitHubPath(GITHUB_UPLOADS_SNAPSHOT_PATH)}?ref=${encodeURIComponent(GITHUB_BRANCH)}`,
     );
     const existingJson = await existing.json();
     sha = existingJson?.sha;
@@ -220,14 +207,14 @@ serve(async (req) => {
 
   const content = btoa(JSON.stringify(snapshot, null, 2));
   await githubRequest(
-    `/repos/${encodeURIComponent(GITHUB_OWNER)}/${encodeURIComponent(GITHUB_REPO)}/contents/${encodeGitHubPath(GITHUB_SNAPSHOT_PATH)}`,
+    `/repos/${encodeURIComponent(GITHUB_OWNER)}/${encodeURIComponent(GITHUB_REPO)}/contents/${encodeGitHubPath(GITHUB_UPLOADS_SNAPSHOT_PATH)}`,
     {
       method: "PUT",
       headers: {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        message: `chore: sync profiles snapshot (${reason})`,
+        message: `chore: sync uploads snapshot (${reason})`,
         content,
         branch: GITHUB_BRANCH,
         sha,
@@ -238,8 +225,9 @@ serve(async (req) => {
   return jsonResponse(200, {
     ok: true,
     skipped: false,
-    message: `Snapshot profiles berhasil di-push ke ${GITHUB_OWNER}/${GITHUB_REPO}@${GITHUB_BRANCH}.`,
-    path: GITHUB_SNAPSHOT_PATH,
-    count: snapshot.profileCount,
+    message: `Snapshot asset berhasil di-push ke ${GITHUB_OWNER}/${GITHUB_REPO}@${GITHUB_BRANCH}.`,
+    path: GITHUB_UPLOADS_SNAPSHOT_PATH,
+    profiles: snapshot.profileAssetCount,
+    orders: snapshot.orderAssetCount,
   });
 });
