@@ -2486,6 +2486,10 @@ body {
     font-weight: 600;
 }
 
+.ocr-helper-text {
+    margin-top: 0.5rem;
+}
+
 .ocr-preview-card {
     margin-top: 0.85rem;
     background: white;
@@ -2505,6 +2509,13 @@ body {
     gap: 0.35rem;
     font-size: 0.84rem;
     color: var(--gray-700);
+}
+
+.ocr-preview-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.65rem;
+    margin-top: 0.85rem;
 }
 
 .detail-list {

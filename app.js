@@ -17,8 +17,37 @@ const OCR_CDN_URL = 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.
 const DEFAULT_ADMIN_WHATSAPP = '08970788800';
 const PROFILE_STATUS_PENDING = 'Menunggu Verifikasi';
 const PROFILE_STATUS_ACTIVE = 'Aktif';
-const OPTIONAL_PROFILE_COLUMNS = new Set(['location_text', 'verified_at', 'verified_by']);
+const PROFILE_SCHEMA_DRIFT_CACHE_KEY = 'indoSejukProfileSchemaDrift';
+const PROFILE_SCHEMA_DRIFT_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+const REQUIRED_PROFILE_COLUMNS = [
+    'id',
+    'role',
+    'username',
+    'name',
+    'email',
+    'phone',
+    'address',
+    'age',
+    'status',
+    'created_at',
+    'updated_at'
+];
+const OPTIONAL_PROFILE_COLUMNS = [
+    'birth_date',
+    'district',
+    'location_text',
+    'lat',
+    'lng',
+    'nik',
+    'specialization',
+    'experience',
+    'verified_at',
+    'verified_by',
+    'completed_jobs'
+];
+const OPTIONAL_PROFILE_COLUMN_SET = new Set(OPTIONAL_PROFILE_COLUMNS);
 const OPTIONAL_ORDER_COLUMNS = new Set(['admin_confirmation_text', 'verified_at', 'verified_by']);
+const REMOTE_SYNC_FUNCTION_NAME = 'sync-user-to-github';
 
 let currentRole = null;
 let currentView = null;
@@ -28,6 +57,8 @@ let uploadProofImage = null;
 let appData = null;
 let authBootstrapPromise = null;
 let authSignInInProgress = false;
+const missingProfileColumnsCache = new Set();
+const syncToastCache = new Set();
 
 const remoteState = {
     session: null,
@@ -120,11 +151,6 @@ function deepClone(value) {
 
 function canUseSupabase() {
     return Boolean(supabaseClient);
-}
-
-function shouldFallbackToLocalAuth(error) {
-    console.warn('Fallback auth lokal sudah dimatikan.', error);
-    return false;
 }
 
 function normalizeEmail(value) {
@@ -229,19 +255,43 @@ function openWhatsAppChat(phone, message, popup = null) {
 
 function buildRegistrationWhatsAppMessage(role, formValues = {}) {
     const roleLabel = ROLE_LABELS[role] || role;
-    return buildMessageLines([
-        `Pendaftaran ${roleLabel} baru menunggu verifikasi admin.`,
+    const registeredAt = formValues.registeredAt || new Date().toISOString();
+    const mapsLink = formValues.lat && formValues.lng ? getMapsLink(formValues.lat, formValues.lng) : '';
+    const emailVerificationStatus = formValues.emailVerificationStatus || 'Menunggu konfirmasi email';
+    const profileStatus = formValues.profileStatus || PROFILE_STATUS_ACTIVE;
+
+    const commonLines = [
+        `Pendaftaran ${roleLabel} baru Indo Sejuk AC.`,
         '',
-        `Nama: ${formValues.name || '-'}`,
+        `Role: ${roleLabel}`,
+        `Nama Lengkap: ${formValues.name || '-'}`,
         `Username: ${formValues.username || '-'}`,
         `Email: ${formValues.email || '-'}`,
         `WhatsApp: ${formatDisplayPhone(formValues.phone)}`,
-        role === 'konsumen' ? `Area: ${formValues.district || '-'}` : `Spesialisasi: ${formValues.specialization || '-'}`,
         `Alamat: ${formValues.address || '-'}`,
         `Lokasi teks: ${formValues.locationText || '-'}`,
-        formValues.lat && formValues.lng ? `Google Maps: ${getMapsLink(formValues.lat, formValues.lng)}` : '',
-        role === 'teknisi' ? `NIK: ${formValues.nik || '-'}` : ''
-    ]);
+        mapsLink ? `Google Maps: ${mapsLink}` : '',
+        `Waktu pendaftaran: ${formatDateTime(registeredAt)}`,
+        `Status email: ${emailVerificationStatus}`,
+        `Status profile: ${profileStatus}`
+    ];
+
+    const roleSpecificLines = role === 'teknisi'
+        ? [
+            `NIK: ${formValues.nik || '-'}`,
+            `Tanggal Lahir: ${formValues.birthDate ? formatDate(formValues.birthDate) : '-'}`,
+            `Usia: ${formValues.age || '-'}`,
+            `Spesialisasi: ${formValues.specialization || '-'}`,
+            `Pengalaman: ${hasMeaningfulProfileValue(formValues.experience) ? `${formValues.experience} tahun` : '-'}`,
+            `Foto KTP: ${formValues.ktpUploaded ? 'Sudah diunggah' : 'Belum diunggah'}`,
+            `Foto Diri: ${formValues.selfieUploaded ? 'Sudah diunggah' : 'Belum diunggah'}`
+        ]
+        : [
+            `Area/Kecamatan: ${formValues.district || '-'}`,
+            `Tanggal Lahir: ${formValues.birthDate ? formatDate(formValues.birthDate) : '-'}`
+        ];
+
+    return buildMessageLines([...commonLines, ...roleSpecificLines]);
 }
 
 function openCustomerServiceWhatsApp() {
@@ -306,6 +356,103 @@ function extractMissingColumnName(error) {
     return '';
 }
 
+function persistMissingProfileColumnsCache() {
+    try {
+        const payload = {
+            columns: [...missingProfileColumnsCache],
+            updatedAt: Date.now()
+        };
+        localStorage.setItem(PROFILE_SCHEMA_DRIFT_CACHE_KEY, JSON.stringify(payload));
+    } catch (_) {}
+}
+
+function hydrateMissingProfileColumnsCache() {
+    try {
+        const raw = localStorage.getItem(PROFILE_SCHEMA_DRIFT_CACHE_KEY);
+        if (!raw) return;
+
+        const parsed = JSON.parse(raw);
+        const updatedAt = Number(parsed?.updatedAt || 0);
+        const columns = Array.isArray(parsed?.columns) ? parsed.columns : [];
+
+        if (!updatedAt || (Date.now() - updatedAt) > PROFILE_SCHEMA_DRIFT_CACHE_TTL_MS) {
+            localStorage.removeItem(PROFILE_SCHEMA_DRIFT_CACHE_KEY);
+            return;
+        }
+
+        columns.forEach((column) => {
+            const normalized = String(column || '').trim().toLowerCase();
+            if (OPTIONAL_PROFILE_COLUMN_SET.has(normalized)) {
+                missingProfileColumnsCache.add(normalized);
+            }
+        });
+    } catch (_) {}
+}
+
+function markMissingProfileColumn(name, error = null) {
+    const normalized = String(name || '').trim().toLowerCase();
+    if (!normalized || !OPTIONAL_PROFILE_COLUMN_SET.has(normalized)) return false;
+
+    const isNew = !missingProfileColumnsCache.has(normalized);
+    missingProfileColumnsCache.add(normalized);
+    persistMissingProfileColumnsCache();
+
+    console.warn(`Kolom optional profiles "${normalized}" belum tersedia di schema cache Supabase. Query akan diulang tanpa kolom tersebut sampai migrasi terbaca normal.`, error || '');
+
+    return isNew;
+}
+
+function getProfileSelectClause(extraColumns = []) {
+    return [...new Set([
+        ...REQUIRED_PROFILE_COLUMNS,
+        ...OPTIONAL_PROFILE_COLUMNS,
+        ...(Array.isArray(extraColumns) ? extraColumns : [])
+    ])]
+        .filter((column) => column && !missingProfileColumnsCache.has(column))
+        .join(', ');
+}
+
+function filterProfileWritePayload(payload = {}) {
+    const filtered = {};
+    Object.entries(payload || {}).forEach(([key, value]) => {
+        if (value === undefined) return;
+        if (missingProfileColumnsCache.has(key) && OPTIONAL_PROFILE_COLUMN_SET.has(key)) return;
+        filtered[key] = value;
+    });
+    return filtered;
+}
+
+async function withProfileColumnFallback(asyncOperation, options = {}) {
+    const maxAttempts = OPTIONAL_PROFILE_COLUMNS.length + 2;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        try {
+            const result = await asyncOperation({
+                attempt,
+                selectClause: getProfileSelectClause(options.extraSelectColumns),
+                payload: filterProfileWritePayload(options.payload)
+            });
+
+            if (!result?.error) return result;
+
+            const missingColumn = extractMissingColumnName(result.error);
+            if (missingColumn && markMissingProfileColumn(missingColumn, result.error)) {
+                continue;
+            }
+
+            throw result.error;
+        } catch (error) {
+            const missingColumn = extractMissingColumnName(error);
+            if (missingColumn && markMissingProfileColumn(missingColumn, error)) {
+                continue;
+            }
+            throw error;
+        }
+    }
+
+    throw new Error(`Operasi profiles gagal dipulihkan setelah retry schema fallback${options.context ? ` (${options.context})` : ''}.`);
+}
+
 function normalizeLoginIdentifier(value) {
     const raw = String(value || '').trim();
     if (!raw) return '';
@@ -325,34 +472,6 @@ function identifiersMatch(left, right) {
 
 function isLocalhostEnv() {
     return ['localhost', '127.0.0.1', '::1'].includes(window.location.hostname);
-}
-
-async function getCurrentAuthUser() {
-    if (!canUseSupabase()) return null;
-    const { data, error } = await supabaseClient.auth.getUser();
-    if (error) {
-        console.error('Gagal mengambil auth user:', error);
-        return null;
-    }
-    return data.user || null;
-}
-
-async function fetchCurrentProfile() {
-    const user = await getCurrentAuthUser();
-    if (!user) return null;
-
-    const { data, error } = await supabaseClient
-        .from('profiles')
-        .select('*')
-        .eq('id', user.id)
-        .single();
-
-    if (error) {
-        console.error('Gagal mengambil profile:', error);
-        return null;
-    }
-
-    return data;
 }
 
 function upsertLocalProfile(profile, overrides = {}) {
@@ -390,34 +509,6 @@ function upsertLocalProfile(profile, overrides = {}) {
     return normalizedUser;
 }
 
-function applySupabaseSession(profile, overrides = {}) {
-    const localUser = upsertLocalProfile(profile, overrides);
-    if (!localUser) return null;
-
-    saveSession({
-        role: localUser.role,
-        userId: localUser.id,
-        loginAt: new Date().toISOString(),
-        provider: 'supabase'
-    });
-    currentRole = localUser.role;
-    return localUser;
-}
-
-function applyLocalSession(profile, overrides = {}) {
-    const localUser = upsertLocalProfile(profile, overrides);
-    if (!localUser) return null;
-
-    saveSession({
-        role: localUser.role,
-        userId: localUser.id,
-        loginAt: new Date().toISOString(),
-        provider: 'local'
-    });
-    currentRole = localUser.role;
-    return localUser;
-}
-
 function mapProfileToLocalUser(profile, role, index = 0) {
     const existing = getData().users?.[role]?.find((item) => item.id === profile?.id) || {};
     return normalizeUser({
@@ -437,108 +528,70 @@ function cacheProfilesByRole(role, profiles) {
     return data.users[role];
 }
 
-async function registerKonsumenSupabase(formValues) {
-    if (!canUseSupabase()) throw new Error('Supabase client belum siap.');
-    const email = normalizeEmail(formValues.email);
-    const password = formValues.password.trim();
-    const phone = normalizePhone(formValues.phone);
+async function syncNewUserToRemote(profile, options = {}) {
+    if (!canUseSupabase()) {
+        return {
+            ok: false,
+            skipped: true,
+            message: 'Supabase client belum siap untuk memanggil backend sinkronisasi.'
+        };
+    }
 
-    const { data, error } = await supabaseClient.auth.signUp({
-        email,
-        password
-    });
+    if (!profile?.id) {
+        return {
+            ok: false,
+            skipped: true,
+            message: 'Profile belum tersedia sehingga sinkron snapshot GitHub dilewati.'
+        };
+    }
 
-    if (error) throw error;
-    if (!data.user) throw new Error('User auth tidak berhasil dibuat');
-
-    const { error: profileError } = await supabaseClient
-        .from('profiles')
-        .insert({
-            id: data.user.id,
-            role: 'konsumen',
-            username: formValues.username.trim(),
-            name: formValues.name.trim(),
-            email,
-            phone: phone || null,
-            address: formValues.address?.trim() || null,
-            age: formValues.age ? Number(formValues.age) : null,
-            status: 'Aktif'
+    try {
+        const { data, error } = await supabaseClient.functions.invoke(REMOTE_SYNC_FUNCTION_NAME, {
+            body: {
+                profileId: profile.id,
+                role: profile.role,
+                reason: options.reason || 'profile-upsert',
+                requestedAt: new Date().toISOString(),
+                requestedBy: remoteState.user?.id || profile.id
+            }
         });
 
-    if (profileError) throw profileError;
+        if (error) throw error;
 
-    return data.user;
-}
+        return {
+            ok: true,
+            skipped: false,
+            data,
+            message: data?.message || 'Sinkron snapshot GitHub dipicu lewat backend aman.'
+        };
+    } catch (error) {
+        const message = String(error?.message || error || '');
+        const looksMissingOrDisabled = /404|not found|edge function|failed to send a request|functionshttperror/i.test(message);
 
-async function registerTeknisiSupabase(formValues) {
-    if (!canUseSupabase()) throw new Error('Supabase client belum siap.');
-    const email = normalizeEmail(formValues.email);
-    const password = formValues.password.trim();
-    const phone = normalizePhone(formValues.phone);
+        if (looksMissingOrDisabled) {
+            console.warn('Sinkron snapshot GitHub belum dikonfigurasi di backend aman. Supabase tetap menjadi source of truth.', error);
+            if (!syncToastCache.has('missing-remote-sync')) {
+                syncToastCache.add('missing-remote-sync');
+                showToast('Sinkron snapshot GitHub belum dikonfigurasi di backend. App utama tetap jalan langsung dari Supabase.', 'warning');
+            }
+            return {
+                ok: false,
+                skipped: true,
+                message: 'Edge Function sync-user-to-github belum tersedia atau belum dikonfigurasi.'
+            };
+        }
 
-    const { data, error } = await supabaseClient.auth.signUp({
-        email,
-        password
-    });
-
-    if (error) throw error;
-    if (!data.user) throw new Error('User auth tidak berhasil dibuat');
-
-    const { error: profileError } = await supabaseClient
-        .from('profiles')
-        .insert({
-            id: data.user.id,
-            role: 'teknisi',
-            username: formValues.username.trim(),
-            name: formValues.name.trim(),
-            email,
-            phone: phone || null,
-            nik: formValues.nik?.trim() || null,
-            specialization: formValues.specialization?.trim() || null,
-            status: 'Aktif',
-            completed_jobs: 0
-        });
-
-    if (profileError) throw profileError;
-
-    return data.user;
-}
-
-async function signInSupabase(email, password) {
-    if (!canUseSupabase()) throw new Error('Supabase client belum siap.');
-    const { data, error } = await supabaseClient.auth.signInWithPassword({
-        email: normalizeEmail(email),
-        password: password.trim()
-    });
-
-    if (error) throw error;
-    return data;
-}
-
-function isEmailIdentifier(identifier) {
-    return String(identifier || '').includes('@');
-}
-
-async function findProfileByIdentifier(role, identifier) {
-    const normalized = normalizeLoginIdentifier(identifier);
-    if (!normalized) return null;
-    if (!canUseSupabase()) return null;
-
-    const profiles = await fetchProfilesByRole(role);
-    return (profiles || []).find((profile) => identifiersMatch(profile?.email, normalized)) || null;
-}
-
-
-async function syncNewUserToRemote(user, role) {
-    // Sinkronisasi ke GitHub wajib lewat backend/serverless function yang memegang secret,
-    // bukan langsung dari browser/frontend statis.
-    const warningMessage = `Sinkronisasi remote untuk ${role} belum dijalankan karena backend aman belum tersedia.`;
-    console.warn(warningMessage, { role, userId: user?.id || null });
-    return {
-        ok: false,
-        skipped: true,
-        message: 'Data lokal tersimpan. Sinkronisasi repo GitHub menunggu backend/serverless yang aman.'
-    };
+        console.warn('Sinkron snapshot GitHub gagal dipanggil. Aplikasi utama tetap memakai Supabase langsung.', error);
+        if (options.showErrorToast && !syncToastCache.has('remote-sync-error')) {
+            syncToastCache.add('remote-sync-error');
+            showToast('Sinkron snapshot GitHub gagal, tetapi data utama tetap tersimpan di Supabase.', 'warning');
+        }
+        return {
+            ok: false,
+            skipped: true,
+            message: 'Pemanggilan backend sinkronisasi gagal. Supabase tetap menjadi source of truth.'
+        };
+    }
 }
 
 function escapeHtml(value) {
@@ -893,76 +946,10 @@ function getData() {
     return appData;
 }
 
-function saveSession(session) {
-    const data = getData();
-    data.currentSession = session || null;
-    saveData(data);
-}
-
-function getCurrentSession() {
-    return getData().currentSession || null;
-}
-
-function findUserById(role, userId) {
-    return getData().users?.[role]?.find((user) => user.id === userId) || null;
-}
-
-function getCurrentUser() {
-    const session = getCurrentSession();
-    if (!session || !session.role || !session.userId) return null;
-    return findUserById(session.role, session.userId);
-}
-
-function resetToPublicLanding(message = '') {
-    saveSession(null);
-    currentRole = null;
-    currentView = null;
-    uploadingOrderId = null;
-    uploadProofImage = null;
-    document.getElementById('formLogin')?.reset();
-    switchLoginRole('konsumen');
-    showLanding();
-    if (message) showToast(message, 'warning');
-}
-
-function ensureValidSession(showMessage = false) {
-    const session = getCurrentSession();
-    if (!session) return false;
-    if (session.role === 'admin' && !canAccessAdmin(session.role)) {
-        resetToPublicLanding(showMessage ? 'Dashboard admin hanya tersedia untuk profile admin yang valid.' : '');
-        return false;
-    }
-    const user = getCurrentUser();
-    if (user) return true;
-    saveSession(null);
-    currentRole = null;
-    currentView = null;
-    if (showMessage) {
-        showToast('Session tidak valid. Silakan login kembali.', 'warning');
-    }
-    showLanding();
-    return false;
-}
-
 function isUsernameTaken(role, username, excludeUserId = '') {
     const normalized = String(username || '').trim().toLowerCase();
     if (!normalized) return false;
     return getData().users[role].some((user) => user.id !== excludeUserId && String(user.username || '').trim().toLowerCase() === normalized);
-}
-
-function loginUser(role, username, password) {
-    return null;
-}
-
-function requireRole(role) {
-    if (!ensureValidSession(true)) return false;
-    const session = getCurrentSession();
-    if (session?.role !== role) {
-        showToast(`Akses hanya untuk ${ROLE_LABELS[role] || role}.`, 'warning');
-        navigateTo(`${session.role}-home`);
-        return false;
-    }
-    return true;
 }
 
 function getNavItems(role) {
@@ -1054,38 +1041,10 @@ function goToLanding() {
     showLanding();
 }
 
-function renderAppShell() {
-    const user = getCurrentUser();
-    if (!user) return;
-    currentRole = user.role;
-    document.getElementById('headerAvatar').textContent = (user.name || 'U').charAt(0).toUpperCase();
-    document.getElementById('headerUserName').textContent = user.name || 'User';
-    document.getElementById('headerUserRole').textContent = ROLE_LABELS[user.role] || user.role;
-
-    const navHtml = getNavItems(user.role).map((item) => `
-        <button class="nav-item ${currentView === item.id ? 'active' : ''}" type="button" onclick="navigateTo('${item.id}')">
-            ${item.icon}
-            <span>${item.label}</span>
-        </button>
-    `).join('');
-    document.getElementById('sidebarNav').innerHTML = navHtml;
-    document.getElementById('mobileNav').innerHTML = navHtml;
-}
-
 
 function getServices(includeInactive = false) {
     const services = getData().services || [];
     return includeInactive ? services : services.filter((service) => service.active !== false);
-}
-
-function getOrdersForCurrentKonsumen() {
-    const user = getCurrentUser();
-    return (getData().orders || []).filter((order) => order.konsumenId === user?.id);
-}
-
-function getOrdersForCurrentTeknisi() {
-    const user = getCurrentUser();
-    return (getData().orders || []).filter((order) => order.teknisiId === user?.id);
 }
 
 function getImageCatalogItem(imageCatalogId) {
@@ -1101,158 +1060,9 @@ function summarizeImageSource(src) {
     return src.startsWith('data:image/') ? 'Upload localStorage' : src;
 }
 
-function renderCurrentView(prefill = '') {
-    if (currentView === 'konsumen-home') renderKonsumenHome();
-    if (currentView === 'konsumen-order') renderKonsumenOrder(prefill);
-    if (currentView === 'konsumen-history') renderKonsumenHistory();
-    if (currentView === 'konsumen-profile') renderKonsumenProfile();
-    if (currentView === 'konsumen-unit') renderKonsumenUnit();
-    if (currentView === 'teknisi-home') renderTeknisiHome();
-    if (currentView === 'teknisi-jobs') renderTeknisiJobs();
-    if (currentView === 'teknisi-profile') renderTeknisiProfile();
-    if (currentView === 'teknisi-docs') renderTeknisiDocs();
-    if (currentView === 'teknisi-upload') renderTeknisiUpload();
-    if (currentView === 'admin-home') renderAdminHome();
-    if (currentView === 'admin-orders') renderAdminOrders();
-    if (currentView === 'admin-users') renderAdminUsers();
-}
-
 function renderStatusBadge(status) {
     const className = slugify(status || 'menunggu');
     return `<span class="status-badge status-${className}">${escapeHtml(status || 'Menunggu')}</span>`;
-}
-
-function renderKonsumenHome() {
-    const orders = getOrdersForCurrentKonsumen();
-    document.getElementById('konsumenTotalOrders').textContent = orders.length;
-    document.getElementById('konsumenPending').textContent = orders.filter((order) => order.status !== 'Selesai').length;
-    document.getElementById('konsumenCompleted').textContent = orders.filter((order) => order.status === 'Selesai').length;
-
-    const recentBody = document.getElementById('konsumenRecentBody');
-    recentBody.innerHTML = orders.length ? orders.slice().reverse().slice(0, 5).map((order) => `
-        <tr>
-            <td>${escapeHtml(order.id)}</td>
-            <td>${escapeHtml(order.serviceName)}</td>
-            <td>${escapeHtml(formatDate(order.preferredDate || order.createdAt))}</td>
-            <td>${renderStatusBadge(order.status)}</td>
-        </tr>
-    `).join('') : '<tr><td colspan="4" class="empty-state">Belum ada pesanan</td></tr>';
-
-    const container = document.getElementById('serviceCardsContainer');
-    const services = getServices(false);
-    container.innerHTML = services.map((service) => `
-        <div class="service-card" onclick="navigateTo('konsumen-order', '${escapeHtml(service.name)}')">
-            <img src="${escapeHtml(serviceImage(service))}" alt="${escapeHtml(service.name)}">
-            <div class="service-card-body">
-                <h4>${escapeHtml(service.name)}</h4>
-                <p>${escapeHtml(service.description)}</p>
-                <span class="service-price">${formatRupiah(service.price)}</span>
-            </div>
-        </div>
-    `).join('');
-}
-
-function renderKonsumenOrder(prefill = '') {
-    const user = getCurrentUser();
-    const serviceSelect = document.getElementById('orderService');
-    serviceSelect.innerHTML = '<option value="">Pilih Layanan</option>' + getServices(false).map((service) => `<option value="${escapeHtml(service.id)}">${escapeHtml(service.name)}</option>`).join('');
-    if (prefill) {
-        const target = getServices(false).find((service) => service.name === prefill);
-        if (target) serviceSelect.value = target.id;
-    }
-    document.getElementById('orderPhone').value = user?.phone || '';
-    document.getElementById('orderAddress').value = user?.address || '';
-}
-
-function renderKonsumenHistory() {
-    const orders = getOrdersForCurrentKonsumen();
-    const body = document.getElementById('konsumenHistoryBody');
-    body.innerHTML = orders.length ? orders.slice().reverse().map((order) => `
-        <tr>
-            <td>${escapeHtml(order.id)}</td>
-            <td>${escapeHtml(order.serviceName)}</td>
-            <td>${escapeHtml(order.brand || '-')}</td>
-            <td>${escapeHtml(formatDate(order.preferredDate || order.createdAt))}</td>
-            <td>${escapeHtml(order.teknisiName || 'Belum ditugaskan')}</td>
-            <td>${renderStatusBadge(order.status)}</td>
-        </tr>
-    `).join('') : '<tr><td colspan="6" class="empty-state">Belum ada pesanan</td></tr>';
-}
-
-function renderKonsumenProfile() {
-    const user = getCurrentUser();
-    if (!user) return;
-    document.getElementById('profileKonsumenName').value = user.name || '';
-    document.getElementById('profileKonsumenUsername').value = user.username || '';
-    document.getElementById('profileKonsumenEmail').value = user.email || '';
-    document.getElementById('profileKonsumenPhone').value = user.phone || '';
-    document.getElementById('profileKonsumenBirthDate').value = user.birthDate || '';
-    document.getElementById('profileKonsumenAge').value = user.age || '';
-    document.getElementById('profileKonsumenAddress').value = user.address || '';
-    document.getElementById('profileKonsumenLocation').textContent = user.lat && user.lng ? `${user.lat}, ${user.lng}` : 'Belum dibagikan';
-    document.getElementById('profileKonsumenJoined').textContent = formatDate(user.joinedAt);
-}
-
-function renderKonsumenUnit() {
-    const user = getCurrentUser();
-    const gallery = document.getElementById('konUnitGallery');
-    const images = user?.unitImages || [];
-    gallery.innerHTML = images.length ? images.map((image, index) => `
-        <div class="image-card">
-            <img src="${escapeHtml(image)}" alt="Foto unit ${index + 1}">
-        </div>
-    `).join('') : '<div class="empty-state-box"><p>Belum ada foto unit.</p></div>';
-}
-
-function renderTeknisiHome() {
-    const orders = getOrdersForCurrentTeknisi();
-    document.getElementById('teknisiTotalJobs').textContent = orders.length;
-    document.getElementById('teknisiActiveJobs').textContent = orders.filter((order) => order.status === 'Ditugaskan' || order.status === 'Dikerjakan').length;
-    document.getElementById('teknisiCompletedJobs').textContent = orders.filter((order) => order.status === 'Selesai').length;
-
-    const list = document.getElementById('teknisiJobsList');
-    const activeOrders = orders.filter((order) => order.status !== 'Selesai');
-    list.innerHTML = activeOrders.length ? activeOrders.map((order) => `
-        <div class="job-card">
-            <div class="job-card-header">
-                <h4>${escapeHtml(order.serviceName)}</h4>
-                ${renderStatusBadge(order.status)}
-            </div>
-            <div class="job-card-details">
-                <div><strong>No:</strong> ${escapeHtml(order.id)}</div>
-                <div><strong>Konsumen:</strong> ${escapeHtml(order.konsumenName)}</div>
-                <div><strong>Alamat:</strong> ${escapeHtml(order.address)}</div>
-                <div><strong>Tanggal:</strong> ${escapeHtml(formatDate(order.preferredDate))}</div>
-            </div>
-            <div class="btn-action-group">
-                <button class="btn btn-outline btn-xs" onclick="openOrderDetail('${order.id}')">Detail</button>
-                ${order.status === 'Ditugaskan' ? `<button class="btn btn-info btn-xs" onclick="startJob('${order.id}')">Mulai</button>` : ''}
-                <button class="btn btn-primary btn-xs" onclick="openUploadProof('${order.id}')">Upload Bukti</button>
-            </div>
-        </div>
-    `).join('') : '<div class="empty-state-box"><p>Belum ada pekerjaan yang ditugaskan.</p></div>';
-}
-
-function renderTeknisiJobs() {
-    const orders = getOrdersForCurrentTeknisi();
-    const body = document.getElementById('teknisiAllJobsBody');
-    body.innerHTML = orders.length ? orders.slice().reverse().map((order) => `
-        <tr>
-            <td>${escapeHtml(order.id)}</td>
-            <td>${escapeHtml(order.konsumenName)}</td>
-            <td>${escapeHtml(order.serviceName)}</td>
-            <td>${escapeHtml(order.address)}</td>
-            <td>${escapeHtml(formatDate(order.preferredDate))}</td>
-            <td>${renderStatusBadge(order.status)}</td>
-            <td>
-                <div class="btn-action-group">
-                    <button class="btn btn-outline btn-xs" onclick="openOrderDetail('${order.id}')">Detail</button>
-                    ${order.status === 'Ditugaskan' ? `<button class="btn btn-info btn-xs" onclick="startJob('${order.id}')">Mulai</button>` : ''}
-                    ${order.status !== 'Selesai' ? `<button class="btn btn-primary btn-xs" onclick="openUploadProof('${order.id}')">Upload</button>` : ''}
-                </div>
-            </td>
-        </tr>
-    `).join('') : '<tr><td colspan="7" class="empty-state">Belum ada pekerjaan</td></tr>';
 }
 
 function populateSpecializationOptions(selectId, selected = '') {
@@ -1261,117 +1071,6 @@ function populateSpecializationOptions(selectId, selected = '') {
     const options = ['Semua Layanan', ...getServices(true).map((service) => service.name)];
     select.innerHTML = options.map((option) => `<option value="${escapeHtml(option)}">${escapeHtml(option)}</option>`).join('');
     select.value = selected || 'Semua Layanan';
-}
-
-function renderTeknisiProfile() {
-    const user = getCurrentUser();
-    if (!user) return;
-    populateSpecializationOptions('profileTeknisiSpecialization', user.specialization);
-    document.getElementById('profileTeknisiName').value = user.name || '';
-    document.getElementById('profileTeknisiUsername').value = user.username || '';
-    document.getElementById('profileTeknisiEmail').value = user.email || '';
-    document.getElementById('profileTeknisiPhone').value = user.phone || '';
-    document.getElementById('profileTeknisiNIK').value = user.nik || '';
-    document.getElementById('profileTeknisiBirthDate').value = user.birthDate || '';
-    document.getElementById('profileTeknisiAge').value = user.age || '';
-    document.getElementById('profileTeknisiExperience').value = user.experience || 0;
-    document.getElementById('profileTeknisiAddress').value = user.address || '';
-    document.getElementById('profileTeknisiLocation').textContent = user.lat && user.lng ? `${user.lat}, ${user.lng}` : 'Belum dibagikan';
-    document.getElementById('profileTeknisiStatus').textContent = user.status || 'Aktif';
-}
-
-function renderTeknisiDocs() {
-    const user = getCurrentUser();
-    const ktpGrid = document.getElementById('tekIDPreviewGrid');
-    const selfieGrid = document.getElementById('tekSelfiePreviewGrid');
-    ktpGrid.innerHTML = user?.ktpPhoto ? `<div class="image-card"><img src="${escapeHtml(user.ktpPhoto)}" alt="Foto KTP"></div>` : '';
-    selfieGrid.innerHTML = user?.selfiePhoto ? `<div class="image-card"><img src="${escapeHtml(user.selfiePhoto)}" alt="Foto Diri"></div>` : '';
-}
-
-function renderTeknisiUpload() {
-    const info = document.getElementById('uploadOrderInfo');
-    const order = getData().orders.find((item) => item.id === uploadingOrderId);
-    info.innerHTML = order ? `
-        <div class="detail-row"><span class="detail-label">Pesanan</span><span class="detail-value">${escapeHtml(order.id)}</span></div>
-        <div class="detail-row"><span class="detail-label">Layanan</span><span class="detail-value">${escapeHtml(order.serviceName)}</span></div>
-        <div class="detail-row"><span class="detail-label">Konsumen</span><span class="detail-value">${escapeHtml(order.konsumenName)}</span></div>
-    ` : '';
-}
-
-
-function renderAdminKonsumenTable(users = null) {
-    if (!requireAdminAccess()) return;
-    const data = getData();
-    const body = document.getElementById('adminKonsumenListBody');
-    const list = (users || data.users.konsumen || []).map((user, index) => users ? mapProfileToLocalUser(user, 'konsumen', index) : user);
-    // Tabel Data Master konsumen harus konsisten dengan tabel admin lain, termasuk kolom password.
-    body.innerHTML = list.length ? list.map((user) => `
-        <tr>
-            <td>${escapeHtml(user.name)}</td>
-            <td>${escapeHtml(user.username)}</td>
-            <td>${escapeHtml(user.password)}</td>
-            <td>${escapeHtml(user.email || '-')}</td>
-            <td>${escapeHtml(user.phone || '-')}</td>
-            <td>${escapeHtml(user.age || '-')}</td>
-            <td>${escapeHtml(user.address || '-')}</td>
-            <td>${data.orders.filter((order) => order.konsumenId === user.id).length}</td>
-            <td>
-                <div class="btn-action-group">
-                    <button class="btn btn-outline btn-xs" onclick="openEditKonsumen('${user.id}')">Edit</button>
-                    <button class="btn btn-danger btn-xs" onclick="deleteUser('konsumen', '${user.id}')">Hapus</button>
-                </div>
-            </td>
-        </tr>
-    `).join('') : '<tr><td colspan="9" class="empty-state">Tidak ada data</td></tr>';
-}
-
-function renderAdminTeknisiTable(users = null) {
-    if (!requireAdminAccess()) return;
-    const body = document.getElementById('adminTeknisiListBody');
-    const list = (users || getData().users.teknisi || []).map((user, index) => users ? mapProfileToLocalUser(user, 'teknisi', index) : user);
-    // Tabel Data Master teknisi juga menampilkan password agar formatnya konsisten dengan admin/konsumen.
-    body.innerHTML = list.length ? list.map((user) => `
-        <tr>
-            <td>${escapeHtml(user.name)}</td>
-            <td>${escapeHtml(user.username)}</td>
-            <td>${escapeHtml(user.password)}</td>
-            <td>${escapeHtml(user.nik || '-')}</td>
-            <td>${escapeHtml(user.age || '-')}</td>
-            <td>${escapeHtml(user.specialization || '-')}</td>
-            <td>${escapeHtml(user.phone || '-')}</td>
-            <td>${escapeHtml(user.status || '-')}</td>
-            <td>${escapeHtml(user.completedJobs || 0)}</td>
-            <td>
-                <div class="btn-action-group">
-                    <button class="btn btn-outline btn-xs" onclick="openEditTeknisi('${user.id}')">Edit</button>
-                    <button class="btn btn-outline btn-xs" onclick="openTeknisiImages('${user.id}')">Foto</button>
-                    <button class="btn btn-danger btn-xs" onclick="deleteUser('teknisi', '${user.id}')">Hapus</button>
-                </div>
-            </td>
-        </tr>
-    `).join('') : '<tr><td colspan="10" class="empty-state">Tidak ada data</td></tr>';
-}
-
-function renderAdminAdminTable(users = null) {
-    if (!requireAdminAccess()) return;
-    const body = document.getElementById('adminAdminListBody');
-    const list = (users || getData().users.admin || []).map((user, index) => users ? mapProfileToLocalUser(user, 'admin', index) : user);
-    // Render tabel admin dipertahankan konsisten agar audit data master seragam antar-role.
-    body.innerHTML = list.length ? list.map((user) => `
-        <tr>
-            <td>${escapeHtml(user.name)}</td>
-            <td>${escapeHtml(user.username)}</td>
-            <td>${escapeHtml(user.password)}</td>
-            <td>${escapeHtml(user.role)}</td>
-            <td>${escapeHtml(user.status || 'Aktif')}</td>
-            <td>
-                <div class="btn-action-group">
-                    <button class="btn btn-outline btn-xs" onclick="openEditAdmin('${user.id}')">Edit</button>
-                    <button class="btn btn-danger btn-xs" onclick="deleteUser('admin', '${user.id}')">Hapus</button>
-                </div>
-            </td>
-        </tr>
-    `).join('') : '<tr><td colspan="6" class="empty-state">Tidak ada data admin</td></tr>';
 }
 
 function renderAdminServicesTable() {
@@ -1600,72 +1299,6 @@ function collectRegisterKonsumenForm() {
     };
 }
 
-async function handleRegisterKonsumen(event) {
-    event.preventDefault();
-    const form = collectRegisterKonsumenForm();
-    const manualBirthDateInput = document.getElementById('regKonBirthDateManual');
-    if (manualBirthDateInput && !manualBirthDateInput.checkValidity()) {
-        manualBirthDateInput.reportValidity();
-        return false;
-    }
-    if (!form.name || !form.username || !form.password || !form.email || !form.phone || !form.address) {
-        showToast('Lengkapi data wajib konsumen.', 'error');
-        return false;
-    }
-    if (isUsernameTaken('konsumen', form.username)) {
-        showToast('Username konsumen sudah digunakan.', 'error');
-        return false;
-    }
-
-    const localPayload = {
-        id: nextId(getData().users.konsumen, 'K'),
-        role: 'konsumen',
-        username: form.username,
-        name: form.name,
-        email: form.email,
-        phone: form.phone,
-        address: form.address,
-        age: form.age ? Number(form.age) : null,
-        status: 'Aktif',
-        birthDate: form.birthDate,
-        district: form.district,
-        lat: form.lat,
-        lng: form.lng,
-        unitImages: deepClone(draftUploads.regKonUnitImages),
-        joinedAt: new Date().toISOString(),
-        password: form.password
-    };
-
-    try {
-        const authUser = await registerKonsumenSupabase(form);
-        const user = applySupabaseSession({
-            ...localPayload,
-            id: authUser.id
-        });
-
-        document.getElementById('formRegKonsumen').reset();
-        draftUploads.regKonUnitImages = [];
-        document.getElementById('regKonUnitPreview').innerHTML = '';
-        showKonsumenDashboard();
-        showToast(`Akun konsumen ${user?.name || form.name} berhasil dibuat.`, 'success');
-    } catch (error) {
-        console.error('Registrasi konsumen Supabase gagal:', error);
-        if (!shouldFallbackToLocalAuth(error)) {
-            showToast(error?.message || 'Registrasi konsumen gagal.', 'error');
-            return false;
-        }
-
-        const user = applyLocalSession(localPayload);
-        document.getElementById('formRegKonsumen').reset();
-        draftUploads.regKonUnitImages = [];
-        document.getElementById('regKonUnitPreview').innerHTML = '';
-        showKonsumenDashboard();
-        showToast(`Akun konsumen ${user?.name || form.name} tersimpan lokal. Sinkronisasi cloud akan aktif saat Supabase siap.`, 'warning');
-    }
-
-    return false;
-}
-
 function collectRegisterTeknisiForm() {
     const birthDate = resolveBirthDateValue('regTekBirthDate', 'regTekBirthDateManual');
     syncAgeField('regTekBirthDate', 'regTekAge');
@@ -1685,243 +1318,6 @@ function collectRegisterTeknisiForm() {
         lat: document.getElementById('regTekLat').value,
         lng: document.getElementById('regTekLng').value
     };
-}
-
-async function handleRegisterTeknisi(event) {
-    event.preventDefault();
-    const form = collectRegisterTeknisiForm();
-    if (!form.name || !form.username || !form.password || !form.email || !form.phone || !form.nik || !form.birthDate || !form.specialization || !form.address) {
-        showToast('Lengkapi data wajib teknisi.', 'error');
-        return false;
-    }
-    if (!draftUploads.regTekKtpPhoto || !draftUploads.regTekSelfiePhoto) {
-        showToast('Foto KTP dan foto diri teknisi wajib diunggah.', 'error');
-        return false;
-    }
-    if (isUsernameTaken('teknisi', form.username)) {
-        showToast('Username teknisi sudah digunakan.', 'error');
-        return false;
-    }
-
-    const localPayload = {
-        id: nextId(getData().users.teknisi, 'T'),
-        role: 'teknisi',
-        username: form.username,
-        name: form.name,
-        email: form.email,
-        phone: form.phone,
-        nik: form.nik,
-        specialization: form.specialization,
-        status: 'Aktif',
-        completedJobs: 0,
-        birthDate: form.birthDate,
-        age: form.age ? Number(form.age) : null,
-        experience: form.experience,
-        address: form.address,
-        lat: form.lat,
-        lng: form.lng,
-        ktpPhoto: draftUploads.regTekKtpPhoto,
-        selfiePhoto: draftUploads.regTekSelfiePhoto,
-        joinedAt: new Date().toISOString(),
-        password: form.password
-    };
-
-    try {
-        const authUser = await registerTeknisiSupabase(form);
-        const user = applySupabaseSession({
-            ...localPayload,
-            id: authUser.id
-        });
-
-        document.getElementById('formRegTeknisi').reset();
-        draftUploads.regTekKtpPhoto = '';
-        draftUploads.regTekSelfiePhoto = '';
-        draftUploads.ocrLastResult = null;
-        document.getElementById('regTekIDPreview').innerHTML = '';
-        document.getElementById('regTekSelfiePreview').innerHTML = '';
-        showTeknisiDashboard();
-        showToast(`Akun teknisi ${user?.name || form.name} berhasil dibuat.`, 'success');
-    } catch (error) {
-        console.error('Registrasi teknisi Supabase gagal:', error);
-        if (!shouldFallbackToLocalAuth(error)) {
-            showToast(error?.message || 'Registrasi teknisi gagal.', 'error');
-            return false;
-        }
-
-        const user = applyLocalSession(localPayload);
-        document.getElementById('formRegTeknisi').reset();
-        draftUploads.regTekKtpPhoto = '';
-        draftUploads.regTekSelfiePhoto = '';
-        draftUploads.ocrLastResult = null;
-        document.getElementById('regTekIDPreview').innerHTML = '';
-        document.getElementById('regTekSelfiePreview').innerHTML = '';
-        showTeknisiDashboard();
-        showToast(`Akun teknisi ${user?.name || form.name} tersimpan lokal. Sinkronisasi cloud akan aktif saat Supabase siap.`, 'warning');
-    }
-
-    return false;
-}
-
-async function createOrderSupabase(orderValues) {
-    const user = getCurrentUser();
-    if (!user) throw new Error('User belum login');
-    if (!canUseSupabase()) {
-        return {
-            synced: false,
-            reason: 'Supabase client belum siap.'
-        };
-    }
-
-    const { error } = await supabaseClient
-        .from('orders')
-        .insert({
-            konsumen_id: user.id,
-            service_id: orderValues.service_id,
-            service_name: orderValues.service_name,
-            price: Number(orderValues.price),
-            brand: orderValues.brand || null,
-            pk: orderValues.pk || null,
-            refrigerant: orderValues.refrigerant || null,
-            preferred_date: orderValues.preferred_date || null,
-            address: orderValues.address || null,
-            notes: orderValues.notes || null,
-            phone: orderValues.phone || null,
-            status: 'Menunggu'
-        });
-
-    if (error) {
-        return {
-            synced: false,
-            reason: error.message || 'Gagal sinkron ke Supabase.'
-        };
-    }
-
-    return {
-        synced: true
-    };
-}
-
-async function handleOrderSubmit(event) {
-    event.preventDefault();
-    const user = getCurrentUser();
-    if (!user) {
-        showToast('Session Anda sudah berakhir. Silakan login kembali.', 'warning');
-        return false;
-    }
-    const service = getServices(false).find((item) => item.id === document.getElementById('orderService').value);
-    if (!service) {
-        showToast('Pilih layanan terlebih dahulu.', 'error');
-        return false;
-    }
-    const data = getData();
-    const order = {
-        id: `ORD-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${String(data.orders.length + 1).padStart(3, '0')}`,
-        serviceId: service.id,
-        serviceName: service.name,
-        price: service.price,
-        brand: document.getElementById('orderBrand').value.trim(),
-        pk: document.getElementById('orderPK').value.trim(),
-        refrigerant: document.getElementById('orderRefrigerant').value.trim(),
-        preferredDate: document.getElementById('orderDate').value,
-        address: document.getElementById('orderAddress').value.trim(),
-        notes: document.getElementById('orderNotes').value.trim(),
-        phone: normalizePhone(document.getElementById('orderPhone').value),
-        konsumenId: user.id,
-        konsumenName: user.name,
-        teknisiId: null,
-        teknisiName: null,
-        proofImage: '',
-        status: 'Menunggu',
-        createdAt: new Date().toISOString()
-    };
-    const remoteResult = await createOrderSupabase({
-        service_id: service.id,
-        service_name: service.name,
-        price: service.price,
-        brand: order.brand,
-        pk: order.pk,
-        refrigerant: order.refrigerant,
-        preferred_date: order.preferredDate,
-        address: order.address,
-        notes: order.notes,
-        phone: order.phone
-    }).catch((error) => {
-        console.error('Gagal menyimpan order ke Supabase:', error);
-        return {
-            synced: false,
-            reason: error?.message || 'Sinkronisasi cloud gagal.'
-        };
-    });
-
-    data.orders.push({
-        ...order,
-        syncStatus: remoteResult?.synced ? 'synced' : 'local-only'
-    });
-    saveData(data);
-    document.getElementById('formOrder').reset();
-    navigateTo('konsumen-home');
-    showToast(`Pesanan ${order.id} berhasil dibuat.`, 'success');
-    if (remoteResult && !remoteResult.synced) {
-        showToast(`Pesanan disimpan lokal. Sinkronisasi cloud tertunda: ${remoteResult.reason}`, 'warning');
-    }
-
-    return false;
-}
-
-const persistProfileKonsumen = debounce(() => saveProfile('konsumen'), 500);
-const persistProfileTeknisi = debounce(() => saveProfile('teknisi'), 500);
-
-function handleProfileFormInput(role) {
-    if (role === 'konsumen') persistProfileKonsumen();
-    if (role === 'teknisi') persistProfileTeknisi();
-}
-
-function saveProfile(role) {
-    const session = getCurrentSession();
-    if (!session || session.role !== role) return;
-    const data = getData();
-    const user = data.users[role].find((item) => item.id === session.userId);
-    if (!user) return;
-
-    if (role === 'konsumen') {
-        const username = document.getElementById('profileKonsumenUsername').value.trim();
-        if (isUsernameTaken('konsumen', username, user.id)) {
-            document.getElementById('konsumenProfileAutosave').textContent = 'Username sudah dipakai akun lain.';
-            return;
-        }
-        Object.assign(user, {
-            name: document.getElementById('profileKonsumenName').value.trim(),
-            username,
-            email: normalizeEmail(document.getElementById('profileKonsumenEmail').value),
-            phone: normalizePhone(document.getElementById('profileKonsumenPhone').value),
-            birthDate: document.getElementById('profileKonsumenBirthDate').value,
-            address: document.getElementById('profileKonsumenAddress').value.trim()
-        });
-        document.getElementById('konsumenProfileAutosave').textContent = `Tersimpan otomatis ${formatDateTime(new Date())}`;
-    }
-
-    if (role === 'teknisi') {
-        const username = document.getElementById('profileTeknisiUsername').value.trim();
-        if (isUsernameTaken('teknisi', username, user.id)) {
-            document.getElementById('teknisiProfileAutosave').textContent = 'Username sudah dipakai akun lain.';
-            return;
-        }
-        Object.assign(user, {
-            name: document.getElementById('profileTeknisiName').value.trim(),
-            username,
-            email: normalizeEmail(document.getElementById('profileTeknisiEmail').value),
-            phone: normalizePhone(document.getElementById('profileTeknisiPhone').value),
-            nik: document.getElementById('profileTeknisiNIK').value.trim(),
-            birthDate: document.getElementById('profileTeknisiBirthDate').value,
-            specialization: document.getElementById('profileTeknisiSpecialization').value,
-            experience: Number(document.getElementById('profileTeknisiExperience').value || 0),
-            address: document.getElementById('profileTeknisiAddress').value.trim()
-        });
-        document.getElementById('teknisiProfileAutosave').textContent = `Tersimpan otomatis ${formatDateTime(new Date())}`;
-    }
-
-    saveData(data);
-    renderAppShell();
 }
 
 async function previewRegUpload(event, previewId) {
@@ -1985,12 +1381,13 @@ function getShareLocation(prefix) {
 
 function openEditKonsumen(userId) {
     if (!requireAdminAccess()) return;
-    const user = getData().users.konsumen.find((item) => item.id === userId);
+    const user = remoteState.adminProfiles.konsumen.find((item) => item.id === userId)
+        || getData().users.konsumen.find((item) => item.id === userId);
     if (!user) return;
     document.getElementById('editKonsumenId').value = user.id;
     document.getElementById('editKonsumenName').value = user.name || '';
     document.getElementById('editKonsumenUsername').value = user.username || '';
-    document.getElementById('editKonsumenPassword').value = user.password || '';
+    document.getElementById('editKonsumenPassword').value = 'Dikelola di Supabase Auth';
     document.getElementById('editKonsumenEmail').value = user.email || '';
     document.getElementById('editKonsumenPhone').value = user.phone || '';
     document.getElementById('editKonsumenBirthDate').value = user.birthDate || '';
@@ -1999,47 +1396,53 @@ function openEditKonsumen(userId) {
     document.getElementById('modalEditKonsumen').style.display = 'flex';
 }
 
-function saveEditKonsumen() {
+async function saveEditKonsumen() {
     if (!requireAdminAccess()) return;
-    const data = getData();
-    const user = data.users.konsumen.find((item) => item.id === document.getElementById('editKonsumenId').value);
+    const userId = document.getElementById('editKonsumenId').value;
+    const user = remoteState.adminProfiles.konsumen.find((item) => item.id === userId) || getData().users.konsumen.find((item) => item.id === userId);
     if (!user) return;
     const username = document.getElementById('editKonsumenUsername').value.trim();
-    if (isUsernameTaken('konsumen', username, user.id)) {
+    if (await isUsernameTakenRemote(username, user.id)) {
         showToast('Username konsumen sudah dipakai.', 'error');
         return;
     }
-    Object.assign(user, {
-        name: document.getElementById('editKonsumenName').value.trim(),
-        username,
-        password: document.getElementById('editKonsumenPassword').value,
-        email: normalizeEmail(document.getElementById('editKonsumenEmail').value),
-        phone: normalizePhone(document.getElementById('editKonsumenPhone').value),
-        birthDate: document.getElementById('editKonsumenBirthDate').value,
-        address: document.getElementById('editKonsumenAddress').value.trim()
-    });
-    data.orders.forEach((order) => {
-        if (order.konsumenId === user.id) {
-            order.konsumenName = user.name;
-            order.phone = user.phone;
-            order.address = user.address;
-        }
-    });
-    saveData(data);
-    closeModal('modalEditKonsumen');
-    renderAdminUsers();
-    showToast('Data konsumen diperbarui.', 'success');
+    try {
+        await updateProfileByAdmin(user.id, validateProfilePayloadForRole('konsumen', {
+            id: user.id,
+            role: 'konsumen',
+            username,
+            name: document.getElementById('editKonsumenName').value.trim(),
+            email: user.email,
+            phone: normalizePhone(document.getElementById('editKonsumenPhone').value),
+            birth_date: document.getElementById('editKonsumenBirthDate').value,
+            age: document.getElementById('editKonsumenAge').value,
+            address: document.getElementById('editKonsumenAddress').value.trim(),
+            district: user.district,
+            location_text: user.locationText,
+            lat: user.lat,
+            lng: user.lng,
+            status: user.status
+        }));
+        await loadAdminMasterData();
+        closeModal('modalEditKonsumen');
+        await renderAdminUsers();
+        showToast('Data konsumen diperbarui di Supabase.', 'success');
+    } catch (error) {
+        console.error('Gagal memperbarui konsumen dari admin:', error);
+        showToast(toUserFacingError(error, 'Update konsumen gagal.'), 'error');
+    }
 }
 
 function openEditTeknisi(userId) {
     if (!requireAdminAccess()) return;
-    const user = getData().users.teknisi.find((item) => item.id === userId);
+    const user = remoteState.adminProfiles.teknisi.find((item) => item.id === userId)
+        || getData().users.teknisi.find((item) => item.id === userId);
     if (!user) return;
     populateSpecializationOptions('editTeknisiSpecialization', user.specialization);
     document.getElementById('editTeknisiId').value = user.id;
     document.getElementById('editTeknisiName').value = user.name || '';
     document.getElementById('editTeknisiUsername').value = user.username || '';
-    document.getElementById('editTeknisiPassword').value = user.password || '';
+    document.getElementById('editTeknisiPassword').value = 'Dikelola di Supabase Auth';
     document.getElementById('editTeknisiEmail').value = user.email || '';
     document.getElementById('editTeknisiPhone').value = user.phone || '';
     document.getElementById('editTeknisiNIK').value = user.nik || '';
@@ -2051,38 +1454,43 @@ function openEditTeknisi(userId) {
     document.getElementById('modalEditTeknisi').style.display = 'flex';
 }
 
-function saveEditTeknisi() {
+async function saveEditTeknisi() {
     if (!requireAdminAccess()) return;
-    const data = getData();
-    const user = data.users.teknisi.find((item) => item.id === document.getElementById('editTeknisiId').value);
+    const userId = document.getElementById('editTeknisiId').value;
+    const user = remoteState.adminProfiles.teknisi.find((item) => item.id === userId) || getData().users.teknisi.find((item) => item.id === userId);
     if (!user) return;
     const username = document.getElementById('editTeknisiUsername').value.trim();
-    if (isUsernameTaken('teknisi', username, user.id)) {
+    if (await isUsernameTakenRemote(username, user.id)) {
         showToast('Username teknisi sudah dipakai.', 'error');
         return;
     }
-    Object.assign(user, {
-        name: document.getElementById('editTeknisiName').value.trim(),
-        username,
-        password: document.getElementById('editTeknisiPassword').value,
-        email: normalizeEmail(document.getElementById('editTeknisiEmail').value),
-        phone: normalizePhone(document.getElementById('editTeknisiPhone').value),
-        nik: document.getElementById('editTeknisiNIK').value.trim(),
-        birthDate: document.getElementById('editTeknisiBirthDate').value,
-        specialization: document.getElementById('editTeknisiSpecialization').value,
-        experience: Number(document.getElementById('editTeknisiExperience').value || 0),
-        status: document.getElementById('editTeknisiStatus').value,
-        address: document.getElementById('editTeknisiAddress').value.trim()
-    });
-    data.orders.forEach((order) => {
-        if (order.teknisiId === user.id) {
-            order.teknisiName = user.name;
-        }
-    });
-    saveData(data);
-    closeModal('modalEditTeknisi');
-    renderAdminUsers();
-    showToast('Data teknisi diperbarui.', 'success');
+    try {
+        await updateProfileByAdmin(user.id, validateProfilePayloadForRole('teknisi', {
+            id: user.id,
+            role: 'teknisi',
+            username,
+            name: document.getElementById('editTeknisiName').value.trim(),
+            email: user.email,
+            phone: normalizePhone(document.getElementById('editTeknisiPhone').value),
+            nik: document.getElementById('editTeknisiNIK').value.trim(),
+            birth_date: document.getElementById('editTeknisiBirthDate').value,
+            age: document.getElementById('editTeknisiAge').value,
+            specialization: document.getElementById('editTeknisiSpecialization').value,
+            experience: Number(document.getElementById('editTeknisiExperience').value || 0),
+            address: document.getElementById('editTeknisiAddress').value.trim(),
+            location_text: user.locationText,
+            lat: user.lat,
+            lng: user.lng,
+            status: document.getElementById('editTeknisiStatus').value
+        }));
+        await loadAdminMasterData();
+        closeModal('modalEditTeknisi');
+        await renderAdminUsers();
+        showToast('Data teknisi diperbarui di Supabase.', 'success');
+    } catch (error) {
+        console.error('Gagal memperbarui teknisi dari admin:', error);
+        showToast(toUserFacingError(error, 'Update teknisi gagal.'), 'error');
+    }
 }
 
 function openAddAdminModal() {
@@ -2091,7 +1499,7 @@ function openAddAdminModal() {
     document.getElementById('editAdminId').value = '';
     document.getElementById('editAdminName').value = '';
     document.getElementById('editAdminUsername').value = '';
-    document.getElementById('editAdminPassword').value = '';
+    document.getElementById('editAdminPassword').value = 'Kelola langsung di Supabase Auth';
     document.getElementById('editAdminRole').value = 'admin';
     document.getElementById('editAdminStatus').value = 'Aktif';
     document.getElementById('modalEditAdmin').style.display = 'flex';
@@ -2099,13 +1507,14 @@ function openAddAdminModal() {
 
 function openEditAdmin(userId) {
     if (!requireAdminAccess()) return;
-    const user = getData().users.admin.find((item) => item.id === userId);
+    const user = remoteState.adminProfiles.admin.find((item) => item.id === userId)
+        || getData().users.admin.find((item) => item.id === userId);
     if (!user) return;
     document.getElementById('adminModalTitle').textContent = 'Edit Data Admin';
     document.getElementById('editAdminId').value = user.id;
     document.getElementById('editAdminName').value = user.name || '';
     document.getElementById('editAdminUsername').value = user.username || '';
-    document.getElementById('editAdminPassword').value = user.password || '';
+    document.getElementById('editAdminPassword').value = 'Kelola langsung di Supabase Auth';
     document.getElementById('editAdminRole').value = user.role || 'admin';
     document.getElementById('editAdminStatus').value = user.status || 'Aktif';
     document.getElementById('modalEditAdmin').style.display = 'flex';
@@ -2113,75 +1522,14 @@ function openEditAdmin(userId) {
 
 function saveEditAdmin() {
     if (!requireAdminAccess()) return;
-    const data = getData();
-    const editId = document.getElementById('editAdminId').value;
-    const username = document.getElementById('editAdminUsername').value.trim();
-    const name = document.getElementById('editAdminName').value.trim();
-    const password = document.getElementById('editAdminPassword').value;
-    if (!name || !username || !password) {
-        showToast('Nama, username, dan password admin wajib diisi.', 'error');
-        return;
-    }
-    if (isUsernameTaken('admin', username, editId)) {
-        showToast('Username admin sudah dipakai.', 'error');
-        return;
-    }
-    if (editId) {
-        const user = data.users.admin.find((item) => item.id === editId);
-        Object.assign(user, {
-            name,
-            username,
-            password,
-            role: 'admin',
-            status: document.getElementById('editAdminStatus').value
-        });
-    } else {
-        data.users.admin.push({
-            id: nextId(data.users.admin, 'A'),
-            name,
-            username,
-            password,
-            role: 'admin',
-            status: document.getElementById('editAdminStatus').value,
-            joinedAt: new Date().toISOString()
-        });
-    }
-    saveData(data);
-    closeModal('modalEditAdmin');
-    renderAdminUsers();
-    showToast('Data admin disimpan.', 'success');
+    showToast('Admin dan password auth harus dikelola langsung di Supabase Auth/SQL, bukan disimpan lokal di frontend.', 'warning');
 }
 
 function deleteUser(role, userId) {
     if (!requireAdminAccess()) return;
-    const data = getData();
-    if (role === 'admin' && data.users.admin.length <= 1) {
-        showToast('Minimal harus ada satu admin aktif.', 'warning');
-        return;
-    }
-    const collection = data.users[role];
-    const user = collection.find((item) => item.id === userId);
+    const user = remoteState.adminProfiles?.[role]?.find((item) => item.id === userId) || getData().users?.[role]?.find((item) => item.id === userId);
     if (!user) return;
-    if (!window.confirm(`Hapus ${ROLE_LABELS[role]} ${user.name}?`)) return;
-
-    data.users[role] = collection.filter((item) => item.id !== userId);
-
-    if (role === 'teknisi') {
-        data.orders = data.orders.map((order) => order.teknisiId === userId ? { ...order, teknisiId: null, teknisiName: null, status: order.status === 'Selesai' ? 'Selesai' : 'Menunggu' } : order);
-    }
-    if (role === 'konsumen') {
-        data.orders = data.orders.map((order) => order.konsumenId === userId ? { ...order, konsumenId: null, konsumenName: `${user.name} (dihapus)` } : order);
-    }
-
-    saveData(data);
-    if (getCurrentSession()?.userId === userId) {
-        logoutUser(false);
-        showToast('Akun yang sedang login telah dihapus. Session ditutup aman.', 'warning');
-        return;
-    }
-    renderAdminUsers();
-    renderAdminOrders();
-    showToast(`Data ${ROLE_LABELS[role]} berhasil dihapus.`, 'success');
+    showToast(`Penghapusan ${ROLE_LABELS[role]} ${user.name} harus lewat backend aman atau Supabase Dashboard agar auth dan profiles tetap konsisten.`, 'warning');
 }
 
 function openAddServiceModal() {
@@ -2510,16 +1858,36 @@ function extractKtpFields(rawText) {
         .map((line) => line.replace(/\s+/g, ' ').trim())
         .filter(Boolean);
     const joined = lines.join('\n').toUpperCase();
-    const nik = joined.match(/NIK[:\s]*([0-9]{16})/);
-    const nameLine = lines.find((line) => /NAMA/i.test(line));
+    const normalizedLabelPattern = /^(PROVINSI|KABUPATEN|KOTA|KECAMATAN|KEL\/DESA|KELURAHAN|DESA|AGAMA|STATUS|PEKERJAAN|KEWARGANEGARAAN|BERLAKU|GOL\.? DARAH|RT\/RW|RTRW|JENIS KELAMIN)/i;
+    const normalizeDigitCluster = (value) => String(value || '')
+        .toUpperCase()
+        .replace(/[ODQ]/g, '0')
+        .replace(/[IL|!]/g, '1')
+        .replace(/S/g, '5')
+        .replace(/B/g, '8')
+        .replace(/Z/g, '2')
+        .replace(/\D/g, '');
+
+    const nikCandidates = [
+        ...String(joined).match(/[0-9ODQILSBZ|!]{16,24}/g) || [],
+        ...lines.filter((line) => /NIK/i.test(line))
+    ];
+    const nik = nikCandidates
+        .map((candidate) => normalizeDigitCluster(candidate))
+        .find((candidate) => candidate.length >= 16);
+
+    const nameLineIndex = lines.findIndex((line) => /^NAMA\b/i.test(line) || /^N A M A\b/i.test(line));
+    const nameLine = nameLineIndex >= 0 ? lines[nameLineIndex] : '';
     const addressIndex = lines.findIndex((line) => /ALAMAT/i.test(line));
-    const ttlLine = lines.find((line) => /(TEMPAT|TMPT).*LAHIR|TEMPAT\/TGL LAHIR|TEMPAT,TGL LAHIR/i.test(line));
+    const ttlLineIndex = lines.findIndex((line) => /(TEMPAT|TMPT).*LAHIR|TEMPAT\/TGL LAHIR|TEMPAT,TGL LAHIR|TGL LAHIR/i.test(line));
+    const ttlLine = ttlLineIndex >= 0 ? `${lines[ttlLineIndex]} ${lines[ttlLineIndex + 1] || ''}`.trim() : joined;
 
     let birthDate = '';
-    const dateMatch = (ttlLine || joined).match(/([0-3]?\d)[-\/.]([01]?\d)[-\/.](19|20)\d{2}/);
+    const dateMatch = String(ttlLine || joined).match(/([0-3]?\d)[-\/. ]([01]?\d)[-\/. ]((?:19|20)\d{2})/);
     if (dateMatch) {
-        const [day, month, yearPrefix] = [dateMatch[1], dateMatch[2], dateMatch[3]];
-        const yearFull = dateMatch[0].slice(-4);
+        const day = dateMatch[1];
+        const month = dateMatch[2];
+        const yearFull = dateMatch[3];
         birthDate = `${yearFull}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
     }
 
@@ -2528,21 +1896,94 @@ function extractKtpFields(rawText) {
         const buffer = [];
         for (let index = addressIndex; index < lines.length; index += 1) {
             const line = lines[index];
-            if (index !== addressIndex && /^[A-Z ]{3,}$/.test(line) && /RT|RW|KEL|DESA|KEC|AGAMA|STATUS|PEKERJAAN/.test(line)) break;
+            if (index !== addressIndex && normalizedLabelPattern.test(line.toUpperCase())) break;
             buffer.push(line.replace(/^ALAMAT[:\s]*/i, ''));
-            if (buffer.length >= 2) break;
+            if (buffer.length >= 3) break;
         }
         address = buffer.join(', ').trim();
     }
 
-    const name = nameLine ? nameLine.replace(/^NAMA[:\s]*/i, '').trim() : '';
+    let name = nameLine ? nameLine.replace(/^NAMA[:\s]*/i, '').trim() : '';
+    if (!name && nameLineIndex >= 0) {
+        const nextLine = String(lines[nameLineIndex + 1] || '').trim();
+        if (nextLine && !normalizedLabelPattern.test(nextLine.toUpperCase())) {
+            name = nextLine;
+        }
+    }
+
     return {
-        nik: nik ? nik[1] : '',
+        nik: nik ? nik.slice(0, 16) : '',
         name,
         address,
         birthDate,
-        age: calculateAge(birthDate) || ''
+        age: calculateAge(birthDate) || '',
+        rawText: String(rawText || '').trim()
     };
+}
+
+function renderTechnicianOcrPreview(extracted = {}) {
+    const preview = document.getElementById('ocrPreviewCard');
+    const resultList = document.getElementById('ocrResultList');
+    if (!preview || !resultList) return;
+
+    resultList.innerHTML = `
+        <div><strong>Nama:</strong> ${escapeHtml(extracted.name || '-')}</div>
+        <div><strong>NIK:</strong> ${escapeHtml(extracted.nik || '-')}</div>
+        <div><strong>Alamat:</strong> ${escapeHtml(extracted.address || '-')}</div>
+        <div><strong>Tanggal Lahir:</strong> ${escapeHtml(extracted.birthDate || '-')}</div>
+        <div><strong>Usia:</strong> ${escapeHtml(extracted.age || '-')}</div>
+    `;
+    preview.style.display = 'block';
+}
+
+function applyOcrResultToTechnicianForm(extracted, options = {}) {
+    const force = Boolean(options.force);
+    if (!extracted) return false;
+
+    let changed = false;
+    const applyValue = (elementId, value, config = {}) => {
+        const element = document.getElementById(elementId);
+        if (!element) return;
+        const normalizedValue = String(value || '').trim();
+        const currentValue = String(element.value || '').trim();
+        if (!normalizedValue) return;
+        if (!force && currentValue) return;
+        element.value = normalizedValue;
+        if (typeof config.afterApply === 'function') config.afterApply(normalizedValue, element);
+        changed = true;
+    };
+
+    applyValue('regTekName', extracted.name);
+    applyValue('regTekNIK', extracted.nik);
+    applyValue('regTekAddress', extracted.address);
+    applyValue('regTekBirthDate', extracted.birthDate, {
+        afterApply: (value) => {
+            const manualInput = document.getElementById('regTekBirthDateManual');
+            if (manualInput && (force || !String(manualInput.value || '').trim())) {
+                manualInput.value = formatIsoDateToManual(value);
+                manualInput.setCustomValidity('');
+            }
+            syncAgeField('regTekBirthDate', 'regTekAge');
+        }
+    });
+
+    return changed;
+}
+
+function applyLatestTechnicianOcrResult(force = false) {
+    if (!draftUploads.ocrLastResult) {
+        showToast('Belum ada hasil OCR yang bisa diterapkan.', 'warning');
+        return false;
+    }
+
+    const changed = applyOcrResultToTechnicianForm(draftUploads.ocrLastResult, { force });
+    showToast(
+        changed
+            ? (force ? 'Hasil OCR diterapkan ulang ke form teknisi.' : 'Hasil OCR diterapkan ke field teknisi yang masih kosong.')
+            : 'Tidak ada field yang diubah karena form sudah berisi data manual.',
+        changed ? 'success' : 'warning'
+    );
+    return changed;
 }
 
 function ensureOcrLibrary() {
@@ -2586,22 +2027,10 @@ async function runTechnicianKtpOcr() {
         });
         const extracted = extractKtpFields(result.data.text);
         draftUploads.ocrLastResult = extracted;
-        if (extracted.name && !document.getElementById('regTekName').value.trim()) document.getElementById('regTekName').value = extracted.name;
-        if (extracted.nik && !document.getElementById('regTekNIK').value.trim()) document.getElementById('regTekNIK').value = extracted.nik;
-        if (extracted.address && !document.getElementById('regTekAddress').value.trim()) document.getElementById('regTekAddress').value = extracted.address;
-        if (extracted.birthDate && !document.getElementById('regTekBirthDate').value) {
-            document.getElementById('regTekBirthDate').value = extracted.birthDate;
-            syncAgeField('regTekBirthDate', 'regTekAge');
-        }
-        resultList.innerHTML = `
-            <div><strong>Nama:</strong> ${escapeHtml(extracted.name || '-')}</div>
-            <div><strong>NIK:</strong> ${escapeHtml(extracted.nik || '-')}</div>
-            <div><strong>Alamat:</strong> ${escapeHtml(extracted.address || '-')}</div>
-            <div><strong>Tanggal Lahir:</strong> ${escapeHtml(extracted.birthDate || '-')}</div>
-            <div><strong>Usia:</strong> ${escapeHtml(extracted.age || '-')}</div>
-        `;
+        renderTechnicianOcrPreview(extracted);
+        applyOcrResultToTechnicianForm(extracted, { force: false });
         preview.style.display = 'block';
-        status.textContent = 'OCR selesai. Silakan cek dan koreksi manual bila perlu.';
+        status.textContent = 'OCR selesai. Field kosong sudah diisi otomatis; Anda tetap bisa edit manual atau terapkan ulang hasil OCR.';
         showToast('OCR KTP selesai diproses.', 'success');
     } catch (error) {
         console.error(error);
@@ -2627,19 +2056,26 @@ function toNullableNumber(value) {
 }
 
 function getAppBaseUrl() {
-    return `${window.location.origin}${window.location.pathname}`;
+    const url = new URL(window.location.href);
+    url.hash = '';
+    url.search = '';
+    return url.toString();
 }
 
 function toUserFacingError(error, fallback = 'Terjadi kesalahan.') {
     const message = String(error?.message || error || fallback);
     const normalized = message.toLowerCase();
+    const missingColumn = extractMissingColumnName(error);
 
     if (normalized.includes('invalid login credentials')) return 'Email atau password salah.';
     if (normalized.includes('email not confirmed')) return 'Email belum dikonfirmasi. Cek inbox Anda lalu login kembali.';
     if (normalized.includes('user already registered')) return 'Email sudah terdaftar. Silakan login langsung.';
     if (normalized.includes('duplicate key') && normalized.includes('username')) return 'Username sudah digunakan akun lain.';
     if (normalized.includes('violates row-level security')) return 'Policy Supabase untuk profile/order belum sesuai. Jalankan SQL final di README lalu coba lagi.';
-    if (normalized.includes('menunggu verifikasi admin')) return 'Akun Anda masih menunggu verifikasi admin.';
+    if (missingColumn && OPTIONAL_PROFILE_COLUMN_SET.has(missingColumn)) {
+        return 'Struktur profile Supabase sedang menyesuaikan schema. Aplikasi akan lanjut memakai fallback aman dan data inti tetap bisa dipakai.';
+    }
+    if (normalized.includes('menunggu verifikasi admin')) return 'Status profile lama masih pending. Setelah email confirmed, app akan mengaktifkan profile publik otomatis.';
 
     return message || fallback;
 }
@@ -2693,6 +2129,7 @@ function sanitizeProfileRecord(profile) {
         address: String(profile.address || '').trim(),
         status: String(profile.status || 'Aktif').trim(),
         age: profile.age ?? (calculateAge(profile.birth_date || profile.birthDate) || ''),
+        birth_date: profile.birth_date || profile.birthDate || '',
         birthDate: profile.birth_date || profile.birthDate || '',
         joinedAt: profile.created_at || profile.joinedAt || '',
         completed_jobs: Number(profile.completed_jobs || 0),
@@ -2702,6 +2139,8 @@ function sanitizeProfileRecord(profile) {
         locationText: String(profile.location_text || profile.locationText || '').trim(),
         lat: profile.lat || '',
         lng: profile.lng || '',
+        nik: String(profile.nik || '').trim(),
+        specialization: String(profile.specialization || '').trim(),
         verifiedAt: profile.verified_at || profile.verifiedAt || '',
         verifiedBy: profile.verified_by || profile.verifiedBy || '',
         verifiedByName: profile.verified_by_name || profile.verifiedByName || ''
@@ -2913,15 +2352,6 @@ function applySupabaseSession(profile) {
     return remoteState.profile;
 }
 
-function applyLocalSession() {
-    console.warn('Fallback auth lokal sudah dinonaktifkan.');
-    return null;
-}
-
-function loginUser() {
-    return null;
-}
-
 function switchLoginRole(role, element) {
     const safeRole = ['konsumen', 'teknisi', 'admin'].includes(role) ? role : 'konsumen';
 
@@ -2979,8 +2409,27 @@ function extractPendingProfileSeed(user) {
         nik: String(metadata.nik || '').trim(),
         specialization: String(metadata.specialization || '').trim(),
         experience: metadata.experience || '',
-        status: String(metadata.status || PROFILE_STATUS_PENDING).trim()
+        status: String(metadata.status || PROFILE_STATUS_ACTIVE).trim()
     };
+}
+
+function hasMeaningfulProfileValue(value) {
+    if (value === null || value === undefined) return false;
+    if (typeof value === 'string') return value.trim() !== '';
+    if (Array.isArray(value)) return value.length > 0;
+    return true;
+}
+
+function mergeProfileDraft(...sources) {
+    const merged = {};
+    sources.forEach((source) => {
+        Object.entries(source || {}).forEach(([key, value]) => {
+            if (hasMeaningfulProfileValue(value)) {
+                merged[key] = value;
+            }
+        });
+    });
+    return merged;
 }
 
 function validateProfilePayloadForRole(role, payload = {}, options = {}) {
@@ -3006,7 +2455,10 @@ function validateProfilePayloadForRole(role, payload = {}, options = {}) {
         location_text: String(payload.location_text || payload.locationText || '').trim(),
         lat: payload.lat || '',
         lng: payload.lng || '',
-        status: String(payload.status || (normalizedRole === 'admin' ? PROFILE_STATUS_ACTIVE : PROFILE_STATUS_PENDING)).trim()
+        status: String(payload.status || PROFILE_STATUS_ACTIVE).trim(),
+        verified_at: payload.verified_at || payload.verifiedAt || '',
+        verified_by: payload.verified_by || payload.verifiedBy || '',
+        completed_jobs: payload.completed_jobs ?? payload.completedJobs
     };
 
     if (!cleanPayload.id) throw new Error('User auth belum tersedia untuk profile.');
@@ -3028,7 +2480,10 @@ function validateProfilePayloadForRole(role, payload = {}, options = {}) {
         location_text: toNullableText(cleanPayload.location_text),
         lat: toNullableText(cleanPayload.lat),
         lng: toNullableText(cleanPayload.lng),
-        status: cleanPayload.status
+        status: cleanPayload.status,
+        verified_at: toNullableText(cleanPayload.verified_at),
+        verified_by: toNullableText(cleanPayload.verified_by),
+        completed_jobs: toNullableNumber(cleanPayload.completed_jobs)
     };
 
     if (normalizedRole === 'teknisi') {
@@ -3038,6 +2493,48 @@ function validateProfilePayloadForRole(role, payload = {}, options = {}) {
     }
 
     return result;
+}
+
+function buildAuthenticatedProfilePayload(role, options = {}) {
+    const authUser = options.authUser || remoteState.user;
+    const metadataSeed = extractPendingProfileSeed(authUser);
+    const normalizedExisting = sanitizeProfileRecord(options.existingProfile || null) || {};
+    const normalizedRole = String(
+        role ||
+        normalizedExisting.role ||
+        metadataSeed.role ||
+        options.formPayload?.role ||
+        ''
+    ).trim().toLowerCase();
+
+    if (!normalizedRole) {
+        throw new Error('Role profile tidak ditemukan di metadata auth. Jalankan migrasi SQL provisioning profile lalu login kembali.');
+    }
+
+    const mergedDraft = mergeProfileDraft(
+        normalizedExisting,
+        metadataSeed,
+        options.formPayload
+    );
+
+    const shouldActivatePublicProfile = normalizedRole !== 'admin';
+
+    return validateProfilePayloadForRole(normalizedRole, {
+        ...mergedDraft,
+        id: authUser?.id || mergedDraft.id,
+        email: authUser?.email || mergedDraft.email || options.formPayload?.email,
+        role: normalizedRole,
+        status: shouldActivatePublicProfile
+            ? PROFILE_STATUS_ACTIVE
+            : (mergedDraft.status || PROFILE_STATUS_ACTIVE),
+        verified_at: shouldActivatePublicProfile
+            ? (normalizedExisting.verifiedAt || mergedDraft.verified_at || mergedDraft.verifiedAt || new Date().toISOString())
+            : (mergedDraft.verified_at || mergedDraft.verifiedAt || ''),
+        verified_by: normalizedExisting.verifiedBy || mergedDraft.verified_by || mergedDraft.verifiedBy || '',
+        completed_jobs: normalizedExisting.completed_jobs ?? normalizedExisting.completedJobs ?? mergedDraft.completed_jobs ?? mergedDraft.completedJobs
+    }, {
+        allowAdmin: Boolean(options.allowAdmin)
+    });
 }
 
 async function isUsernameTakenRemote(username, excludeUserId = '') {
@@ -3068,13 +2565,15 @@ async function fetchCurrentProfileStrict(options = {}) {
     const user = await getSupabaseUser();
     if (!user) throw new Error('Session Supabase tidak ditemukan.');
 
-    const { data, error } = await supabaseClient
-        .from('profiles')
-        .select('*')
-        .eq('id', user.id)
-        .maybeSingle();
+    const { data } = await withProfileColumnFallback(
+        ({ selectClause }) => supabaseClient
+            .from('profiles')
+            .select(selectClause)
+            .eq('id', user.id)
+            .maybeSingle(),
+        { context: 'fetchCurrentProfileStrict' }
+    );
 
-    if (error) throw error;
     if (data) return sanitizeProfileRecord(data);
     if (options.allowCreate === false) throw new Error('Profile user belum tersedia di Supabase.');
     return createMissingProfileForAuthenticatedUser(user);
@@ -3082,25 +2581,20 @@ async function fetchCurrentProfileStrict(options = {}) {
 
 async function upsertOwnProfile(payload) {
     if (!canUseSupabase()) throw new Error('Supabase client belum siap.');
-    const workingPayload = { ...payload };
 
-    while (true) {
-        const { data, error } = await supabaseClient
+    const { data } = await withProfileColumnFallback(
+        ({ selectClause, payload: safePayload }) => supabaseClient
             .from('profiles')
-            .upsert(workingPayload, { onConflict: 'id' })
-            .select('*')
-            .single();
-
-        if (!error) return sanitizeProfileRecord(data);
-
-        const missingColumn = extractMissingColumnName(error);
-        if (missingColumn && OPTIONAL_PROFILE_COLUMNS.has(missingColumn) && missingColumn in workingPayload) {
-            delete workingPayload[missingColumn];
-            continue;
+            .upsert(safePayload, { onConflict: 'id' })
+            .select(selectClause)
+            .single(),
+        {
+            context: 'upsertOwnProfile',
+            payload
         }
+    );
 
-        throw error;
-    }
+    return sanitizeProfileRecord(data);
 }
 
 async function createMissingProfileForAuthenticatedUser(userInput = null) {
@@ -3115,7 +2609,9 @@ async function createMissingProfileForAuthenticatedUser(userInput = null) {
     const payload = validateProfilePayloadForRole(metadataSeed.role, {
         ...metadataSeed,
         id: user.id,
-        email: user.email
+        email: user.email,
+        status: metadataSeed.role === 'admin' ? metadataSeed.status : PROFILE_STATUS_ACTIVE,
+        verified_at: metadataSeed.role === 'admin' ? '' : new Date().toISOString()
     });
 
     logApp('auth', 'Membuat profile yang belum tersedia dari metadata auth', {
@@ -3126,25 +2622,41 @@ async function createMissingProfileForAuthenticatedUser(userInput = null) {
     return upsertOwnProfile(payload);
 }
 
-async function ensureProfileAfterAuth(role, formPayload) {
-    const user = await getSupabaseUser();
+async function ensureProfileAfterAuth(role, formPayload = {}, options = {}) {
+    const user = options.authUser || await getSupabaseUser();
     if (!user) throw new Error('Session belum aktif setelah sign up.');
 
-    const payload = validateProfilePayloadForRole(role, {
-        ...formPayload,
-        id: user.id,
-        email: user.email || formPayload.email
+    let existingProfile = options.existingProfile || null;
+    if (!existingProfile) {
+        try {
+            existingProfile = await fetchCurrentProfileStrict({ allowCreate: false });
+        } catch (error) {
+            if (!String(error?.message || '').includes('Profile user belum tersedia')) {
+                throw error;
+            }
+        }
+    }
+
+    const payload = buildAuthenticatedProfilePayload(role, {
+        authUser: user,
+        existingProfile,
+        formPayload
     });
 
     const profile = await upsertOwnProfile(payload);
     applySupabaseSession(profile);
+    void syncNewUserToRemote(profile, {
+        reason: options.reason || 'ensure-profile-after-auth'
+    });
     return profile;
 }
 
 async function ensureApprovedPublicProfile(profile) {
     if (!profile || profile.role === 'admin' || isProfileApproved(profile)) return profile;
-    await logoutSupabase();
-    throw new Error(`Akun ${ROLE_LABELS[profile.role] || profile.role} masih menunggu verifikasi admin.`);
+    return ensureProfileAfterAuth(profile.role, {}, {
+        existingProfile: profile,
+        reason: 'auto-activate-confirmed-public-profile'
+    });
 }
 
 async function requireAuthenticatedProfile(showMessage = true) {
@@ -3165,7 +2677,8 @@ async function requireAuthenticatedProfile(showMessage = true) {
     }
 
     try {
-        const profile = await fetchCurrentProfileStrict();
+        const rawProfile = await fetchCurrentProfileStrict();
+        const profile = await ensureApprovedPublicProfile(rawProfile);
         if (isAdminProfile(profile) && !canAccessAdmin(profile)) {
             await forceExitAdminOnPublicHost({
                 message: getAdminAccessDeniedMessage(),
@@ -3299,13 +2812,16 @@ function getOrdersForCurrentTeknisi() {
 
 async function fetchProfilesByRole(role) {
     if (!requireAdminAccess()) throw new Error('Akses admin dibutuhkan untuk memuat profiles.');
-    const { data, error } = await supabaseClient
-        .from('profiles')
-        .select('*')
-        .eq('role', role)
-        .order('created_at', { ascending: false });
 
-    if (error) throw error;
+    const { data } = await withProfileColumnFallback(
+        ({ selectClause }) => supabaseClient
+            .from('profiles')
+            .select(selectClause)
+            .eq('role', role)
+            .order('created_at', { ascending: false }),
+        { context: `fetchProfilesByRole:${role}` }
+    );
+
     return (data || []).map(sanitizeProfileRecord);
 }
 
@@ -3319,6 +2835,9 @@ async function loadAdminMasterData() {
         fetchOrdersForRole(remoteState.profile)
     ]);
 
+    cacheProfilesByRole('konsumen', konsumen);
+    cacheProfilesByRole('teknisi', teknisi);
+    cacheProfilesByRole('admin', admin);
     remoteState.adminProfiles = { konsumen, teknisi, admin };
     remoteState.adminOrders = orders;
     return true;
@@ -3332,7 +2851,8 @@ async function bootstrapSessionFromSupabase(options = {}) {
         return null;
     }
 
-    const profile = await fetchCurrentProfileStrict();
+    const rawProfile = await fetchCurrentProfileStrict();
+    const profile = await ensureApprovedPublicProfile(rawProfile);
     if (isAdminProfile(profile) && !canAccessAdmin(profile)) {
         await forceExitAdminOnPublicHost({
             message: getAdminAccessDeniedMessage(),
@@ -3340,7 +2860,6 @@ async function bootstrapSessionFromSupabase(options = {}) {
         });
         return null;
     }
-    await ensureApprovedPublicProfile(profile);
     applySupabaseSession(profile);
 
     if (profile.role === 'admin') {
@@ -3475,8 +2994,8 @@ async function handleSupabaseLogin(email, password) {
 
         if (error) throw error;
 
-        const profile = await fetchCurrentProfileStrict();
-        await ensureApprovedPublicProfile(profile);
+        const rawProfile = await fetchCurrentProfileStrict();
+        const profile = await ensureApprovedPublicProfile(rawProfile);
         if (isAdminProfile(profile) && !canAccessAdmin(profile)) {
             await forceExitAdminOnPublicHost({ message: getAdminAccessDeniedMessage() });
             return null;
@@ -3551,7 +3070,7 @@ async function registerKonsumenSupabase(formValues) {
                 location_text: formValues.locationText,
                 lat: formValues.lat,
                 lng: formValues.lng,
-                status: PROFILE_STATUS_PENDING
+                status: PROFILE_STATUS_ACTIVE
             }
         }
     });
@@ -3585,13 +3104,14 @@ async function registerTeknisiSupabase(formValues) {
                 address: formValues.address,
                 age: formValues.age,
                 birth_date: formValues.birthDate,
+                district: formValues.district || '',
                 nik: formValues.nik,
                 specialization: formValues.specialization,
                 experience: formValues.experience,
                 location_text: formValues.locationText,
                 lat: formValues.lat,
                 lng: formValues.lng,
-                status: PROFILE_STATUS_PENDING
+                status: PROFILE_STATUS_ACTIVE
             }
         }
     });
@@ -3621,7 +3141,12 @@ async function handleRegisterKonsumen(event) {
     try {
         const authResult = await registerKonsumenSupabase(form);
         const hasSession = Boolean(authResult.session);
-        notifyAdminNewRegistration('konsumen', form, waPopup);
+        notifyAdminNewRegistration('konsumen', {
+            ...form,
+            registeredAt: new Date().toISOString(),
+            emailVerificationStatus: hasSession ? 'Session aktif; email confirmation tidak menahan login' : 'Menunggu konfirmasi email',
+            profileStatus: hasSession ? PROFILE_STATUS_ACTIVE : `${PROFILE_STATUS_ACTIVE} otomatis setelah email confirmed`
+        }, waPopup);
 
         if (hasSession) {
             await ensureProfileAfterAuth('konsumen', form);
@@ -3630,7 +3155,7 @@ async function handleRegisterKonsumen(event) {
             draftUploads.regKonUnitImages = [];
             document.getElementById('regKonUnitPreview').innerHTML = '';
             document.getElementById('regKonLocationResult').style.display = 'none';
-            resetToPublicLanding(`Pendaftaran konsumen ${form.name} berhasil dikirim dan menunggu verifikasi admin.`);
+            resetToPublicLanding(`Pendaftaran konsumen ${form.name} berhasil. Profile publik aktif dan siap dipakai login.`);
             document.getElementById('loginIdentifier').value = form.email;
             return false;
         }
@@ -3641,7 +3166,7 @@ async function handleRegisterKonsumen(event) {
         document.getElementById('regKonLocationResult').style.display = 'none';
         document.getElementById('loginIdentifier').value = form.email;
         showLoginPage();
-        showToast('Pendaftaran konsumen berhasil dikirim. Cek email bila perlu, lalu tunggu verifikasi admin sebelum login.', 'success');
+        showToast('Pendaftaran konsumen berhasil dikirim. Cek email Anda; setelah email confirmed, profile publik aktif otomatis dan login langsung bisa dipakai.', 'success');
     } catch (error) {
         closePreparedPopup(waPopup);
         console.error('Registrasi konsumen gagal:', error);
@@ -3675,7 +3200,14 @@ async function handleRegisterTeknisi(event) {
     try {
         const authResult = await registerTeknisiSupabase(form);
         const hasSession = Boolean(authResult.session);
-        notifyAdminNewRegistration('teknisi', form, waPopup);
+        notifyAdminNewRegistration('teknisi', {
+            ...form,
+            registeredAt: new Date().toISOString(),
+            emailVerificationStatus: hasSession ? 'Session aktif; email confirmation tidak menahan login' : 'Menunggu konfirmasi email',
+            profileStatus: hasSession ? PROFILE_STATUS_ACTIVE : `${PROFILE_STATUS_ACTIVE} otomatis setelah email confirmed`,
+            ktpUploaded: Boolean(draftUploads.regTekKtpPhoto),
+            selfieUploaded: Boolean(draftUploads.regTekSelfiePhoto)
+        }, waPopup);
 
         if (hasSession) {
             await ensureProfileAfterAuth('teknisi', form);
@@ -3687,7 +3219,7 @@ async function handleRegisterTeknisi(event) {
             document.getElementById('regTekIDPreview').innerHTML = '';
             document.getElementById('regTekSelfiePreview').innerHTML = '';
             document.getElementById('regTekLocationResult').style.display = 'none';
-            resetToPublicLanding(`Pendaftaran teknisi ${form.name} berhasil dikirim dan menunggu verifikasi admin.`);
+            resetToPublicLanding(`Pendaftaran teknisi ${form.name} berhasil. Profile publik aktif dan siap dipakai login.`);
             document.getElementById('loginIdentifier').value = form.email;
             return false;
         }
@@ -3701,7 +3233,7 @@ async function handleRegisterTeknisi(event) {
         document.getElementById('regTekLocationResult').style.display = 'none';
         document.getElementById('loginIdentifier').value = form.email;
         showLoginPage();
-        showToast('Pendaftaran teknisi berhasil dikirim. Cek email bila perlu, lalu tunggu verifikasi admin sebelum login.', 'success');
+        showToast('Pendaftaran teknisi berhasil dikirim. Cek email Anda; setelah email confirmed, profile publik aktif otomatis dan login langsung bisa dipakai.', 'success');
     } catch (error) {
         closePreparedPopup(waPopup);
         console.error('Registrasi teknisi gagal:', error);
@@ -4018,26 +3550,20 @@ async function renderAdminUsers() {
 }
 
 async function updateProfileByAdmin(userId, payload = {}) {
-    const workingPayload = { ...payload };
-
-    while (true) {
-        const { data, error } = await supabaseClient
+    const { data } = await withProfileColumnFallback(
+        ({ selectClause, payload: safePayload }) => supabaseClient
             .from('profiles')
-            .update(workingPayload)
+            .update(safePayload)
             .eq('id', userId)
-            .select('*')
-            .single();
-
-        if (!error) return sanitizeProfileRecord(data);
-
-        const missingColumn = extractMissingColumnName(error);
-        if (missingColumn && OPTIONAL_PROFILE_COLUMNS.has(missingColumn) && missingColumn in workingPayload) {
-            delete workingPayload[missingColumn];
-            continue;
+            .select(selectClause)
+            .single(),
+        {
+            context: `updateProfileByAdmin:${userId}`,
+            payload
         }
+    );
 
-        throw error;
-    }
+    return sanitizeProfileRecord(data);
 }
 
 async function verifyPublicUser(role, userId) {
@@ -4192,6 +3718,7 @@ async function saveProfile(role) {
 
         const updatedProfile = await upsertOwnProfile(payload);
         applySupabaseSession(updatedProfile);
+        void syncNewUserToRemote(updatedProfile, { reason: `profile-autosave-${role}` });
         renderAppShell();
         if (statusNode) statusNode.textContent = `Tersinkron ke Supabase ${formatDateTime(new Date())}`;
     } catch (error) {
@@ -4307,15 +3834,6 @@ function purgeLegacyKonsumenTeknisiCache() {
     localStorage.removeItem(LEGACY_STORAGE_KEY);
 }
 
-async function logoutSupabase() {
-    if (!canUseSupabase()) return;
-    const { error } = await supabaseClient.auth.signOut();
-    if (error) {
-        console.error('Gagal logout Supabase:', error);
-        throw error;
-    }
-}
-
 async function restoreSession() {
     const profile = await bootstrapAuthState();
     return Boolean(profile);
@@ -4325,6 +3843,7 @@ async function initApp() {
     appData = loadStoredData();
     saveData(appData);
     purgeLegacyKonsumenTeknisiCache();
+    hydrateMissingProfileColumnsCache();
     populateSpecializationOptions('regTekSpecialization', 'Semua Layanan');
     syncAdminAccessUI();
     initDomEvents();
