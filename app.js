@@ -14,6 +14,11 @@ const LEGACY_STORAGE_KEY = 'sejukac_data';
 const SCHEMA_VERSION = 2;
 const FALLBACK_IMAGE = 'image/logo.png';
 const OCR_CDN_URL = 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js';
+const DEFAULT_ADMIN_WHATSAPP = '08970788800';
+const PROFILE_STATUS_PENDING = 'Menunggu Verifikasi';
+const PROFILE_STATUS_ACTIVE = 'Aktif';
+const OPTIONAL_PROFILE_COLUMNS = new Set(['location_text', 'verified_at', 'verified_by']);
+const OPTIONAL_ORDER_COLUMNS = new Set(['admin_confirmation_text', 'verified_at', 'verified_by']);
 
 let currentRole = null;
 let currentView = null;
@@ -102,7 +107,8 @@ function createDefaultData() {
         appSettings: {
             appName: 'Indo Sejuk AC',
             storageMode: 'supabase-auth-supabase-data',
-            ocrLibrary: 'tesseract-cdn'
+            ocrLibrary: 'tesseract-cdn',
+            adminWhatsApp: DEFAULT_ADMIN_WHATSAPP
         }
     });
 }
@@ -138,6 +144,154 @@ function normalizePhone(value) {
     }
 
     return digits;
+}
+
+function normalizeWhatsAppNumber(value) {
+    const phone = normalizePhone(value);
+    if (!phone) return '';
+    if (phone.startsWith('0')) return `62${phone.slice(1)}`;
+    if (phone.startsWith('62')) return phone;
+    return phone;
+}
+
+function getAdminWhatsAppNumber() {
+    return normalizeWhatsAppNumber(getData()?.appSettings?.adminWhatsApp || DEFAULT_ADMIN_WHATSAPP) || normalizeWhatsAppNumber(DEFAULT_ADMIN_WHATSAPP);
+}
+
+function formatDisplayPhone(value) {
+    const normalized = normalizePhone(value);
+    return normalized || '-';
+}
+
+function isProfileApproved(profile) {
+    return String(profile?.status || '').trim().toLowerCase() === PROFILE_STATUS_ACTIVE.toLowerCase();
+}
+
+function getMapsLink(lat, lng) {
+    if (!lat || !lng) return '';
+    return `https://www.google.com/maps?q=${encodeURIComponent(`${lat},${lng}`)}`;
+}
+
+function formatLocationSummary(record = {}) {
+    const segments = [];
+    if (record.locationText) segments.push(record.locationText);
+    if (record.lat && record.lng) segments.push(`${record.lat}, ${record.lng}`);
+    if (!segments.length && record.address) segments.push(record.address);
+    return segments.join(' | ') || '-';
+}
+
+function formatVerificationInfo(record = {}) {
+    if (!record.verifiedAt) return 'Belum diverifikasi';
+    const adminList = Array.isArray(remoteState.adminProfiles?.admin) ? remoteState.adminProfiles.admin : [];
+    const matchedAdmin = adminList.find((item) => item.id === record.verifiedBy);
+    const verifier = record.verifiedByName || matchedAdmin?.name || (record.verifiedBy === remoteState.profile?.id ? remoteState.profile?.name : '') || 'Admin';
+    return `${formatDateTime(record.verifiedAt)} oleh ${verifier}`;
+}
+
+function buildMessageLines(lines = []) {
+    return lines.filter(Boolean).join('\n');
+}
+
+function prepareWhatsAppPopup() {
+    try {
+        return window.open('', '_blank');
+    } catch (error) {
+        return null;
+    }
+}
+
+function closePreparedPopup(popup) {
+    if (popup && !popup.closed) popup.close();
+}
+
+function openWhatsAppChat(phone, message, popup = null) {
+    const targetPhone = normalizeWhatsAppNumber(phone);
+    if (!targetPhone) {
+        closePreparedPopup(popup);
+        showToast('Nomor WhatsApp tujuan belum tersedia.', 'warning');
+        return false;
+    }
+
+    const url = `https://wa.me/${targetPhone}?text=${encodeURIComponent(String(message || '').trim())}`;
+    if (popup && !popup.closed) {
+        popup.location.href = url;
+        return true;
+    }
+
+    const popupWindow = window.open(url, '_blank', 'noopener,noreferrer');
+    if (!popupWindow) {
+        showToast('WhatsApp tidak terbuka otomatis. Izinkan pop-up browser lalu coba lagi.', 'warning');
+        return false;
+    }
+    return true;
+}
+
+function buildRegistrationWhatsAppMessage(role, formValues = {}) {
+    const roleLabel = ROLE_LABELS[role] || role;
+    return buildMessageLines([
+        `Pendaftaran ${roleLabel} baru menunggu verifikasi admin.`,
+        '',
+        `Nama: ${formValues.name || '-'}`,
+        `Username: ${formValues.username || '-'}`,
+        `Email: ${formValues.email || '-'}`,
+        `WhatsApp: ${formatDisplayPhone(formValues.phone)}`,
+        role === 'konsumen' ? `Kecamatan: ${formValues.district || '-'}` : `Spesialisasi: ${formValues.specialization || '-'}`,
+        `Alamat: ${formValues.address || '-'}`,
+        `Lokasi teks: ${formValues.locationText || '-'}`,
+        formValues.lat && formValues.lng ? `Google Maps: ${getMapsLink(formValues.lat, formValues.lng)}` : '',
+        role === 'teknisi' ? `NIK: ${formValues.nik || '-'}` : ''
+    ]);
+}
+
+function notifyAdminNewRegistration(role, formValues = {}, popup = null) {
+    return openWhatsAppChat(getAdminWhatsAppNumber(), buildRegistrationWhatsAppMessage(role, formValues), popup);
+}
+
+function buildOrderWhatsAppMessage(order = {}) {
+    return buildMessageLines([
+        'Pesanan layanan baru menunggu verifikasi admin.',
+        '',
+        `No. Pesanan: ${getOrderLabel(order)}`,
+        `Konsumen: ${order.konsumenName || '-'}`,
+        `Layanan: ${order.serviceName || '-'}`,
+        `Tanggal Preferensi: ${formatDate(order.preferredDate || order.createdAt)}`,
+        `Telepon: ${formatDisplayPhone(order.phone)}`,
+        `Alamat: ${order.address || '-'}`,
+        `Merek AC: ${order.brand || '-'}`,
+        `PK: ${order.pk || '-'}`,
+        `Refrigerant: ${order.refrigerant || '-'}`,
+        `Catatan: ${order.notes || '-'}`
+    ]);
+}
+
+function notifyAdminNewOrder(order = {}, popup = null) {
+    return openWhatsAppChat(getAdminWhatsAppNumber(), buildOrderWhatsAppMessage(order), popup);
+}
+
+function buildAdminOrderConfirmationMessage(order, teknisi, customMessage = '') {
+    if (customMessage) return customMessage.trim();
+    return buildMessageLines([
+        `Halo ${order.konsumenName || 'Bapak/Ibu'}, pesanan ${getOrderLabel(order)} sudah diverifikasi admin Indo Sejuk AC.`,
+        `Layanan: ${order.serviceName || '-'}`,
+        `Tanggal preferensi: ${formatDate(order.preferredDate || order.createdAt)}`,
+        `Teknisi penugasan: ${teknisi?.name || '-'}`,
+        `Kontak teknisi: ${formatDisplayPhone(teknisi?.phone)}`,
+        'Tim kami akan menghubungi Anda kembali bila ada penyesuaian jadwal. Terima kasih.'
+    ]);
+}
+
+function extractMissingColumnName(error) {
+    const message = String(error?.message || error || '');
+    const patterns = [
+        /column ["']?([a-z_]+)["']? of relation/i,
+        /column ["']?([a-z_]+)["']? does not exist/i,
+        /Could not find the ['"]([a-z_]+)['"] column/i
+    ];
+    for (const pattern of patterns) {
+        const match = message.match(pattern);
+        if (match?.[1]) return match[1];
+    }
+    return '';
 }
 
 function normalizeLoginIdentifier(value) {
@@ -722,7 +876,12 @@ function sanitizeData(input) {
         unitImagesByUser: {},
         teknisiDocsByUser: {}
     };
-    data.appSettings = data.appSettings || { appName: 'Indo Sejuk AC', storageMode: 'supabase-auth-supabase-data' };
+    data.appSettings = {
+        appName: 'Indo Sejuk AC',
+        storageMode: 'supabase-auth-supabase-data',
+        adminWhatsApp: DEFAULT_ADMIN_WHATSAPP,
+        ...(data.appSettings || {})
+    };
     return recalculateDerivedFields(data);
 }
 
@@ -1333,7 +1492,7 @@ function renderAdminOrders() {
             <td>
                 <div class="btn-action-group">
                     <button class="btn btn-outline btn-xs" onclick="openOrderDetail('${order.id}')">Detail</button>
-                    <button class="btn btn-primary btn-xs" onclick="openAssignModal('${order.id}')">Assign</button>
+                    <button class="btn btn-primary btn-xs" onclick="openAssignModal('${order.id}')">${order.status === 'Menunggu' ? 'Verifikasi' : 'Assign'}</button>
                 </div>
             </td>
         </tr>
@@ -1662,6 +1821,7 @@ function collectRegisterKonsumenForm() {
         birthDate: document.getElementById('regKonBirthDate').value,
         age: document.getElementById('regKonAge').value,
         address: document.getElementById('regKonAddress').value.trim(),
+        locationText: document.getElementById('regKonLocationText')?.value.trim() || '',
         lat: document.getElementById('regKonLat').value,
         lng: document.getElementById('regKonLng').value
     };
@@ -1741,6 +1901,7 @@ function collectRegisterTeknisiForm() {
         specialization: document.getElementById('regTekSpecialization').value,
         experience: Number(document.getElementById('regTekExperience').value || 0),
         address: document.getElementById('regTekAddress').value.trim(),
+        locationText: document.getElementById('regTekLocationText')?.value.trim() || '',
         lat: document.getElementById('regTekLat').value,
         lng: document.getElementById('regTekLng').value
     };
@@ -2028,12 +2189,17 @@ function getShareLocation(prefix) {
     }
     navigator.geolocation.getCurrentPosition((position) => {
         const { latitude, longitude } = position.coords;
+        const mapsLink = getMapsLink(latitude, longitude);
         document.getElementById(`${prefix}Lat`).value = latitude;
         document.getElementById(`${prefix}Lng`).value = longitude;
         document.getElementById(`${prefix}LocationResult`).style.display = 'flex';
         document.getElementById(`${prefix}Coords`).textContent = `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
         const link = document.getElementById(`${prefix}MapLink`);
-        link.href = `https://www.google.com/maps?q=${latitude},${longitude}`;
+        link.href = mapsLink;
+        const locationTextField = document.getElementById(`${prefix}LocationText`);
+        if (locationTextField && !locationTextField.value.trim()) {
+            locationTextField.value = mapsLink;
+        }
     }, () => showToast('Gagal mengambil lokasi.', 'error'));
 }
 
@@ -2365,15 +2531,47 @@ function toggleImageCatalogItem(imageId) {
     renderAdminUsers();
 }
 
+async function updateOrderByAdmin(orderId, payload = {}) {
+    const workingPayload = { ...payload };
+
+    while (true) {
+        const { data, error } = await supabaseClient
+            .from('orders')
+            .update(workingPayload)
+            .eq('id', orderId)
+            .select('*')
+            .single();
+
+        if (!error) return mapOrderRecord(data);
+
+        const missingColumn = extractMissingColumnName(error);
+        if (missingColumn && OPTIONAL_ORDER_COLUMNS.has(missingColumn) && missingColumn in workingPayload) {
+            delete workingPayload[missingColumn];
+            continue;
+        }
+
+        throw error;
+    }
+}
+
 async function openAssignModal(orderId) {
     if (!requireAdminAccess()) return;
     await loadAdminMasterData();
+    const order = remoteState.adminOrders.find((item) => item.id === orderId);
     document.getElementById('assignOrderId').textContent = orderId;
     const select = document.getElementById('assignTeknisi');
     select.innerHTML = '<option value="">Pilih Teknisi</option>' + remoteState.adminProfiles.teknisi
-        .filter((user) => user.status === 'Aktif')
+        .filter((user) => isProfileApproved(user))
         .map((user) => `<option value="${escapeHtml(user.id)}">${escapeHtml(user.name)} - ${escapeHtml(user.specialization || 'Semua Layanan')}</option>`)
         .join('');
+    if (order?.teknisiId) select.value = order.teknisiId;
+    document.getElementById('assignConfirmMessage').value = order?.adminConfirmationText || '';
+    document.getElementById('assignOrderSummary').innerHTML = order ? `
+        <div class="detail-row"><span class="detail-label">Konsumen</span><span class="detail-value">${escapeHtml(order.konsumenName)}</span></div>
+        <div class="detail-row"><span class="detail-label">Layanan</span><span class="detail-value">${escapeHtml(order.serviceName)}</span></div>
+        <div class="detail-row"><span class="detail-label">Telepon</span><span class="detail-value">${escapeHtml(formatDisplayPhone(order.phone))}</span></div>
+        <div class="detail-row"><span class="detail-label">Alamat</span><span class="detail-value">${escapeHtml(order.address || '-')}</span></div>
+    ` : '';
     document.getElementById('modalAssign').style.display = 'flex';
 }
 
@@ -2381,31 +2579,40 @@ async function assignTeknisi() {
     if (!requireAdminAccess()) return;
     const orderId = document.getElementById('assignOrderId').textContent;
     const teknisiId = document.getElementById('assignTeknisi').value;
+    const customMessage = document.getElementById('assignConfirmMessage').value.trim();
     const teknisi = remoteState.adminProfiles.teknisi.find((item) => item.id === teknisiId);
+    const order = remoteState.adminOrders.find((item) => item.id === orderId);
+    const waPopup = prepareWhatsAppPopup();
 
-    if (!orderId || !teknisi) {
+    if (!orderId || !teknisi || !order) {
+        closePreparedPopup(waPopup);
         showToast('Pilih teknisi terlebih dahulu.', 'error');
         return;
     }
 
     try {
-        const { error } = await supabaseClient
-            .from('orders')
-            .update({
-                teknisi_id: teknisi.id,
-                teknisi_name: teknisi.name,
-                status: 'Ditugaskan'
-            })
-            .eq('id', orderId);
-
-        if (error) throw error;
+        const confirmationMessage = buildAdminOrderConfirmationMessage(order, teknisi, customMessage);
+        await updateOrderByAdmin(orderId, {
+            teknisi_id: teknisi.id,
+            teknisi_name: teknisi.name,
+            status: 'Ditugaskan',
+            admin_confirmation_text: confirmationMessage,
+            verified_at: new Date().toISOString(),
+            verified_by: remoteState.profile?.id || null
+        });
 
         closeModal('modalAssign');
         await loadAdminMasterData();
         await renderAdminOrders();
         await renderAdminHome();
+        if (order.phone) {
+            openWhatsAppChat(order.phone, confirmationMessage, waPopup);
+        } else {
+            closePreparedPopup(waPopup);
+        }
         showToast(`Pesanan ${orderId} ditugaskan ke ${teknisi.name}.`, 'success');
     } catch (error) {
+        closePreparedPopup(waPopup);
         console.error('Gagal assign teknisi:', error);
         showToast(toUserFacingError(error, 'Gagal menugaskan teknisi.'), 'error');
     }
@@ -2431,10 +2638,13 @@ function openOrderDetail(orderId) {
             <dt>No. Pesanan</dt><dd>${escapeHtml(getOrderLabel(order))}</dd>
             <dt>Layanan</dt><dd>${escapeHtml(order.serviceName)}</dd>
             <dt>Konsumen</dt><dd>${escapeHtml(order.konsumenName)}</dd>
+            <dt>Telepon</dt><dd>${escapeHtml(formatDisplayPhone(order.phone))}</dd>
             <dt>Teknisi</dt><dd>${escapeHtml(order.teknisiName || 'Belum ditugaskan')}</dd>
             <dt>Tanggal</dt><dd>${escapeHtml(formatDate(order.preferredDate))}</dd>
             <dt>Alamat</dt><dd>${escapeHtml(order.address || '-')}</dd>
             <dt>Status</dt><dd>${escapeHtml(order.status)}</dd>
+            <dt>Verifikasi Admin</dt><dd>${escapeHtml(formatVerificationInfo(order))}</dd>
+            <dt>Konfirmasi Admin</dt><dd>${escapeHtml(order.adminConfirmationText || '-')}</dd>
             <dt>Catatan</dt><dd>${escapeHtml(order.notes || '-')}</dd>
         </dl>
         <div class="detail-proof">${proof}</div>
@@ -2649,6 +2859,7 @@ function toUserFacingError(error, fallback = 'Terjadi kesalahan.') {
     if (normalized.includes('user already registered')) return 'Email sudah terdaftar. Silakan login langsung.';
     if (normalized.includes('duplicate key') && normalized.includes('username')) return 'Username sudah digunakan akun lain.';
     if (normalized.includes('violates row-level security')) return 'Policy Supabase untuk profile/order belum sesuai. Jalankan SQL final di README lalu coba lagi.';
+    if (normalized.includes('menunggu verifikasi admin')) return 'Akun Anda masih menunggu verifikasi admin.';
 
     return message || fallback;
 }
@@ -2708,8 +2919,12 @@ function sanitizeProfileRecord(profile) {
         completedJobs: Number(profile.completed_jobs || profile.completedJobs || 0),
         experience: Number(profile.experience || 0),
         district: String(profile.district || '').trim(),
+        locationText: String(profile.location_text || profile.locationText || '').trim(),
         lat: profile.lat || '',
-        lng: profile.lng || ''
+        lng: profile.lng || '',
+        verifiedAt: profile.verified_at || profile.verifiedAt || '',
+        verifiedBy: profile.verified_by || profile.verifiedBy || '',
+        verifiedByName: profile.verified_by_name || profile.verifiedByName || ''
     };
 }
 
@@ -2726,7 +2941,11 @@ function mapOrderRecord(order) {
         teknisiId: order.teknisi_id || order.teknisiId || null,
         teknisiName: order.teknisi_name || order.teknisiName || null,
         proofImage: order.proof_image_data || order.proof_image_url || order.proofImage || '',
-        createdAt: order.created_at || order.createdAt || ''
+        createdAt: order.created_at || order.createdAt || '',
+        adminConfirmationText: order.admin_confirmation_text || order.adminConfirmationText || '',
+        verifiedAt: order.verified_at || order.verifiedAt || '',
+        verifiedBy: order.verified_by || order.verifiedBy || '',
+        verifiedByName: order.verified_by_name || order.verifiedByName || ''
     };
 }
 
@@ -2830,12 +3049,13 @@ function extractPendingProfileSeed(user) {
         age: metadata.age || '',
         birth_date: metadata.birth_date || metadata.birthDate || '',
         district: String(metadata.district || '').trim(),
+        location_text: String(metadata.location_text || metadata.locationText || '').trim(),
         lat: metadata.lat || '',
         lng: metadata.lng || '',
         nik: String(metadata.nik || '').trim(),
         specialization: String(metadata.specialization || '').trim(),
         experience: metadata.experience || '',
-        status: String(metadata.status || 'Aktif').trim()
+        status: String(metadata.status || PROFILE_STATUS_PENDING).trim()
     };
 }
 
@@ -2859,9 +3079,10 @@ function validateProfilePayloadForRole(role, payload = {}, options = {}) {
         age: payload.age,
         birth_date: payload.birth_date || payload.birthDate || '',
         district: String(payload.district || '').trim(),
+        location_text: String(payload.location_text || payload.locationText || '').trim(),
         lat: payload.lat || '',
         lng: payload.lng || '',
-        status: String(payload.status || 'Aktif').trim()
+        status: String(payload.status || (normalizedRole === 'admin' ? PROFILE_STATUS_ACTIVE : PROFILE_STATUS_PENDING)).trim()
     };
 
     if (!cleanPayload.id) throw new Error('User auth belum tersedia untuk profile.');
@@ -2880,6 +3101,7 @@ function validateProfilePayloadForRole(role, payload = {}, options = {}) {
         age: toNullableNumber(cleanPayload.age),
         birth_date: toNullableText(cleanPayload.birth_date),
         district: toNullableText(cleanPayload.district),
+        location_text: toNullableText(cleanPayload.location_text),
         lat: toNullableText(cleanPayload.lat),
         lng: toNullableText(cleanPayload.lng),
         status: cleanPayload.status
@@ -2936,15 +3158,25 @@ async function fetchCurrentProfileStrict(options = {}) {
 
 async function upsertOwnProfile(payload) {
     if (!canUseSupabase()) throw new Error('Supabase client belum siap.');
+    const workingPayload = { ...payload };
 
-    const { data, error } = await supabaseClient
-        .from('profiles')
-        .upsert(payload, { onConflict: 'id' })
-        .select('*')
-        .single();
+    while (true) {
+        const { data, error } = await supabaseClient
+            .from('profiles')
+            .upsert(workingPayload, { onConflict: 'id' })
+            .select('*')
+            .single();
 
-    if (error) throw error;
-    return sanitizeProfileRecord(data);
+        if (!error) return sanitizeProfileRecord(data);
+
+        const missingColumn = extractMissingColumnName(error);
+        if (missingColumn && OPTIONAL_PROFILE_COLUMNS.has(missingColumn) && missingColumn in workingPayload) {
+            delete workingPayload[missingColumn];
+            continue;
+        }
+
+        throw error;
+    }
 }
 
 async function createMissingProfileForAuthenticatedUser(userInput = null) {
@@ -2983,6 +3215,12 @@ async function ensureProfileAfterAuth(role, formPayload) {
     const profile = await upsertOwnProfile(payload);
     applySupabaseSession(profile);
     return profile;
+}
+
+async function ensureApprovedPublicProfile(profile) {
+    if (!profile || profile.role === 'admin' || isProfileApproved(profile)) return profile;
+    await logoutSupabase();
+    throw new Error(`Akun ${ROLE_LABELS[profile.role] || profile.role} masih menunggu verifikasi admin.`);
 }
 
 async function requireAuthenticatedProfile(showMessage = true) {
@@ -3106,7 +3344,7 @@ async function fetchProfilesByRole(role) {
     if (!requireAdminAccess()) throw new Error('Akses admin dibutuhkan untuk memuat profiles.');
     const { data, error } = await supabaseClient
         .from('profiles')
-        .select('id, role, username, name, email, phone, address, age, birth_date, district, lat, lng, status, nik, specialization, experience, completed_jobs, created_at')
+        .select('*')
         .eq('role', role)
         .order('created_at', { ascending: false });
 
@@ -3138,6 +3376,7 @@ async function bootstrapSessionFromSupabase(options = {}) {
     }
 
     const profile = await fetchCurrentProfileStrict();
+    await ensureApprovedPublicProfile(profile);
     applySupabaseSession(profile);
 
     if (profile.role === 'admin') {
@@ -3262,6 +3501,7 @@ async function handleSupabaseLogin(email, password) {
     if (error) throw error;
 
     const profile = await fetchCurrentProfileStrict();
+    await ensureApprovedPublicProfile(profile);
     applySupabaseSession(profile);
 
     if (profile.role === 'admin') {
@@ -3325,9 +3565,10 @@ async function registerKonsumenSupabase(formValues) {
                 age: formValues.age,
                 birth_date: formValues.birthDate,
                 district: formValues.district,
+                location_text: formValues.locationText,
                 lat: formValues.lat,
                 lng: formValues.lng,
-                status: 'Aktif'
+                status: PROFILE_STATUS_PENDING
             }
         }
     });
@@ -3364,9 +3605,10 @@ async function registerTeknisiSupabase(formValues) {
                 nik: formValues.nik,
                 specialization: formValues.specialization,
                 experience: formValues.experience,
+                location_text: formValues.locationText,
                 lat: formValues.lat,
                 lng: formValues.lng,
-                status: 'Aktif'
+                status: PROFILE_STATUS_PENDING
             }
         }
     });
@@ -3381,7 +3623,9 @@ async function handleRegisterKonsumen(event) {
     event.preventDefault();
 
     const form = collectRegisterKonsumenForm();
+    const waPopup = prepareWhatsAppPopup();
     if (!form.name || !form.username || !form.password || !form.email || !form.phone || !form.address || !form.district) {
+        closePreparedPopup(waPopup);
         showToast('Lengkapi data wajib konsumen.', 'error');
         return false;
     }
@@ -3389,25 +3633,29 @@ async function handleRegisterKonsumen(event) {
     try {
         const authResult = await registerKonsumenSupabase(form);
         const hasSession = Boolean(authResult.session);
+        notifyAdminNewRegistration('konsumen', form, waPopup);
 
         if (hasSession) {
-            const profile = await ensureProfileAfterAuth('konsumen', form);
-            remoteState.currentOrders = await fetchOrdersForRole(profile);
+            await ensureProfileAfterAuth('konsumen', form);
+            await logoutSupabase();
             document.getElementById('formRegKonsumen').reset();
             draftUploads.regKonUnitImages = [];
             document.getElementById('regKonUnitPreview').innerHTML = '';
-            await redirectUserByRole(profile);
-            showToast(`Akun konsumen ${profile.name} berhasil dibuat.`, 'success');
+            document.getElementById('regKonLocationResult').style.display = 'none';
+            resetToPublicLanding(`Pendaftaran konsumen ${form.name} berhasil dikirim dan menunggu verifikasi admin.`);
+            document.getElementById('loginIdentifier').value = form.email;
             return false;
         }
 
         document.getElementById('formRegKonsumen').reset();
         draftUploads.regKonUnitImages = [];
         document.getElementById('regKonUnitPreview').innerHTML = '';
+        document.getElementById('regKonLocationResult').style.display = 'none';
         document.getElementById('loginIdentifier').value = form.email;
         showLoginPage();
-        showToast('Akun dibuat. Cek email untuk konfirmasi, lalu login dengan email dan password Anda.', 'success');
+        showToast('Pendaftaran konsumen berhasil dikirim. Cek email bila perlu, lalu tunggu verifikasi admin sebelum login.', 'success');
     } catch (error) {
+        closePreparedPopup(waPopup);
         console.error('Registrasi konsumen gagal:', error);
         showToast(toUserFacingError(error, 'Registrasi konsumen gagal.'), 'error');
     }
@@ -3419,11 +3667,14 @@ async function handleRegisterTeknisi(event) {
     event.preventDefault();
 
     const form = collectRegisterTeknisiForm();
+    const waPopup = prepareWhatsAppPopup();
     if (!form.name || !form.username || !form.password || !form.email || !form.phone || !form.nik || !form.birthDate || !form.specialization || !form.address) {
+        closePreparedPopup(waPopup);
         showToast('Lengkapi data wajib teknisi.', 'error');
         return false;
     }
     if (!draftUploads.regTekKtpPhoto || !draftUploads.regTekSelfiePhoto) {
+        closePreparedPopup(waPopup);
         showToast('Foto KTP dan foto diri teknisi wajib diunggah.', 'error');
         return false;
     }
@@ -3431,18 +3682,20 @@ async function handleRegisterTeknisi(event) {
     try {
         const authResult = await registerTeknisiSupabase(form);
         const hasSession = Boolean(authResult.session);
+        notifyAdminNewRegistration('teknisi', form, waPopup);
 
         if (hasSession) {
-            const profile = await ensureProfileAfterAuth('teknisi', form);
-            remoteState.currentOrders = await fetchOrdersForRole(profile);
+            await ensureProfileAfterAuth('teknisi', form);
+            await logoutSupabase();
             document.getElementById('formRegTeknisi').reset();
             draftUploads.regTekKtpPhoto = '';
             draftUploads.regTekSelfiePhoto = '';
             draftUploads.ocrLastResult = null;
             document.getElementById('regTekIDPreview').innerHTML = '';
             document.getElementById('regTekSelfiePreview').innerHTML = '';
-            await redirectUserByRole(profile);
-            showToast(`Akun teknisi ${profile.name} berhasil dibuat.`, 'success');
+            document.getElementById('regTekLocationResult').style.display = 'none';
+            resetToPublicLanding(`Pendaftaran teknisi ${form.name} berhasil dikirim dan menunggu verifikasi admin.`);
+            document.getElementById('loginIdentifier').value = form.email;
             return false;
         }
 
@@ -3452,10 +3705,12 @@ async function handleRegisterTeknisi(event) {
         draftUploads.ocrLastResult = null;
         document.getElementById('regTekIDPreview').innerHTML = '';
         document.getElementById('regTekSelfiePreview').innerHTML = '';
+        document.getElementById('regTekLocationResult').style.display = 'none';
         document.getElementById('loginIdentifier').value = form.email;
         showLoginPage();
-        showToast('Akun teknisi dibuat. Cek email untuk konfirmasi, lalu login dengan email dan password.', 'success');
+        showToast('Pendaftaran teknisi berhasil dikirim. Cek email bila perlu, lalu tunggu verifikasi admin sebelum login.', 'success');
     } catch (error) {
+        closePreparedPopup(waPopup);
         console.error('Registrasi teknisi gagal:', error);
         showToast(toUserFacingError(error, 'Registrasi teknisi gagal.'), 'error');
     }
@@ -3567,7 +3822,7 @@ function renderKonsumenProfile() {
     document.getElementById('profileKonsumenBirthDate').value = user.birthDate || '';
     document.getElementById('profileKonsumenAge').value = user.age || '';
     document.getElementById('profileKonsumenAddress').value = user.address || '';
-    document.getElementById('profileKonsumenLocation').textContent = user.lat && user.lng ? `${user.lat}, ${user.lng}` : 'Belum dibagikan';
+    document.getElementById('profileKonsumenLocation').textContent = formatLocationSummary(user);
     document.getElementById('profileKonsumenJoined').textContent = formatDate(user.joinedAt);
     document.getElementById('konsumenProfileAutosave').textContent = 'Profil akan sinkron otomatis ke Supabase.';
 }
@@ -3655,7 +3910,7 @@ function renderTeknisiProfile() {
     document.getElementById('profileTeknisiAge').value = user.age || '';
     document.getElementById('profileTeknisiExperience').value = user.experience || 0;
     document.getElementById('profileTeknisiAddress').value = user.address || '';
-    document.getElementById('profileTeknisiLocation').textContent = user.lat && user.lng ? `${user.lat}, ${user.lng}` : 'Belum dibagikan';
+    document.getElementById('profileTeknisiLocation').textContent = formatLocationSummary(user);
     document.getElementById('profileTeknisiStatus').textContent = user.status || 'Aktif';
     document.getElementById('teknisiProfileAutosave').textContent = 'Profil akan sinkron otomatis ke Supabase.';
 }
@@ -3764,6 +4019,54 @@ async function renderAdminUsers() {
     switchUserTab(currentUserTab);
 }
 
+async function updateProfileByAdmin(userId, payload = {}) {
+    const workingPayload = { ...payload };
+
+    while (true) {
+        const { data, error } = await supabaseClient
+            .from('profiles')
+            .update(workingPayload)
+            .eq('id', userId)
+            .select('*')
+            .single();
+
+        if (!error) return sanitizeProfileRecord(data);
+
+        const missingColumn = extractMissingColumnName(error);
+        if (missingColumn && OPTIONAL_PROFILE_COLUMNS.has(missingColumn) && missingColumn in workingPayload) {
+            delete workingPayload[missingColumn];
+            continue;
+        }
+
+        throw error;
+    }
+}
+
+async function verifyPublicUser(role, userId) {
+    if (!requireAdminAccess()) return;
+    try {
+        await updateProfileByAdmin(userId, {
+            status: PROFILE_STATUS_ACTIVE,
+            verified_at: new Date().toISOString(),
+            verified_by: remoteState.profile?.id || null
+        });
+        await loadAdminMasterData();
+        renderAdminKonsumenTable(remoteState.adminProfiles.konsumen);
+        renderAdminTeknisiTable(remoteState.adminProfiles.teknisi);
+        await renderAdminHome();
+        showToast(`Akun ${ROLE_LABELS[role] || role} berhasil diverifikasi.`, 'success');
+    } catch (error) {
+        console.error('Gagal verifikasi user:', error);
+        showToast(toUserFacingError(error, 'Verifikasi user gagal.'), 'error');
+    }
+}
+
+function renderAdminUserActions(user, role) {
+    if (role === 'admin') return '-';
+    if (isProfileApproved(user)) return '<span class="text-muted">Terverifikasi</span>';
+    return `<button class="btn btn-primary btn-xs" onclick="verifyPublicUser('${role}', '${user.id}')">Verifikasi</button>`;
+}
+
 function renderAdminKonsumenTable(users = []) {
     if (!requireAdminAccess()) return;
     const body = document.getElementById('adminKonsumenListBody');
@@ -3777,9 +4080,11 @@ function renderAdminKonsumenTable(users = []) {
             <td>${escapeHtml(user.phone || '-')}</td>
             <td>${escapeHtml(user.age || '-')}</td>
             <td>${escapeHtml(user.address || '-')}</td>
+            <td>${renderStatusBadge(user.status || PROFILE_STATUS_PENDING)}</td>
             <td>${orders.filter((order) => order.konsumenId === user.id).length}</td>
+            <td>${renderAdminUserActions(user, 'konsumen')}</td>
         </tr>
-    `).join('') : '<tr><td colspan="7" class="empty-state">Tidak ada data</td></tr>';
+    `).join('') : '<tr><td colspan="9" class="empty-state">Tidak ada data</td></tr>';
 }
 
 function renderAdminTeknisiTable(users = []) {
@@ -3795,10 +4100,11 @@ function renderAdminTeknisiTable(users = []) {
             <td>${escapeHtml(user.phone || '-')}</td>
             <td>${escapeHtml(user.nik || '-')}</td>
             <td>${escapeHtml(user.specialization || '-')}</td>
-            <td>${escapeHtml(user.status || '-')}</td>
+            <td>${renderStatusBadge(user.status || PROFILE_STATUS_PENDING)}</td>
             <td>${orders.filter((order) => order.teknisiId === user.id && order.status === 'Selesai').length}</td>
+            <td>${renderAdminUserActions(user, 'teknisi')}</td>
         </tr>
-    `).join('') : '<tr><td colspan="8" class="empty-state">Tidak ada data</td></tr>';
+    `).join('') : '<tr><td colspan="9" class="empty-state">Tidak ada data</td></tr>';
 }
 
 function renderAdminAdminTable(users = []) {
@@ -3850,6 +4156,7 @@ async function saveProfile(role) {
                 age: document.getElementById('profileKonsumenAge').value,
                 address: document.getElementById('profileKonsumenAddress').value.trim(),
                 district: profile.district,
+                location_text: profile.locationText,
                 lat: profile.lat,
                 lng: profile.lng,
                 status: profile.status
@@ -3870,6 +4177,7 @@ async function saveProfile(role) {
                 specialization: document.getElementById('profileTeknisiSpecialization').value,
                 experience: document.getElementById('profileTeknisiExperience').value,
                 address: document.getElementById('profileTeknisiAddress').value.trim(),
+                location_text: profile.locationText,
                 lat: profile.lat,
                 lng: profile.lng,
                 status: profile.status
@@ -3930,9 +4238,11 @@ async function handleOrderSubmit(event) {
 
     const profile = await requireAuthenticatedProfile(true);
     if (!profile || profile.role !== 'konsumen') return false;
+    const waPopup = prepareWhatsAppPopup();
 
     const service = getServices(false).find((item) => item.id === document.getElementById('orderService').value);
     if (!service) {
+        closePreparedPopup(waPopup);
         showToast('Pilih layanan terlebih dahulu.', 'error');
         return false;
     }
@@ -3951,11 +4261,13 @@ async function handleOrderSubmit(event) {
             phone: normalizePhone(document.getElementById('orderPhone').value)
         });
 
+        notifyAdminNewOrder(order, waPopup);
         await loadCurrentOrdersForProfile();
         document.getElementById('formOrder').reset();
         await navigateTo('konsumen-home');
-        showToast(`Pesanan ${getOrderLabel(order)} berhasil dibuat dan tersimpan di Supabase.`, 'success');
+        showToast(`Pesanan ${getOrderLabel(order)} berhasil dibuat dan menunggu verifikasi admin.`, 'success');
     } catch (error) {
+        closePreparedPopup(waPopup);
         console.error('Gagal membuat order di Supabase:', error);
         showToast(toUserFacingError(error, 'Pesanan gagal dibuat.'), 'error');
     }

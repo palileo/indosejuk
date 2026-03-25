@@ -14,8 +14,19 @@ Konfigurasi Supabase saat ini ada di [app.js](/c:/Users/justdoit/Documents/GitHu
 
 - `SUPABASE_URL`
 - `SUPABASE_ANON_KEY`
+- `DEFAULT_ADMIN_WHATSAPP`
 
 Karena project ini adalah static site GitHub Pages, jangan pernah menaruh `service_role` key di frontend.
+
+## Catatan WhatsApp
+
+Project ini tidak memakai backend pengirim WhatsApp. Karena itu frontend menyiapkan pesan otomatis lalu membuka `wa.me` ke:
+
+- admin saat ada pendaftaran baru
+- admin saat ada pesanan baru
+- konsumen saat admin selesai verifikasi dan menugaskan teknisi
+
+Ini adalah pendekatan paling aman untuk static site tanpa secret API WhatsApp.
 
 ## Arsitektur auth final
 
@@ -37,10 +48,12 @@ Frontend mengirim `signUp()` dengan `email`, `password`, dan `user_metadata` ber
 - `address`
 - `birth_date`
 - `district`
+- `location_text`
 - `nik`
 - `specialization`
 
 Password tidak pernah disimpan di `profiles`.
+Semua pendaftaran publik baru (`konsumen` dan `teknisi`) masuk dengan status `Menunggu Verifikasi` dan baru bisa login setelah admin mengubah status menjadi `Aktif`.
 
 ### Confirm sign up OFF
 
@@ -125,12 +138,15 @@ create table if not exists public.profiles (
   age integer,
   birth_date date,
   district text,
+  location_text text,
   lat text,
   lng text,
   nik text,
   specialization text,
   experience integer default 0,
   status text not null default 'Aktif',
+  verified_at timestamptz,
+  verified_by uuid references public.profiles(id) on delete set null,
   completed_jobs integer not null default 0,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
@@ -145,12 +161,15 @@ alter table public.profiles add column if not exists address text;
 alter table public.profiles add column if not exists age integer;
 alter table public.profiles add column if not exists birth_date date;
 alter table public.profiles add column if not exists district text;
+alter table public.profiles add column if not exists location_text text;
 alter table public.profiles add column if not exists lat text;
 alter table public.profiles add column if not exists lng text;
 alter table public.profiles add column if not exists nik text;
 alter table public.profiles add column if not exists specialization text;
 alter table public.profiles add column if not exists experience integer default 0;
 alter table public.profiles add column if not exists status text default 'Aktif';
+alter table public.profiles add column if not exists verified_at timestamptz;
+alter table public.profiles add column if not exists verified_by uuid references public.profiles(id) on delete set null;
 alter table public.profiles add column if not exists completed_jobs integer default 0;
 alter table public.profiles add column if not exists created_at timestamptz default now();
 alter table public.profiles add column if not exists updated_at timestamptz default now();
@@ -176,6 +195,9 @@ create table if not exists public.orders (
   notes text,
   phone text,
   status text not null default 'Menunggu' check (status in ('Menunggu', 'Ditugaskan', 'Dikerjakan', 'Selesai', 'Dibatalkan')),
+  admin_confirmation_text text,
+  verified_at timestamptz,
+  verified_by uuid references public.profiles(id) on delete set null,
   proof_image_data text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
@@ -184,6 +206,9 @@ create table if not exists public.orders (
 alter table public.orders add column if not exists order_number text;
 alter table public.orders add column if not exists konsumen_name text;
 alter table public.orders add column if not exists teknisi_name text;
+alter table public.orders add column if not exists admin_confirmation_text text;
+alter table public.orders add column if not exists verified_at timestamptz;
+alter table public.orders add column if not exists verified_by uuid references public.profiles(id) on delete set null;
 alter table public.orders add column if not exists proof_image_data text;
 alter table public.orders add column if not exists created_at timestamptz default now();
 alter table public.orders add column if not exists updated_at timestamptz default now();

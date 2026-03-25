@@ -248,6 +248,10 @@
                                 <a id="regKonMapLink" href="#" target="_blank" class="sharelok-map-link">Lihat di Google Maps â†—</a>
                             </div>
                         </div>
+                        <div class="form-group full-width" style="margin-top:1rem;">
+                            <label for="regKonLocationText">Copas Teks GPS / Link Sharelok</label>
+                            <textarea id="regKonLocationText" rows="2" placeholder="Tempel link Google Maps atau teks share lokasi dari WhatsApp di sini"></textarea>
+                        </div>
                         <input type="hidden" id="regKonLat">
                         <input type="hidden" id="regKonLng">
                     </div>
@@ -352,6 +356,10 @@
                                 <span class="sharelok-coords" id="regTekCoords"></span>
                                 <a id="regTekMapLink" href="#" target="_blank" class="sharelok-map-link">Lihat di Google Maps â†—</a>
                             </div>
+                        </div>
+                        <div class="form-group full-width" style="margin-top:1rem;">
+                            <label for="regTekLocationText">Copas Teks GPS / Link Sharelok</label>
+                            <textarea id="regTekLocationText" rows="2" placeholder="Tempel link Google Maps atau teks share lokasi dari WhatsApp di sini"></textarea>
                         </div>
                         <input type="hidden" id="regTekLat">
                         <input type="hidden" id="regTekLng">
@@ -1040,7 +1048,7 @@
             <section class="view" id="viewAdminOrders" style="display:none;">
                 <div class="page-header">
                     <h2>Manajemen Pesanan</h2>
-                    <p>Kelola semua pesanan masuk dan assign ke teknisi</p>
+                    <p>Verifikasi pesanan masuk, tugaskan teknisi, lalu kirim konfirmasi ke konsumen</p>
                 </div>
 
                 <div class="filter-bar">
@@ -1104,11 +1112,13 @@
                                     <th>Telepon</th>
                                     <th>Usia</th>
                                     <th>Alamat</th>
+                                    <th>Status</th>
                                     <th>Total Pesanan</th>
+                                    <th>Aksi</th>
                                 </tr>
                             </thead>
                             <tbody id="adminKonsumenListBody">
-                                <tr><td colspan="7" class="empty-state">Tidak ada data</td></tr>
+                                <tr><td colspan="9" class="empty-state">Tidak ada data</td></tr>
                             </tbody>
                         </table>
                     </div>
@@ -1128,10 +1138,11 @@
                                     <th>Spesialisasi</th>
                                     <th>Status</th>
                                     <th>Tugas Selesai</th>
+                                    <th>Aksi</th>
                                 </tr>
                             </thead>
                             <tbody id="adminTeknisiListBody">
-                                <tr><td colspan="8" class="empty-state">Tidak ada data</td></tr>
+                                <tr><td colspan="9" class="empty-state">Tidak ada data</td></tr>
                             </tbody>
                         </table>
                     </div>
@@ -1243,16 +1254,21 @@
             </div>
             <div class="modal-body">
                 <p>Pesanan: <strong id="assignOrderId"></strong></p>
+                <div class="profile-details" id="assignOrderSummary" style="margin-bottom:1rem;"></div>
                 <div class="form-group">
                     <label for="assignTeknisi">Pilih Teknisi</label>
                     <select id="assignTeknisi">
                         <!-- Populated by JS -->
                     </select>
                 </div>
+                <div class="form-group">
+                    <label for="assignConfirmMessage">Teks Konfirmasi ke Konsumen</label>
+                    <textarea id="assignConfirmMessage" rows="4" placeholder="Kosongkan untuk memakai teks konfirmasi otomatis dari admin"></textarea>
+                </div>
             </div>
             <div class="modal-footer">
                 <button class="btn btn-outline" onclick="closeModal('modalAssign')">Batal</button>
-                <button class="btn btn-primary" onclick="assignTeknisi()">Tugaskan</button>
+                <button class="btn btn-primary" onclick="assignTeknisi()">Verifikasi & Tugaskan</button>
             </div>
         </div>
     </div>
