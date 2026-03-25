@@ -1,291 +1,155 @@
 # Indo Sejuk AC
 
-Frontend statis Indo Sejuk AC yang memakai Supabase sebagai source of truth untuk:
+Frontend statis Indo Sejuk AC dengan source of truth utama di Supabase untuk:
 
 - `auth/session`
 - `public.profiles`
 - `public.orders`
 
-Local storage sekarang hanya dipakai untuk cache UI non-kritis seperti preview upload lokal, katalog gambar lokal, dan cache tampilan admin. Session aktif, profile user, daftar user admin, dan order tetap dibaca ulang dari Supabase.
+Patch ini mempertahankan flow existing dan menambahkan hardening mobile, PWA-friendly shell, serta optimasi performa nyata tanpa mengganti framework, schema, atau flow bisnis inti.
 
-## Root cause error `birth_date`
+## Fitur yang tetap dijaga
 
-Error:
+- landing / login
+- register konsumen
+- register teknisi
+- dashboard semua role
+- OCR KTP teknisi
+- WhatsApp actions
+- Supabase auth / profiles / orders
+- admin localhost-only
+- mobile nav dasar, sekarang diperkuat
 
-`Could not find the 'birth_date' column of 'profiles' in the schema cache`
+## Mobile optimization yang sekarang aktif
 
-akar masalahnya ada dua:
+Target viewport utama:
 
-1. Kolom `public.profiles.birth_date` belum benar-benar ada atau belum pernah dimigrasikan konsisten.
-2. Supabase schema cache bisa sesaat masih membaca struktur lama walaupun aplikasi frontend sudah meminta kolom baru.
+- `390x844`
+- `375x667`
+- `360x800`
+- `412x915`
+- `768x1024`
+- portrait + landscape
 
-Patch ini menyelesaikannya dengan dua lapis:
+Peningkatan utama:
 
-- SQL migration resmi menambahkan `birth_date` dan kolom profile lain yang dipakai frontend.
-- Frontend `app.js` sekarang punya registry kolom profile, cache kolom hilang, retry otomatis tanpa kolom opsional yang sedang belum terbaca schema cache, dan login tidak lagi gagal total hanya karena `birth_date` belum terbaca.
+- app shell lebih rapat dan aman di layar kecil
+- sidebar desktop otomatis hilang pada `<= 992px`
+- bottom mobile nav sekarang fixed, touch-friendly, dan sinkron dengan view aktif
+- `content-area` diberi safe bottom padding agar konten tidak tertutup nav
+- form grid, register grid, upload, OCR, share location, dan action group turun ke 1 kolom saat perlu
+- wrapper tabel kini lebih aman untuk horizontal scroll terkontrol, dan tabel utama berubah ke card-stack di layar kecil
+- card, button, tab, dan upload target dipaksa minimal `44px` agar nyaman disentuh
+- overflow horizontal liar ditekan di level `html`, `body`, media, dan kontainer utama
+- safe area iPhone (`env(safe-area-inset-*)`) sekarang dihormati oleh header, konten, dan mobile nav
 
-## File penting
+## PWA support
 
-- `app.js`
-- `index.html`
-- `style.css`
+File baru:
+
+- `manifest.webmanifest`
+- `sw.js`
+- `offline.html`
+- `icons/icon-192.png`
+- `icons/icon-512.png`
+- `icons/apple-touch-icon.png`
+
+Yang sekarang tersedia:
+
+- manifest valid dengan `display: standalone`
+- meta mobile app untuk Android dan iOS
+- tombol install app berbasis `beforeinstallprompt`
+- service worker minimal yang hanya meng-cache shell dasar dan aset lokal
+- offline fallback jujur untuk shell
+
+Strategi service worker:
+
+- `network-first` untuk dokumen / HTML shell
+- `stale-while-revalidate` untuk aset lokal statis seperti CSS, JS, gambar lokal, dan manifest
+- request non-GET tidak disentuh
+- request lintas origin tidak di-cache oleh service worker ini
+- data live Supabase, auth, OCR CDN, dan request sensitif tetap mengandalkan network biasa
+
+Catatan penting:
+
+- offline shell bukan berarti dashboard realtime tersedia offline
+- auth/login/logout tetap butuh koneksi
+- data Supabase tidak dipalsukan dari cache service worker
+
+## Performance improvements
+
+Perubahan yang benar-benar diterapkan:
+
+- script utama sekarang `defer`
+- dimensi/aspect ratio visual penting ditambahkan untuk menekan layout shift
+- gambar render diberi `loading="lazy"` dan `decoding="async"` di area yang aman
+- OCR Tesseract tetap lazy-loaded dan sekarang memakai promise cache supaya tidak inject library berulang
+- warm-up OCR hanya dijadwalkan saat user benar-benar masuk alur teknisi, bukan saat first paint landing
+- render shell tetap muncul dulu, sedangkan data dashboard tetap diambil belakangan dari Supabase
+- mobile nav sekarang pakai event delegation tunggal agar tidak membuat listener ganda saat render ulang
+- helper `safeScrollTop()` dipakai saat perpindahan layar utama agar pengalaman mobile lebih rapi
+
+## Supabase, auth, dan admin safety
+
+Non-negotiable yang tetap berlaku:
+
+- admin tetap localhost-only
+- public host tidak boleh membuka admin UI
+- service worker tidak dipakai untuk membuka akses admin
+- Supabase tetap source of truth untuk session, profile, dan order
+- browser frontend tidak menyimpan secret backend
+- WhatsApp tetap memakai aksi `wa.me`, bukan secret API di frontend
+- OCR tetap boleh gagal dengan fallback manual penuh
+
+## Catatan migration Supabase
+
+Migration yang masih wajib dipastikan sudah jalan:
+
 - `supabase/migrations/20260325_fix_profiles_birth_date_and_auth.sql`
-- `supabase/functions/sync-user-to-github/index.ts`
-- `.github/workflows/sync-profiles-snapshot.yml`
-- `scripts/pull-supabase-snapshot.sh`
-- `scripts/pull-supabase-snapshot.ps1`
-- `.env.example`
 
-## Wajib jalankan migration
+Tujuannya tetap sama:
 
-Jalankan file berikut di Supabase SQL Editor:
-
-- `supabase/migrations/20260325_fix_profiles_birth_date_and_auth.sql`
-
-Isi migration itu mencakup:
-
-- `birth_date date` di `public.profiles`
-- kolom frontend lain seperti `district`, `location_text`, `lat`, `lng`, `nik`, `specialization`, `experience`, `status`, `verified_at`, `verified_by`, `completed_jobs`, `created_at`, `updated_at`
-- trigger `set_updated_at`
-- function + trigger `handle_new_user()` untuk provisioning row `profiles` dari `auth.users.raw_user_meta_data`
-- unique index `username` dan `email`
-- RLS/policy aman untuk own profile dan admin
-
-Setelah migration dijalankan, frontend akan membaca schema baru secara normal. Bila schema cache Supabase belum segar pada login pertama, frontend akan fallback aman lalu retry lagi tanpa menjatuhkan session.
-
-## Flow registrasi publik final
-
-### Konsumen / Teknisi
-
-1. Frontend memanggil `supabase.auth.signUp()` dengan:
-   - `email`
-   - `password`
-   - `user_metadata` profile
-2. Metadata profile mencakup field penting seperti:
-   - `role`
-   - `username`
-   - `name`
-   - `phone`
-   - `address`
-   - `age`
-   - `birth_date`
-   - `district`
-   - `location_text`
-   - `lat`
-   - `lng`
-   - `nik`
-   - `specialization`
-   - `experience`
-3. Trigger `handle_new_user()` membuat atau meng-upsert row `public.profiles`.
-4. Status profile publik dibuat `Aktif`.
-5. Jika email confirmation aktif:
-   - user belum bisa login sebelum klik link email
-   - setelah email confirmed dan session tersedia, `ensureProfileAfterAuth()` memastikan row `profiles` lengkap dan tetap `Aktif`
-6. Jika email confirmation nonaktif:
-   - session langsung tersedia
-   - frontend tetap memanggil `ensureProfileAfterAuth()` lalu profile aktif
-
-Frontend tidak lagi pura-pura meng-insert `profiles` dari browser sebelum session ada. Itu penting supaya flow konfirmasi email tetap aman dan tidak mentok di policy/RLS.
-
-## Login final
-
-Login memakai:
-
-- `supabase.auth.signInWithPassword({ email, password })`
-
-Sesudah login:
-
-1. `fetchCurrentProfileStrict()` membaca `public.profiles` dengan select clause yang tahan schema drift.
-2. Bila profile belum ada, `createMissingProfileForAuthenticatedUser()` membuatnya dari metadata auth.
-3. Bila profile publik lama masih `Menunggu Verifikasi` atau kosong, `ensureApprovedPublicProfile()` mengaktifkannya otomatis setelah session valid.
-4. User diarahkan ke dashboard sesuai `profile.role`.
-
-Tujuan utamanya:
-
-- akun existing yang sebelumnya gagal karena `birth_date` tidak lagi gagal total
-- login tetap jalan meskipun schema cache Supabase masih membaca struktur lama untuk beberapa kolom opsional
-
-## OCR KTP final
-
-OCR tetap memakai Tesseract CDN dan sekarang lebih aman:
-
-- OCR hanya mengisi field teknisi yang masih kosong
-- input manual tetap dipertahankan
-- hasil OCR bisa diterapkan ulang dengan tombol:
-  - `Gunakan hasil OCR`
-  - `Terapkan ulang OCR`
-- tanggal lahir OCR mengisi:
-  - `regTekBirthDate`
-  - `regTekBirthDateManual`
-  - `regTekAge` melalui `syncAgeField()`
-- preview hasil OCR tetap ditampilkan agar user bisa koreksi manual
-- bila OCR gagal, form manual tetap 100% bisa dipakai
-
-Field yang diparsing:
-
-- nama lengkap
-- NIK 16 digit
-- tanggal lahir
-- alamat
-
-## WhatsApp notification
-
-Pendaftaran baru tetap memakai `wa.me` ke admin, tanpa secret WhatsApp API di browser.
-
-Pesan sekarang lebih lengkap:
-
-- role
-- nama
-- username
-- email
-- WhatsApp
-- alamat
-- lokasi teks
-- Google Maps jika ada `lat/lng`
-- waktu pendaftaran
-- status email
-- status profile
-
-Tambahan teknisi:
-
-- NIK
-- tanggal lahir
-- usia
-- spesialisasi
-- pengalaman
-- status upload foto KTP dan selfie
-
-Jika pop-up diblok browser, frontend memberi toast yang jujur dan aplikasi utama tetap jalan.
-
-## Localhost dan source of truth
-
-Aturan final:
-
-- localhost tetap membaca data user langsung dari Supabase
-- admin dashboard reload daftar user dari Supabase lewat `loadAdminMasterData()`
-- cache lokal hanya fallback UI, bukan sumber master
-
-Artinya user baru yang sudah confirmed dan aktif akan langsung terlihat di localhost setelah dashboard admin memuat ulang data dari Supabase.
-
-## Arsitektur sinkron GitHub yang aman
-
-Sinkron snapshot ke GitHub **tidak** dilakukan dari browser.
-
-Patch ini memakai jalur aman:
-
-- frontend hanya memanggil Supabase Edge Function `sync-user-to-github`
-- Edge Function memegang secret server-side:
-  - `SUPABASE_SERVICE_ROLE_KEY`
-  - `GITHUB_TOKEN`
-- Edge Function membaca `public.profiles` dari server-side
-- Edge Function menulis snapshot ke repo GitHub, default:
-  - `data/profiles-snapshot.json`
-
-File implementasi:
-
-- `supabase/functions/sync-user-to-github/index.ts`
-
-Jika Edge Function belum dideploy atau env GitHub belum diisi:
-
-- frontend menampilkan warning yang jujur
-- data utama tetap aman di Supabase
-- aplikasi inti tetap berjalan normal
-
-Tidak ada:
-
-- `service_role` di frontend
-- GitHub token di `app.js`
-- klaim palsu bahwa browser bisa push ke repo dengan aman
-
-## GitHub Actions opsional
-
-Workflow opsional tersedia di:
-
-- `.github/workflows/sync-profiles-snapshot.yml`
-
-Workflow ini bisa menarik snapshot dari endpoint aman bila GitHub Secrets berikut diisi:
-
-- `SNAPSHOT_PULL_URL`
-- `SNAPSHOT_PULL_BEARER`
-
-Snapshot GitHub ini bersifat:
-
-- audit
-- backup
-- inspeksi perubahan
-
-Snapshot GitHub **bukan** source of truth utama aplikasi.
-
-## Script helper lokal
-
-Tersedia:
-
-- `scripts/pull-supabase-snapshot.sh`
-- `scripts/pull-supabase-snapshot.ps1`
-
-Fungsi script:
-
-1. `git pull --ff-only`
-2. opsional menarik snapshot dari endpoint aman jika env lokal diisi
-
-Dokumentasi ini sengaja jujur:
-
-- VS Code / localhost tidak otomatis update snapshot GitHub tanpa `git pull` atau fetch endpoint
-- aplikasi lokal tetap lebih cepat dan akurat bila membaca langsung dari Supabase
-
-## Konfigurasi env server-side
-
-Contoh variabel ada di:
-
-- `.env.example`
-
-Variabel itu untuk:
-
-- Edge Function
-- backend/serverless
-- local tooling aman
-
-Bukan untuk frontend browser statis.
+- memastikan kolom seperti `birth_date` dan field profile lain tersedia konsisten
+- menjaga provisioning profile dari `auth.users`
+- menjaga login/register tidak rusak karena schema drift
 
 ## Menjalankan lokal
 
-Pilih salah satu:
+Contoh:
 
 - `python -m http.server 5500`
 - VS Code Live Server
 - static server lokal lain
 
-Pastikan Supabase Auth redirect URL mencakup host lokal yang Anda pakai, misalnya:
+Redirect URL Supabase Auth minimal:
 
+- `https://palileo.github.io/indosejuk/`
 - `http://localhost:5500/`
 - `http://127.0.0.1:5500/`
 
-## Redirect URL Supabase Auth
+## Keterbatasan jujur
 
-Set minimal:
+- offline mode hanya untuk shell dasar dan aset lokal, bukan dashboard realtime penuh
+- data live Supabase tetap membutuhkan koneksi internet
+- OCR membutuhkan CDN Tesseract saat library belum pernah termuat
+- install prompt hanya muncul di browser yang memang mendukung `beforeinstallprompt`
+- service worker sengaja tidak meng-cache respons sensitif Supabase secara agresif
 
-- Site URL: `https://palileo.github.io/indosejuk/`
-- Additional Redirect URLs:
-  - `https://palileo.github.io/indosejuk/`
-  - `http://localhost:5500/`
-  - `http://127.0.0.1:5500/`
+## Checklist test yang disarankan
 
-Sesuaikan port lokal jika perlu.
-
-## Checklist test final
-
-- Migration SQL berhasil dijalankan tanpa merusak data existing
-- `birth_date` benar-benar ada di `public.profiles`
-- login user existing yang tadinya gagal karena `birth_date` tidak lagi gagal total
-- fallback schema cache jalan bila Supabase belum memuat kolom opsional tertentu
-- registrasi konsumen mengirim metadata lengkap ke `signUp`
-- registrasi teknisi mengirim metadata lengkap ke `signUp`
-- setelah email confirmed, row `public.profiles` ada dan status publik `Aktif`
-- login sesudah confirm email langsung bisa
-- OCR mengisi nama, NIK, tanggal lahir, dan alamat bila field kosong
-- manual override OCR tetap bisa
-- WhatsApp pendaftaran baru mengirim teks lengkap
-- localhost admin membaca data user terbaru dari Supabase
-- frontend tidak menyimpan secret GitHub atau `service_role`
-- sinkron GitHub hanya lewat backend/Edge Function yang memegang secret
-- tidak ada blank page, reference error, infinite redirect, atau fake sync promise
+- iPhone kecil `375x667`
+- iPhone modern `390x844`
+- Android small `360x800`
+- Android medium/large `412x915`
+- tablet portrait `768x1024`
+- landscape mobile/tablet
+- install PWA dari browser yang support
+- login/logout tetap normal
+- register konsumen tetap normal
+- register teknisi + OCR + fallback manual tetap normal
+- WhatsApp action tetap terbuka
+- admin tetap hanya di localhost
+- tidak ada desktop regression
+- tidak ada horizontal overflow liar
+- tabel utama tetap terbaca di HP kecil
+- tidak ada JS runtime error baru

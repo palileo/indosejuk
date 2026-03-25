@@ -14,6 +14,7 @@ const LEGACY_STORAGE_KEY = 'sejukac_data';
 const SCHEMA_VERSION = 2;
 const FALLBACK_IMAGE = 'image/logo.png';
 const OCR_CDN_URL = 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js';
+const SERVICE_WORKER_URL = './sw.js';
 const DEFAULT_ADMIN_WHATSAPP = '08970788800';
 const PROFILE_STATUS_PENDING = 'Menunggu Verifikasi';
 const PROFILE_STATUS_ACTIVE = 'Aktif';
@@ -79,6 +80,19 @@ const draftUploads = {
     regTekKtpPhoto: '',
     regTekSelfiePhoto: '',
     ocrLastResult: null
+};
+
+const runtimeState = {
+    domEventsBound: false,
+    navHandlersBound: false,
+    installHandlersBound: false,
+    connectivityHandlersBound: false,
+    ocrScanInProgress: false,
+    ocrLibraryPromise: null,
+    deferredInstallPrompt: null,
+    serviceWorkerRegistrationPromise: null,
+    connectionBannerTimer: null,
+    activeViewRenderToken: 0
 };
 
 const ROLE_LABELS = {
@@ -151,6 +165,243 @@ function deepClone(value) {
 
 function canUseSupabase() {
     return Boolean(supabaseClient);
+}
+
+function scheduleIdleTask(callback, timeout = 1200) {
+    if (typeof callback !== 'function') return;
+    if (typeof window.requestIdleCallback === 'function') {
+        window.requestIdleCallback(() => callback(), { timeout });
+        return;
+    }
+    window.setTimeout(callback, Math.min(timeout, 600));
+}
+
+function isStandaloneDisplayMode() {
+    return Boolean(window.matchMedia?.('(display-mode: standalone)')?.matches || window.navigator.standalone);
+}
+
+function setBodyAppMode(mode) {
+    document.body.dataset.appMode = mode;
+    document.body.classList.toggle('is-standalone-app', isStandaloneDisplayMode());
+}
+
+function isModalOpen() {
+    return Array.from(document.querySelectorAll('.modal-overlay')).some((modal) => window.getComputedStyle(modal).display !== 'none');
+}
+
+function safeScrollTop(options = {}) {
+    if (!options.force && isModalOpen()) return;
+    const prefersReducedMotion = Boolean(window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches);
+    const behavior = options.behavior || (prefersReducedMotion ? 'auto' : 'smooth');
+    window.requestAnimationFrame(() => {
+        window.scrollTo({ top: 0, left: 0, behavior });
+    });
+}
+
+function setConnectionBanner(message = '', { transient = false } = {}) {
+    const banner = document.getElementById('connectionStatusBanner');
+    if (!banner) return;
+    window.clearTimeout(runtimeState.connectionBannerTimer);
+    if (!message) {
+        banner.hidden = true;
+        banner.textContent = '';
+        return;
+    }
+    banner.hidden = false;
+    banner.textContent = message;
+    if (transient) {
+        runtimeState.connectionBannerTimer = window.setTimeout(() => {
+            banner.hidden = true;
+            banner.textContent = '';
+        }, 2400);
+    }
+}
+
+function syncConnectionStatusBanner({ transientOnline = false } = {}) {
+    if (!navigator.onLine) {
+        setConnectionBanner('Anda sedang offline. Login, auth, dan data live Supabase tetap membutuhkan koneksi internet.');
+        return;
+    }
+    if (transientOnline) {
+        setConnectionBanner('Koneksi kembali normal.', { transient: true });
+        return;
+    }
+    setConnectionBanner('');
+}
+
+function bindConnectivityEvents() {
+    if (runtimeState.connectivityHandlersBound) return;
+    window.addEventListener('offline', () => syncConnectionStatusBanner());
+    window.addEventListener('online', () => syncConnectionStatusBanner({ transientOnline: true }));
+    runtimeState.connectivityHandlersBound = true;
+}
+
+function canRegisterServiceWorker() {
+    return 'serviceWorker' in navigator && (window.location.protocol === 'https:' || isLocalhostEnv());
+}
+
+function syncInstallPromptUI() {
+    const canInstall = Boolean(runtimeState.deferredInstallPrompt) && !isStandaloneDisplayMode();
+    const loginPageVisible = document.getElementById('loginPage')?.style.display !== 'none';
+    const headerButton = document.getElementById('btnInstallApp');
+    const landingButton = document.getElementById('btnInstallAppLanding');
+    const landingCard = document.getElementById('installAppCard');
+
+    [headerButton, landingButton].forEach((button) => {
+        if (!button) return;
+        button.hidden = !canInstall;
+        button.disabled = !canInstall;
+    });
+
+    if (landingCard) {
+        landingCard.hidden = !canInstall || !loginPageVisible;
+    }
+}
+
+async function promptInstallApp() {
+    if (!runtimeState.deferredInstallPrompt) {
+        showToast('Browser ini belum menyediakan prompt instalasi aplikasi.', 'warning');
+        syncInstallPromptUI();
+        return false;
+    }
+
+    const promptEvent = runtimeState.deferredInstallPrompt;
+    runtimeState.deferredInstallPrompt = null;
+    syncInstallPromptUI();
+
+    try {
+        await promptEvent.prompt();
+        const choiceResult = await promptEvent.userChoice;
+        if (choiceResult?.outcome !== 'accepted' && !isStandaloneDisplayMode()) {
+            showToast('Pemasangan aplikasi dibatalkan. App web tetap bisa dipakai seperti biasa.', 'warning');
+        }
+        return choiceResult?.outcome === 'accepted';
+    } catch (error) {
+        console.error('Prompt instalasi gagal:', error);
+        showToast('Prompt instalasi gagal dijalankan di browser ini.', 'warning');
+        return false;
+    }
+}
+
+function bindInstallPromptEvents() {
+    if (runtimeState.installHandlersBound) return;
+
+    window.addEventListener('beforeinstallprompt', (event) => {
+        event.preventDefault();
+        runtimeState.deferredInstallPrompt = event;
+        syncInstallPromptUI();
+    });
+
+    window.addEventListener('appinstalled', () => {
+        runtimeState.deferredInstallPrompt = null;
+        syncInstallPromptUI();
+        setBodyAppMode(document.body.dataset.appMode || 'public');
+        showToast('Aplikasi Indo Sejuk AC berhasil dipasang.', 'success');
+    });
+
+    runtimeState.installHandlersBound = true;
+}
+
+function renderNavMarkup(role) {
+    return getNavItems(role).map((item) => {
+        const active = currentView === item.id;
+        return `
+            <button class="nav-item touch-target ${active ? 'active' : ''}" type="button" data-nav-target="${escapeHtml(item.id)}" aria-current="${active ? 'page' : 'false'}">
+                ${item.icon}
+                <span>${item.label}</span>
+            </button>
+        `;
+    }).join('');
+}
+
+function syncActiveNavState() {
+    document.querySelectorAll('#sidebarNav .nav-item, #mobileNav .nav-item').forEach((button) => {
+        const active = button.dataset.navTarget === currentView;
+        button.classList.toggle('active', active);
+        button.setAttribute('aria-current', active ? 'page' : 'false');
+    });
+}
+
+function bindShellNavEvents() {
+    if (runtimeState.navHandlersBound) return;
+
+    ['sidebarNav', 'mobileNav'].forEach((containerId) => {
+        const container = document.getElementById(containerId);
+        if (!container) return;
+        container.addEventListener('click', (event) => {
+            const target = event.target.closest('[data-nav-target]');
+            if (!target) return;
+            const nextView = target.dataset.navTarget;
+            if (!nextView) return;
+            if (nextView === currentView) {
+                safeScrollTop({ force: true });
+                return;
+            }
+            void navigateTo(nextView).catch((error) => {
+                console.error('Navigasi gagal:', error);
+                showToast('Navigasi halaman gagal dibuka.', 'error');
+            });
+        });
+    });
+
+    const roleCards = document.getElementById('roleCards');
+    if (roleCards) {
+        roleCards.querySelectorAll('.role-card[data-role]').forEach((card) => {
+            card.tabIndex = 0;
+            card.setAttribute('role', 'button');
+        });
+        roleCards.addEventListener('click', (event) => {
+            const card = event.target.closest('.role-card[data-role]');
+            if (!card || card.hidden || card.classList.contains('is-hidden')) return;
+            switchLoginRole(card.dataset.role);
+            document.getElementById('loginIdentifier')?.focus();
+            safeScrollTop({ force: true });
+        });
+        roleCards.addEventListener('keydown', (event) => {
+            const card = event.target.closest('.role-card[data-role]');
+            if (!card) return;
+            if (event.key !== 'Enter' && event.key !== ' ') return;
+            event.preventDefault();
+            switchLoginRole(card.dataset.role);
+            document.getElementById('loginIdentifier')?.focus();
+        });
+    }
+
+    runtimeState.navHandlersBound = true;
+}
+
+function scheduleOcrWarmup() {
+    if (runtimeState.ocrLibraryPromise || window.Tesseract) return;
+    scheduleIdleTask(() => {
+        ensureOcrLibrary().catch(() => {
+            /* OCR tetap dicoba ulang saat user menekan scan */
+        });
+    }, 1800);
+}
+
+function registerServiceWorkerSafe() {
+    if (!canRegisterServiceWorker()) return Promise.resolve(null);
+    if (runtimeState.serviceWorkerRegistrationPromise) return runtimeState.serviceWorkerRegistrationPromise;
+
+    runtimeState.serviceWorkerRegistrationPromise = navigator.serviceWorker.register(SERVICE_WORKER_URL)
+        .then((registration) => {
+            if (typeof registration.update === 'function') {
+                scheduleIdleTask(() => {
+                    registration.update().catch(() => {
+                        /* no-op */
+                    });
+                }, 2600);
+            }
+            return registration;
+        })
+        .catch((error) => {
+            if (!isLocalhostEnv()) {
+                console.error('Registrasi service worker gagal:', error);
+            }
+            return null;
+        });
+
+    return runtimeState.serviceWorkerRegistrationPromise;
 }
 
 function normalizeEmail(value) {
@@ -999,7 +1250,11 @@ function showLanding() {
     document.getElementById('appFooter').style.display = 'none';
     document.getElementById('registerPage').style.display = 'none';
     document.getElementById('loginPage').style.display = 'flex';
+    setBodyAppMode('public');
     syncAdminAccessUI();
+    switchLoginRole(document.getElementById('loginRole')?.value || 'konsumen');
+    syncInstallPromptUI();
+    syncConnectionStatusBanner();
     renderDefaultAccountList();
     renderLandingSessionNotice();
 }
@@ -1010,11 +1265,18 @@ function openAppLayout() {
     document.getElementById('appHeader').style.display = 'block';
     document.getElementById('appMain').style.display = 'flex';
     document.getElementById('appFooter').style.display = 'block';
+    setBodyAppMode('app');
+    syncInstallPromptUI();
+    syncConnectionStatusBanner();
 }
 
 function showRegisterPage() {
     document.getElementById('loginPage').style.display = 'none';
     document.getElementById('registerPage').style.display = 'flex';
+    setBodyAppMode('register');
+    syncInstallPromptUI();
+    syncConnectionStatusBanner();
+    safeScrollTop({ force: true, behavior: 'auto' });
 }
 
 function showLoginPage() {
@@ -1026,6 +1288,7 @@ function switchRegisterTab(tab, element) {
     if (element) element.classList.add('active');
     document.getElementById('regFormKonsumen').style.display = tab === 'konsumen' ? 'block' : 'none';
     document.getElementById('regFormTeknisi').style.display = tab === 'teknisi' ? 'block' : 'none';
+    if (tab === 'teknisi') scheduleOcrWarmup();
 }
 
 
@@ -1079,16 +1342,16 @@ function renderAdminServicesTable() {
     const body = document.getElementById('adminServicesListBody');
     body.innerHTML = getServices(true).length ? getServices(true).map((service) => `
         <tr>
-            <td>${escapeHtml(service.name)}</td>
-            <td>${formatRupiah(service.price)}</td>
-            <td>${renderStatusBadge(service.active ? 'Aktif' : 'Nonaktif')}</td>
-            <td><img src="${escapeHtml(serviceImage(service))}" alt="${escapeHtml(service.name)}" class="table-thumb"></td>
-            <td>
+            ${tableCell('Nama Layanan', escapeHtml(service.name))}
+            ${tableCell('Harga Dasar', formatRupiah(service.price))}
+            ${tableCell('Status', renderStatusBadge(service.active ? 'Aktif' : 'Nonaktif'))}
+            ${tableCell('Gambar', `<img src="${escapeHtml(serviceImage(service))}" alt="${escapeHtml(service.name)}" class="table-thumb">`)}
+            ${tableCell('Aksi', `
                 <div class="btn-action-group">
                     <button class="btn btn-outline btn-xs" onclick="openEditServiceModal('${service.id}')">Edit</button>
                     <button class="btn btn-danger btn-xs" onclick="confirmDeleteService('${service.id}')">Hapus</button>
                 </div>
-            </td>
+            `)}
         </tr>
     `).join('') : '<tr><td colspan="5" class="empty-state">Belum ada layanan</td></tr>';
 }
@@ -1099,18 +1362,18 @@ function renderAdminImageCatalogTable() {
     // Sumber gambar upload disingkat agar tabel admin tetap ringkas walau file disimpan sebagai data URL.
     body.innerHTML = getData().imageCatalog.length ? getData().imageCatalog.map((item) => `
         <tr>
-            <td><img src="${escapeHtml(item.src)}" alt="${escapeHtml(item.alt || item.name)}" class="table-thumb"></td>
-            <td>${escapeHtml(item.name)}</td>
-            <td>${escapeHtml(item.category)}</td>
-            <td>${escapeHtml(summarizeImageSource(item.src))}</td>
-            <td>${renderStatusBadge(item.isActive ? 'Aktif' : 'Nonaktif')}</td>
-            <td>
+            ${tableCell('Preview', `<img src="${escapeHtml(item.src)}" alt="${escapeHtml(item.alt || item.name)}" class="table-thumb">`)}
+            ${tableCell('Nama', escapeHtml(item.name))}
+            ${tableCell('Kategori', escapeHtml(item.category))}
+            ${tableCell('Sumber', escapeHtml(summarizeImageSource(item.src)))}
+            ${tableCell('Status', renderStatusBadge(item.isActive ? 'Aktif' : 'Nonaktif'))}
+            ${tableCell('Aksi', `
                 <div class="btn-action-group">
                     <button class="btn btn-outline btn-xs" onclick="openImageCatalogPreview('${item.id}')">Lihat</button>
                     <button class="btn btn-outline btn-xs" onclick="openEditImageCatalogModal('${item.id}')">Edit</button>
                     <button class="btn btn-outline btn-xs" onclick="toggleImageCatalogItem('${item.id}')">${item.isActive ? 'Nonaktifkan' : 'Aktifkan'}</button>
                 </div>
-            </td>
+            `)}
         </tr>
     `).join('') : '<tr><td colspan="6" class="empty-state">Belum ada katalog gambar</td></tr>';
 }
@@ -1265,6 +1528,78 @@ function showToast(message, type = 'success') {
     }, 2600);
 }
 
+function setMetricLoading(ids = []) {
+    ids.forEach((id) => {
+        const node = document.getElementById(id);
+        if (!node) return;
+        node.textContent = '0000';
+        node.classList.add('loading-metric', 'is-loading');
+    });
+}
+
+function setMetricValue(id, value) {
+    const node = document.getElementById(id);
+    if (!node) return;
+    node.classList.remove('loading-metric', 'is-loading');
+    node.textContent = value;
+}
+
+function renderTableLoading(bodyId, columnCount, rowCount = 3) {
+    const body = document.getElementById(bodyId);
+    if (!body) return;
+    body.innerHTML = Array.from({ length: rowCount }, (_, rowIndex) => `
+        <tr class="loading-row">
+            ${Array.from({ length: columnCount }, (_, colIndex) => `
+                <td>
+                    <span class="loading-line skeleton ${rowIndex === 0 && colIndex === 0 ? 'short' : colIndex % 2 === 0 ? 'medium' : 'long'}"></span>
+                </td>
+            `).join('')}
+        </tr>
+    `).join('');
+}
+
+function tableCell(label, content) {
+    return `<td data-label="${escapeHtml(label)}">${content}</td>`;
+}
+
+function renderServiceCardsLoading(containerId, count = 4) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+    container.innerHTML = Array.from({ length: count }, () => `
+        <div class="service-card is-loading">
+            <div class="skeleton" style="width:100%;aspect-ratio:4 / 3;"></div>
+            <div class="service-card-body">
+                <span class="loading-line skeleton medium"></span>
+                <span class="loading-line skeleton long"></span>
+                <span class="loading-line skeleton short"></span>
+            </div>
+        </div>
+    `).join('');
+}
+
+function renderJobCardsLoading(containerId, count = 3) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+    container.innerHTML = Array.from({ length: count }, () => `
+        <div class="job-card is-loading">
+            <div class="job-card-header">
+                <span class="loading-line skeleton medium"></span>
+                <span class="loading-line skeleton short"></span>
+            </div>
+            <div class="job-card-details">
+                <span class="loading-line skeleton long"></span>
+                <span class="loading-line skeleton medium"></span>
+                <span class="loading-line skeleton long"></span>
+                <span class="loading-line skeleton short"></span>
+            </div>
+            <div class="btn-action-group">
+                <span class="loading-line skeleton short"></span>
+                <span class="loading-line skeleton short"></span>
+            </div>
+        </div>
+    `).join('');
+}
+
 function syncAgeField(dateInputId, ageInputId) {
     const dateInput = document.getElementById(dateInputId);
     const dateValue = dateInput?.value || '';
@@ -1326,9 +1661,12 @@ async function previewRegUpload(event, previewId) {
     if (!file) return;
     const dataUrl = await readFileAsDataUrl(file);
     const preview = document.getElementById(previewId);
-    preview.innerHTML = `<div class="image-card"><img src="${escapeHtml(dataUrl)}" alt="Preview upload"></div>`;
+    preview.innerHTML = `<div class="image-card"><img src="${escapeHtml(dataUrl)}" alt="Preview upload" loading="lazy" decoding="async"></div>`;
     if (previewId === 'regKonUnitPreview') draftUploads.regKonUnitImages = [dataUrl];
-    if (previewId === 'regTekIDPreview') draftUploads.regTekKtpPhoto = dataUrl;
+    if (previewId === 'regTekIDPreview') {
+        draftUploads.regTekKtpPhoto = dataUrl;
+        scheduleOcrWarmup();
+    }
     if (previewId === 'regTekSelfiePreview') draftUploads.regTekSelfiePhoto = dataUrl;
 }
 
@@ -1989,11 +2327,13 @@ function applyLatestTechnicianOcrResult(force = false) {
 
 function ensureOcrLibrary() {
     if (window.Tesseract) return Promise.resolve(window.Tesseract);
-    return new Promise((resolve, reject) => {
+    if (runtimeState.ocrLibraryPromise) return runtimeState.ocrLibraryPromise;
+
+    runtimeState.ocrLibraryPromise = new Promise((resolve, reject) => {
         const existing = document.querySelector('script[data-ocr-lib="tesseract"]');
         if (existing) {
-            existing.addEventListener('load', () => resolve(window.Tesseract));
-            existing.addEventListener('error', reject);
+            existing.addEventListener('load', () => resolve(window.Tesseract), { once: true });
+            existing.addEventListener('error', reject, { once: true });
             return;
         }
         const script = document.createElement('script');
@@ -2003,7 +2343,12 @@ function ensureOcrLibrary() {
         script.onload = () => resolve(window.Tesseract);
         script.onerror = reject;
         document.head.appendChild(script);
+    }).catch((error) => {
+        runtimeState.ocrLibraryPromise = null;
+        throw error;
     });
+
+    return runtimeState.ocrLibraryPromise;
 }
 
 async function runTechnicianKtpOcr() {
@@ -2011,10 +2356,17 @@ async function runTechnicianKtpOcr() {
         showToast('Upload foto KTP terlebih dahulu.', 'warning');
         return;
     }
+    if (runtimeState.ocrScanInProgress) return;
     const status = document.getElementById('ocrStatus');
     const progress = document.getElementById('ocrProgress');
     const preview = document.getElementById('ocrPreviewCard');
-    const resultList = document.getElementById('ocrResultList');
+    const triggerButton = document.getElementById('btnScanKtp');
+    runtimeState.ocrScanInProgress = true;
+    if (triggerButton) {
+        triggerButton.disabled = true;
+        triggerButton.classList.add('is-loading');
+        triggerButton.setAttribute('aria-busy', 'true');
+    }
     status.textContent = 'Memuat library OCR...';
     progress.textContent = '';
     try {
@@ -2037,6 +2389,13 @@ async function runTechnicianKtpOcr() {
         console.error(error);
         status.textContent = 'OCR gagal dijalankan. Anda tetap bisa isi manual.';
         showToast('OCR gagal. Isi data KTP secara manual.', 'warning');
+    } finally {
+        runtimeState.ocrScanInProgress = false;
+        if (triggerButton) {
+            triggerButton.disabled = false;
+            triggerButton.classList.remove('is-loading');
+            triggerButton.removeAttribute('aria-busy');
+        }
     }
 }
 
@@ -2220,6 +2579,12 @@ function resetLoginRoleToConsumer() {
         adminTab.classList.remove('active');
         adminTab.setAttribute('aria-selected', 'false');
     }
+
+    document.querySelectorAll('#roleCards .role-card[data-role]').forEach((card) => {
+        const active = card.dataset.role === 'konsumen';
+        card.classList.toggle('active', active);
+        card.setAttribute('aria-pressed', String(active));
+    });
 }
 
 async function forceExitAdminOnPublicHost(options = {}) {
@@ -2375,6 +2740,12 @@ function switchLoginRole(role, element) {
         targetButton.classList.add('active');
         targetButton.setAttribute('aria-selected', 'true');
     }
+
+    document.querySelectorAll('#roleCards .role-card[data-role]').forEach((card) => {
+        const active = card.dataset.role === safeRole;
+        card.classList.toggle('active', active);
+        card.setAttribute('aria-pressed', String(active));
+    });
 
     return safeRole;
 }
@@ -2768,18 +3139,17 @@ function renderAppShell() {
     const user = getCurrentUser();
     if (!user) return;
     currentRole = user.role;
+    setBodyAppMode('app');
     document.getElementById('headerAvatar').textContent = (user.name || 'U').charAt(0).toUpperCase();
     document.getElementById('headerUserName').textContent = user.name || 'User';
     document.getElementById('headerUserRole').textContent = ROLE_LABELS[user.role] || user.role;
 
-    const navHtml = getNavItems(user.role).map((item) => `
-        <button class="nav-item ${currentView === item.id ? 'active' : ''}" type="button" onclick="navigateTo('${item.id}')">
-            ${item.icon}
-            <span>${item.label}</span>
-        </button>
-    `).join('');
+    const navHtml = renderNavMarkup(user.role);
     document.getElementById('sidebarNav').innerHTML = navHtml;
     document.getElementById('mobileNav').innerHTML = navHtml;
+    document.getElementById('contentArea')?.setAttribute('data-current-view', currentView || `${user.role}-home`);
+    syncActiveNavState();
+    syncInstallPromptUI();
 }
 
 async function fetchOrdersForRole(profile) {
@@ -3268,7 +3638,11 @@ async function navigateTo(viewId, prefill = '') {
     if (target) target.style.display = 'block';
     currentView = viewId;
     renderAppShell();
+    const renderToken = ++runtimeState.activeViewRenderToken;
     await renderCurrentView(prefill);
+    if (renderToken !== runtimeState.activeViewRenderToken) return;
+    syncActiveNavState();
+    safeScrollTop({ force: true, behavior: window.innerWidth <= 992 ? 'smooth' : 'auto' });
 }
 
 async function loadCurrentOrdersForProfile() {
@@ -3282,18 +3656,21 @@ async function renderKonsumenHome() {
     const profile = await requireAuthenticatedProfile(false);
     if (!profile || profile.role !== 'konsumen') return;
 
+    setMetricLoading(['konsumenTotalOrders', 'konsumenPending', 'konsumenCompleted']);
+    renderTableLoading('konsumenRecentBody', 4, 3);
+    renderServiceCardsLoading('serviceCardsContainer', 4);
     const orders = await loadCurrentOrdersForProfile();
-    document.getElementById('konsumenTotalOrders').textContent = orders.length;
-    document.getElementById('konsumenPending').textContent = orders.filter((order) => order.status !== 'Selesai').length;
-    document.getElementById('konsumenCompleted').textContent = orders.filter((order) => order.status === 'Selesai').length;
+    setMetricValue('konsumenTotalOrders', orders.length);
+    setMetricValue('konsumenPending', orders.filter((order) => order.status !== 'Selesai').length);
+    setMetricValue('konsumenCompleted', orders.filter((order) => order.status === 'Selesai').length);
 
     const recentBody = document.getElementById('konsumenRecentBody');
     recentBody.innerHTML = orders.length ? orders.slice(0, 5).map((order) => `
         <tr>
-            <td>${escapeHtml(getOrderLabel(order))}</td>
-            <td>${escapeHtml(order.serviceName)}</td>
-            <td>${escapeHtml(formatDate(order.preferredDate || order.createdAt))}</td>
-            <td>${renderStatusBadge(order.status)}</td>
+            ${tableCell('No. Pesanan', escapeHtml(getOrderLabel(order)))}
+            ${tableCell('Layanan', escapeHtml(order.serviceName))}
+            ${tableCell('Tanggal', escapeHtml(formatDate(order.preferredDate || order.createdAt)))}
+            ${tableCell('Status', renderStatusBadge(order.status))}
         </tr>
     `).join('') : '<tr><td colspan="4" class="empty-state">Belum ada pesanan</td></tr>';
 
@@ -3301,7 +3678,7 @@ async function renderKonsumenHome() {
     const services = getServices(false);
     container.innerHTML = services.map((service) => `
         <div class="service-card" onclick="navigateTo('konsumen-order', '${escapeHtml(service.name)}')">
-            <img src="${escapeHtml(serviceImage(service))}" alt="${escapeHtml(service.name)}">
+            <img src="${escapeHtml(serviceImage(service))}" alt="${escapeHtml(service.name)}" loading="lazy" decoding="async">
             <div class="service-card-body">
                 <h4>${escapeHtml(service.name)}</h4>
                 <p>${escapeHtml(service.description)}</p>
@@ -3327,16 +3704,17 @@ async function renderKonsumenHistory() {
     const profile = await requireAuthenticatedProfile(false);
     if (!profile || profile.role !== 'konsumen') return;
 
+    renderTableLoading('konsumenHistoryBody', 6, 4);
     const orders = await loadCurrentOrdersForProfile();
     const body = document.getElementById('konsumenHistoryBody');
     body.innerHTML = orders.length ? orders.map((order) => `
         <tr>
-            <td>${escapeHtml(getOrderLabel(order))}</td>
-            <td>${escapeHtml(order.serviceName)}</td>
-            <td>${escapeHtml(order.brand || '-')}</td>
-            <td>${escapeHtml(formatDate(order.preferredDate || order.createdAt))}</td>
-            <td>${escapeHtml(order.teknisiName || 'Belum ditugaskan')}</td>
-            <td>${renderStatusBadge(order.status)}</td>
+            ${tableCell('No. Pesanan', escapeHtml(getOrderLabel(order)))}
+            ${tableCell('Layanan', escapeHtml(order.serviceName))}
+            ${tableCell('Merek AC', escapeHtml(order.brand || '-'))}
+            ${tableCell('Tanggal', escapeHtml(formatDate(order.preferredDate || order.createdAt)))}
+            ${tableCell('Teknisi', escapeHtml(order.teknisiName || 'Belum ditugaskan'))}
+            ${tableCell('Status', renderStatusBadge(order.status))}
         </tr>
     `).join('') : '<tr><td colspan="6" class="empty-state">Belum ada pesanan</td></tr>';
 }
@@ -3364,7 +3742,7 @@ function renderKonsumenUnit() {
     const images = user ? getUnitImagesForUser(user.id) : [];
     gallery.innerHTML = images.length ? images.map((image, index) => `
         <div class="image-card">
-            <img src="${escapeHtml(image)}" alt="Foto unit ${index + 1}">
+            <img src="${escapeHtml(image)}" alt="Foto unit ${index + 1}" loading="lazy" decoding="async">
         </div>
     `).join('') : '<div class="empty-state-box"><p>Belum ada foto unit.</p></div>';
 }
@@ -3373,10 +3751,12 @@ async function renderTeknisiHome() {
     const profile = await requireAuthenticatedProfile(false);
     if (!profile || profile.role !== 'teknisi') return;
 
+    setMetricLoading(['teknisiTotalJobs', 'teknisiActiveJobs', 'teknisiCompletedJobs']);
+    renderJobCardsLoading('teknisiJobsList', 3);
     const orders = await loadCurrentOrdersForProfile();
-    document.getElementById('teknisiTotalJobs').textContent = orders.length;
-    document.getElementById('teknisiActiveJobs').textContent = orders.filter((order) => order.status === 'Ditugaskan' || order.status === 'Dikerjakan').length;
-    document.getElementById('teknisiCompletedJobs').textContent = orders.filter((order) => order.status === 'Selesai').length;
+    setMetricValue('teknisiTotalJobs', orders.length);
+    setMetricValue('teknisiActiveJobs', orders.filter((order) => order.status === 'Ditugaskan' || order.status === 'Dikerjakan').length);
+    setMetricValue('teknisiCompletedJobs', orders.filter((order) => order.status === 'Selesai').length);
 
     const list = document.getElementById('teknisiJobsList');
     const activeOrders = orders.filter((order) => order.status !== 'Selesai');
@@ -3405,23 +3785,24 @@ async function renderTeknisiJobs() {
     const profile = await requireAuthenticatedProfile(false);
     if (!profile || profile.role !== 'teknisi') return;
 
+    renderTableLoading('teknisiAllJobsBody', 7, 4);
     const orders = await loadCurrentOrdersForProfile();
     const body = document.getElementById('teknisiAllJobsBody');
     body.innerHTML = orders.length ? orders.map((order) => `
         <tr>
-            <td>${escapeHtml(getOrderLabel(order))}</td>
-            <td>${escapeHtml(order.konsumenName)}</td>
-            <td>${escapeHtml(order.serviceName)}</td>
-            <td>${escapeHtml(order.address || '-')}</td>
-            <td>${escapeHtml(formatDate(order.preferredDate))}</td>
-            <td>${renderStatusBadge(order.status)}</td>
-            <td>
+            ${tableCell('No. Pesanan', escapeHtml(getOrderLabel(order)))}
+            ${tableCell('Konsumen', escapeHtml(order.konsumenName))}
+            ${tableCell('Layanan', escapeHtml(order.serviceName))}
+            ${tableCell('Alamat', escapeHtml(order.address || '-'))}
+            ${tableCell('Tanggal', escapeHtml(formatDate(order.preferredDate)))}
+            ${tableCell('Status', renderStatusBadge(order.status))}
+            ${tableCell('Aksi', `
                 <div class="btn-action-group">
                     <button class="btn btn-outline btn-xs" onclick="openOrderDetail('${order.id}')">Detail</button>
                     ${order.status === 'Ditugaskan' ? `<button class="btn btn-info btn-xs" onclick="startJob('${order.id}')">Mulai</button>` : ''}
                     ${order.status !== 'Selesai' ? `<button class="btn btn-primary btn-xs" onclick="openUploadProof('${order.id}')">Upload</button>` : ''}
                 </div>
-            </td>
+            `)}
         </tr>
     `).join('') : '<tr><td colspan="7" class="empty-state">Belum ada pekerjaan</td></tr>';
 }
@@ -3451,8 +3832,8 @@ function renderTeknisiDocs() {
     const docs = user ? getTeknisiDocsForUser(user.id) : { ktpPhoto: '', selfiePhoto: '' };
     const ktpGrid = document.getElementById('tekIDPreviewGrid');
     const selfieGrid = document.getElementById('tekSelfiePreviewGrid');
-    ktpGrid.innerHTML = docs.ktpPhoto ? `<div class="image-card"><img src="${escapeHtml(docs.ktpPhoto)}" alt="Foto KTP"></div>` : '';
-    selfieGrid.innerHTML = docs.selfiePhoto ? `<div class="image-card"><img src="${escapeHtml(docs.selfiePhoto)}" alt="Foto Diri"></div>` : '';
+    ktpGrid.innerHTML = docs.ktpPhoto ? `<div class="image-card"><img src="${escapeHtml(docs.ktpPhoto)}" alt="Foto KTP" loading="lazy" decoding="async"></div>` : '';
+    selfieGrid.innerHTML = docs.selfiePhoto ? `<div class="image-card"><img src="${escapeHtml(docs.selfiePhoto)}" alt="Foto Diri" loading="lazy" decoding="async"></div>` : '';
 }
 
 function renderTeknisiUpload() {
@@ -3483,30 +3864,33 @@ async function renderCurrentView(prefill = '') {
 
 async function renderAdminHome() {
     if (!requireAdminAccess()) return;
+    setMetricLoading(['adminTotalOrders', 'adminTotalRevenue', 'adminTotalTeknisi', 'adminPendingOrders']);
+    renderTableLoading('adminRecentOrdersBody', 6, 4);
     await loadAdminMasterData();
     const orders = remoteState.adminOrders;
     const teknisi = remoteState.adminProfiles.teknisi;
 
-    document.getElementById('adminTotalOrders').textContent = orders.length;
-    document.getElementById('adminTotalRevenue').textContent = formatRupiah(orders.filter((order) => order.status === 'Selesai').reduce((sum, order) => sum + Number(order.price || 0), 0));
-    document.getElementById('adminTotalTeknisi').textContent = teknisi.filter((user) => user.status === 'Aktif').length;
-    document.getElementById('adminPendingOrders').textContent = orders.filter((order) => order.status === 'Menunggu').length;
+    setMetricValue('adminTotalOrders', orders.length);
+    setMetricValue('adminTotalRevenue', formatRupiah(orders.filter((order) => order.status === 'Selesai').reduce((sum, order) => sum + Number(order.price || 0), 0)));
+    setMetricValue('adminTotalTeknisi', teknisi.filter((user) => user.status === 'Aktif').length);
+    setMetricValue('adminPendingOrders', orders.filter((order) => order.status === 'Menunggu').length);
 
     const body = document.getElementById('adminRecentOrdersBody');
     body.innerHTML = orders.length ? orders.slice(0, 5).map((order) => `
         <tr>
-            <td>${escapeHtml(getOrderLabel(order))}</td>
-            <td>${escapeHtml(order.konsumenName)}</td>
-            <td>${escapeHtml(order.serviceName)}</td>
-            <td>${escapeHtml(formatDate(order.preferredDate || order.createdAt))}</td>
-            <td>${renderStatusBadge(order.status)}</td>
-            <td><button class="btn btn-outline btn-xs" onclick="openOrderDetail('${order.id}')">Detail</button></td>
+            ${tableCell('No.', escapeHtml(getOrderLabel(order)))}
+            ${tableCell('Konsumen', escapeHtml(order.konsumenName))}
+            ${tableCell('Layanan', escapeHtml(order.serviceName))}
+            ${tableCell('Tanggal', escapeHtml(formatDate(order.preferredDate || order.createdAt)))}
+            ${tableCell('Status', renderStatusBadge(order.status))}
+            ${tableCell('Aksi', `<button class="btn btn-outline btn-xs" onclick="openOrderDetail('${order.id}')">Detail</button>`)}
         </tr>
     `).join('') : '<tr><td colspan="6" class="empty-state">Belum ada pesanan</td></tr>';
 }
 
 async function renderAdminOrders() {
     if (!requireAdminAccess()) return;
+    renderTableLoading('adminAllOrdersBody', 9, 4);
     await loadAdminMasterData();
     const filter = document.getElementById('adminFilterStatus').value;
     const orders = remoteState.adminOrders.filter((order) => filter === 'all' || order.status === filter);
@@ -3514,20 +3898,20 @@ async function renderAdminOrders() {
 
     body.innerHTML = orders.length ? orders.map((order) => `
         <tr>
-            <td>${escapeHtml(getOrderLabel(order))}</td>
-            <td>${escapeHtml(order.konsumenName)}</td>
-            <td>${escapeHtml(order.serviceName)}</td>
-            <td>${escapeHtml(order.brand || '-')}</td>
-            <td>${escapeHtml(formatDate(order.preferredDate))}</td>
-            <td>${escapeHtml(order.address || '-')}</td>
-            <td>${escapeHtml(order.teknisiName || '-')}</td>
-            <td>${renderStatusBadge(order.status)}</td>
-            <td>
+            ${tableCell('No. Pesanan', escapeHtml(getOrderLabel(order)))}
+            ${tableCell('Konsumen', escapeHtml(order.konsumenName))}
+            ${tableCell('Layanan', escapeHtml(order.serviceName))}
+            ${tableCell('Merek AC', escapeHtml(order.brand || '-'))}
+            ${tableCell('Tanggal', escapeHtml(formatDate(order.preferredDate)))}
+            ${tableCell('Alamat', escapeHtml(order.address || '-'))}
+            ${tableCell('Teknisi', escapeHtml(order.teknisiName || '-'))}
+            ${tableCell('Status', renderStatusBadge(order.status))}
+            ${tableCell('Aksi', `
                 <div class="btn-action-group">
                     <button class="btn btn-outline btn-xs" onclick="openOrderDetail('${order.id}')">Detail</button>
                     <button class="btn btn-primary btn-xs" onclick="openAssignModal('${order.id}')">Assign</button>
                 </div>
-            </td>
+            `)}
         </tr>
     `).join('') : '<tr><td colspan="9" class="empty-state">Belum ada pesanan</td></tr>';
 }
@@ -3536,6 +3920,9 @@ async function renderAdminUsers() {
     if (!requireAdminAccess()) return;
     renderAdminServicesTable();
     renderAdminImageCatalogTable();
+    renderTableLoading('adminKonsumenListBody', 9, 4);
+    renderTableLoading('adminTeknisiListBody', 9, 4);
+    renderTableLoading('adminAdminListBody', 5, 3);
 
     try {
         await loadAdminMasterData();
@@ -3599,15 +3986,15 @@ function renderAdminKonsumenTable(users = []) {
 
     body.innerHTML = users.length ? users.map((user) => `
         <tr>
-            <td>${escapeHtml(user.name)}</td>
-            <td>${escapeHtml(user.username || '-')}</td>
-            <td>${escapeHtml(user.email || '-')}</td>
-            <td>${escapeHtml(user.phone || '-')}</td>
-            <td>${escapeHtml(user.age || '-')}</td>
-            <td>${escapeHtml(user.address || '-')}</td>
-            <td>${renderStatusBadge(user.status || PROFILE_STATUS_PENDING)}</td>
-            <td>${orders.filter((order) => order.konsumenId === user.id).length}</td>
-            <td>${renderAdminUserActions(user, 'konsumen')}</td>
+            ${tableCell('Nama', escapeHtml(user.name))}
+            ${tableCell('Username', escapeHtml(user.username || '-'))}
+            ${tableCell('Email', escapeHtml(user.email || '-'))}
+            ${tableCell('Telepon', escapeHtml(user.phone || '-'))}
+            ${tableCell('Usia', escapeHtml(user.age || '-'))}
+            ${tableCell('Alamat', escapeHtml(user.address || '-'))}
+            ${tableCell('Status', renderStatusBadge(user.status || PROFILE_STATUS_PENDING))}
+            ${tableCell('Total Pesanan', String(orders.filter((order) => order.konsumenId === user.id).length))}
+            ${tableCell('Aksi', renderAdminUserActions(user, 'konsumen'))}
         </tr>
     `).join('') : '<tr><td colspan="9" class="empty-state">Tidak ada data</td></tr>';
 }
@@ -3619,15 +4006,15 @@ function renderAdminTeknisiTable(users = []) {
 
     body.innerHTML = users.length ? users.map((user) => `
         <tr>
-            <td>${escapeHtml(user.name)}</td>
-            <td>${escapeHtml(user.username || '-')}</td>
-            <td>${escapeHtml(user.email || '-')}</td>
-            <td>${escapeHtml(user.phone || '-')}</td>
-            <td>${escapeHtml(user.nik || '-')}</td>
-            <td>${escapeHtml(user.specialization || '-')}</td>
-            <td>${renderStatusBadge(user.status || PROFILE_STATUS_PENDING)}</td>
-            <td>${orders.filter((order) => order.teknisiId === user.id && order.status === 'Selesai').length}</td>
-            <td>${renderAdminUserActions(user, 'teknisi')}</td>
+            ${tableCell('Nama', escapeHtml(user.name))}
+            ${tableCell('Username', escapeHtml(user.username || '-'))}
+            ${tableCell('Email', escapeHtml(user.email || '-'))}
+            ${tableCell('Telepon', escapeHtml(user.phone || '-'))}
+            ${tableCell('NIK', escapeHtml(user.nik || '-'))}
+            ${tableCell('Spesialisasi', escapeHtml(user.specialization || '-'))}
+            ${tableCell('Status', renderStatusBadge(user.status || PROFILE_STATUS_PENDING))}
+            ${tableCell('Tugas Selesai', String(orders.filter((order) => order.teknisiId === user.id && order.status === 'Selesai').length))}
+            ${tableCell('Aksi', renderAdminUserActions(user, 'teknisi'))}
         </tr>
     `).join('') : '<tr><td colspan="9" class="empty-state">Tidak ada data</td></tr>';
 }
@@ -3638,11 +4025,11 @@ function renderAdminAdminTable(users = []) {
 
     body.innerHTML = users.length ? users.map((user) => `
         <tr>
-            <td>${escapeHtml(user.name)}</td>
-            <td>${escapeHtml(user.username || '-')}</td>
-            <td>${escapeHtml(user.email || '-')}</td>
-            <td>${escapeHtml(user.status || 'Aktif')}</td>
-            <td>${escapeHtml(user.role || 'admin')}</td>
+            ${tableCell('Nama', escapeHtml(user.name))}
+            ${tableCell('Username', escapeHtml(user.username || '-'))}
+            ${tableCell('Email', escapeHtml(user.email || '-'))}
+            ${tableCell('Status', escapeHtml(user.status || 'Aktif'))}
+            ${tableCell('Role', escapeHtml(user.role || 'admin'))}
         </tr>
     `).join('') : '<tr><td colspan="5" class="empty-state">Tidak ada data admin</td></tr>';
 }
@@ -3802,11 +4189,22 @@ async function handleOrderSubmit(event) {
 }
 
 function initDomEvents() {
+    if (runtimeState.domEventsBound) return;
     document.getElementById('btnLogout')?.addEventListener('click', () => logoutUser());
     document.getElementById('serviceFormImageFile')?.addEventListener('change', handleServiceImageUpload);
     document.getElementById('imageCatalogFormFile')?.addEventListener('change', handleImageCatalogUpload);
     document.getElementById('formKonsumenProfile')?.addEventListener('input', () => handleProfileFormInput('konsumen'));
     document.getElementById('formTeknisiProfile')?.addEventListener('input', () => handleProfileFormInput('teknisi'));
+    document.getElementById('btnInstallApp')?.addEventListener('click', () => {
+        void promptInstallApp();
+    });
+    document.getElementById('btnInstallAppLanding')?.addEventListener('click', () => {
+        void promptInstallApp();
+    });
+    bindShellNavEvents();
+    bindInstallPromptEvents();
+    bindConnectivityEvents();
+    runtimeState.domEventsBound = true;
 }
 
 function handleStorageSync(event) {
@@ -3814,10 +4212,12 @@ function handleStorageSync(event) {
     appData = loadStoredData();
     if (remoteState.profile && currentView) {
         renderAppShell();
+        syncActiveNavState();
         renderCurrentView().catch((error) => {
             console.error('Gagal render ulang setelah storage sync:', error);
         });
     } else {
+        syncInstallPromptUI();
         renderLandingSessionNotice();
     }
 }
@@ -3841,6 +4241,7 @@ async function restoreSession() {
 }
 
 async function initApp() {
+    setBodyAppMode('public');
     appData = loadStoredData();
     saveData(appData);
     purgeLegacyKonsumenTeknisiCache();
@@ -3848,6 +4249,11 @@ async function initApp() {
     populateSpecializationOptions('regTekSpecialization', 'Semua Layanan');
     syncAdminAccessUI();
     initDomEvents();
+    syncConnectionStatusBanner();
+    syncInstallPromptUI();
+    scheduleIdleTask(() => {
+        void registerServiceWorkerSafe();
+    }, 1800);
  
     if (!canUseSupabase()) {
         showLanding();

@@ -2,19 +2,31 @@
 <html lang="id">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <meta name="description" content="Indo Sejuk AC - layanan service AC profesional dengan login Supabase untuk konsumen, teknisi, dan admin.">
+    <meta name="theme-color" content="#0d9488">
+    <meta name="color-scheme" content="light">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <meta name="apple-mobile-web-app-title" content="Indo Sejuk AC">
+    <meta name="mobile-web-app-capable" content="yes">
     <title>Indo Sejuk AC - Solusi AC Sejuk & Terpercaya di Banyumas</title>
+    <link rel="manifest" href="manifest.webmanifest">
+    <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+    <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+    <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+    <link rel="dns-prefetch" href="//cdn.jsdelivr.net">
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
+    <div class="connection-status" id="connectionStatusBanner" hidden role="status" aria-live="polite"></div>
 
     <!-- ========== HEADER ========== -->
     <header class="app-header" id="appHeader" style="display:none;">
         <div class="header-container">
             <div class="brand">
                 <div class="brand-icon">
-                    <img src="image/logo.png" alt="Logo Indo Sejuk AC">
+                    <img src="image/logo.png" alt="Logo Indo Sejuk AC" width="40" height="40" decoding="async">
                 </div>
                 <div class="brand-text">
                     <h1>Indo Sejuk AC</h1>
@@ -29,17 +41,20 @@
                         <span class="user-role" id="headerUserRole">Konsumen</span>
                     </div>
                 </div>
-                <button class="btn btn-outline btn-sm" id="btnHeaderHome" onclick="goToLanding()">
+                <button type="button" class="btn btn-outline btn-sm" id="btnHeaderHome" onclick="goToLanding()">
                     <span>Kembali ke Beranda Utama</span>
                 </button>
-                <button class="btn-logout" id="btnLogout" title="Keluar">
+                <button class="btn btn-outline btn-sm btn-install-app touch-target" id="btnInstallApp" type="button" hidden>
+                    <span>Pasang Aplikasi</span>
+                </button>
+                <button type="button" class="btn-logout" id="btnLogout" title="Keluar">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
                     <span>Keluar</span>
                 </button>
             </div>
         </div>
         <!-- Mobile Navbar -->
-        <nav class="mobile-nav" id="mobileNav">
+        <nav class="mobile-nav safe-bottom" id="mobileNav" aria-label="Navigasi cepat aplikasi">
             <!-- Populated by JS per role -->
         </nav>
     </header>
@@ -54,7 +69,7 @@
         <div class="login-container">
             <div class="login-brand">
                 <div class="login-logo">
-                    <img src="image/logo.png" alt="Logo Indo Sejuk AC">
+                    <img src="image/logo.png" alt="Logo Indo Sejuk AC" width="80" height="80" decoding="async" fetchpriority="high">
                 </div>
                 <h1 class="login-title">Indo Sejuk AC</h1>
                 <p class="login-subtitle">Solusi AC Sejuk & Terpercaya di Banyumas</p>
@@ -113,9 +128,9 @@
                     <p>Gunakan email dan password akun Anda. Role akan ditentukan otomatis dari profil Supabase yang aktif.</p>
                 </div>
                 <div class="tabs login-role-tabs">
-                    <button class="tab active" id="loginRoleTab-konsumen" aria-selected="true" onclick="switchLoginRole('konsumen', this)">Konsumen</button>
-                    <button class="tab" id="loginRoleTab-teknisi" aria-selected="false" onclick="switchLoginRole('teknisi', this)">Teknisi</button>
-                    <button class="tab is-hidden" id="loginRoleTab-admin" aria-selected="false" onclick="switchLoginRole('admin', this)" hidden>Admin</button>
+                    <button type="button" class="tab active" id="loginRoleTab-konsumen" aria-selected="true" onclick="switchLoginRole('konsumen', this)">Konsumen</button>
+                    <button type="button" class="tab" id="loginRoleTab-teknisi" aria-selected="false" onclick="switchLoginRole('teknisi', this)">Teknisi</button>
+                    <button type="button" class="tab is-hidden" id="loginRoleTab-admin" aria-selected="false" onclick="switchLoginRole('admin', this)" hidden>Admin</button>
                 </div>
                 <p id="adminLocalhostHint" class="admin-localhost-hint" hidden>
                     Dashboard admin hanya tersedia di localhost.
@@ -138,6 +153,14 @@
                 </form>
                 <div class="credential-grid" id="defaultAccountList"></div>
                 <div class="landing-session-notice" id="landingSessionNotice" style="display:none;"></div>
+            </div>
+
+            <div class="install-app-card" id="installAppCard" hidden>
+                <div>
+                    <h3>Pasang aplikasi Indo Sejuk AC</h3>
+                    <p>Tambahkan ke home screen untuk pengalaman yang lebih mirip aplikasi, navigasi lebih rapat, dan shell dasar tetap tersedia saat koneksi putus.</p>
+                </div>
+                <button type="button" class="btn btn-primary btn-lg touch-target" id="btnInstallAppLanding">Pasang Aplikasi</button>
             </div>
 
             <div class="login-register-link">
@@ -170,7 +193,7 @@
         <div class="register-container">
             <div class="login-brand">
                 <div class="login-logo">
-                    <img src="image/logo.png" alt="Logo Indo Sejuk AC">
+                    <img src="image/logo.png" alt="Logo Indo Sejuk AC" width="80" height="80" decoding="async">
                 </div>
                 <h1 class="login-title">Indo Sejuk AC</h1>
                 <p class="login-subtitle">Pendaftaran Akun Baru</p>
@@ -181,8 +204,8 @@
             </div>
 
             <div class="register-tabs">
-                <button class="reg-tab active" onclick="switchRegisterTab('konsumen', this)">Daftar Konsumen</button>
-                <button class="reg-tab" onclick="switchRegisterTab('teknisi', this)">Daftar Teknisi</button>
+                <button type="button" class="reg-tab active" onclick="switchRegisterTab('konsumen', this)">Daftar Konsumen</button>
+                <button type="button" class="reg-tab" onclick="switchRegisterTab('teknisi', this)">Daftar Teknisi</button>
             </div>
 
             <!-- === FORM DAFTAR KONSUMEN === -->
@@ -497,11 +520,11 @@
                                 </label>
                             </div>
                         </div>
-                        <div class="upload-preview-grid" id="regTekIDPreview"></div>
-                        <div class="ocr-panel">
-                            <div class="ocr-status" id="ocrStatus">OCR siap digunakan setelah foto KTP diunggah.</div>
-                            <div class="ocr-progress" id="ocrProgress"></div>
-                            <p class="text-muted text-sm ocr-helper-text">OCR akan mengisi otomatis hanya untuk field yang masih kosong. Anda tetap bisa edit manual kapan saja.</p>
+                        <div class="upload-preview-grid" id="regTekIDPreview" role="list"></div>
+                        <div class="ocr-panel" id="ocrPanel" data-ocr-panel="true">
+                            <div class="ocr-status" id="ocrStatus" aria-live="polite">OCR siap digunakan setelah foto KTP diunggah.</div>
+                            <div class="ocr-progress" id="ocrProgress" aria-live="polite"></div>
+                            <p class="text-muted text-sm ocr-helper-text">Mesin OCR baru dimuat saat Anda benar-benar masuk ke alur scan KTP. Hasilnya hanya mengisi field yang masih kosong dan tetap bisa diedit manual kapan saja.</p>
                             <div class="ocr-preview-card" id="ocrPreviewCard" style="display:none;">
                                 <h5>Preview Ekstraksi OCR</h5>
                                 <div class="ocr-result-list" id="ocrResultList"></div>
@@ -562,7 +585,7 @@
         </aside>
 
         <!-- CONTENT AREA -->
-        <div class="content-area" id="contentArea">
+        <div class="content-area safe-bottom" id="contentArea">
 
             <!-- ===== KONSUMEN VIEWS ===== -->
 
@@ -573,15 +596,15 @@
                         <h2>Dashboard Konsumen</h2>
                         <p>Pesan layanan service AC profesional dengan histori akun yang tersimpan lokal.</p>
                     </div>
-                    <button class="btn btn-outline btn-sm" onclick="goToLanding()">Kembali ke Beranda Utama</button>
+                    <button type="button" class="btn btn-outline btn-sm" onclick="goToLanding()">Kembali ke Beranda Utama</button>
                 </div>
 
                 <div class="hero-banner">
-                    <img src="image/hero-ac-service.png" alt="AC Service Professional" class="hero-img" loading="lazy">
+                    <img src="image/hero-ac-service.png" alt="AC Service Professional" class="hero-img" loading="lazy" decoding="async" width="1280" height="720">
                     <div class="hero-overlay">
                         <h3>Service AC Profesional</h3>
                         <p>Teknisi berpengalaman, harga transparan, garansi pekerjaan</p>
-                        <button class="btn btn-primary btn-glow" onclick="navigateTo('konsumen-order')">
+                        <button type="button" class="btn btn-primary btn-glow" onclick="navigateTo('konsumen-order')">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
                             Pesan Sekarang
                         </button>
@@ -623,7 +646,7 @@
                 <div class="card">
                     <div class="card-header">
                         <h3>Pesanan Terbaru</h3>
-                        <button class="btn btn-outline btn-sm" onclick="navigateTo('konsumen-history')">Lihat Semua</button>
+                        <button type="button" class="btn btn-outline btn-sm" onclick="navigateTo('konsumen-history')">Lihat Semua</button>
                     </div>
                     <div class="table-responsive">
                         <table class="data-table" id="konsumenRecentTable">
@@ -652,7 +675,7 @@
             <!-- Konsumen: Order Form -->
             <section class="view" id="viewKonsumenOrder" style="display:none;">
                 <div class="page-header">
-                    <button class="btn-back" onclick="navigateTo('konsumen-home')">&lt; Kembali</button>
+                    <button type="button" class="btn-back" onclick="navigateTo('konsumen-home')">&lt; Kembali</button>
                     <h2>Pesan Layanan Service AC</h2>
                     <p>Isi formulir di bawah ini untuk memesan layanan service AC</p>
                 </div>
@@ -856,7 +879,7 @@
                         <h2>Dashboard Teknisi</h2>
                         <p>Kelola pekerjaan dan data akun teknisi yang sedang login.</p>
                     </div>
-                    <button class="btn btn-outline btn-sm" onclick="goToLanding()">Kembali ke Beranda Utama</button>
+                    <button type="button" class="btn btn-outline btn-sm" onclick="goToLanding()">Kembali ke Beranda Utama</button>
                 </div>
 
                 <div class="stats-row">
@@ -992,7 +1015,7 @@
             <!-- Teknisi: Upload Bukti -->
             <section class="view" id="viewTeknisiUpload" style="display:none;">
                 <div class="page-header">
-                    <button class="btn-back" onclick="navigateTo('teknisi-home')">&lt; Kembali</button>
+                    <button type="button" class="btn-back" onclick="navigateTo('teknisi-home')">&lt; Kembali</button>
                     <h2>Upload Bukti Pekerjaan</h2>
                     <p>Unggah foto sebagai bukti penyelesaian pekerjaan</p>
                 </div>
@@ -1008,7 +1031,7 @@
                         <p id="uploadFileName"></p>
                     </div>
                     <div class="form-actions">
-                        <button class="btn btn-primary btn-lg" onclick="submitUploadProof()" id="btnSubmitProof">
+                        <button type="button" class="btn btn-primary btn-lg" onclick="submitUploadProof()" id="btnSubmitProof">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
                             Kirim Bukti & Selesaikan
                         </button>
@@ -1081,7 +1104,7 @@
                         <h2>Dashboard Admin</h2>
                         <p>Pantau seluruh operasional Indo Sejuk AC di Banyumas.</p>
                     </div>
-                    <button class="btn btn-outline btn-sm" onclick="goToLanding()">Kembali ke Beranda Utama</button>
+                    <button type="button" class="btn btn-outline btn-sm" onclick="goToLanding()">Kembali ke Beranda Utama</button>
                 </div>
 
                 <div class="stats-row stats-row-4">
@@ -1125,7 +1148,7 @@
 
                 <!-- Hero Image -->
                 <div class="admin-hero-banner">
-                    <img src="image/technician-1.png" alt="AC Technician at Work" loading="lazy">
+                    <img src="image/technician-1.png" alt="AC Technician at Work" loading="lazy" decoding="async" width="1280" height="720">
                     <div class="admin-hero-overlay">
                         <h3>Indo Sejuk AC - Banyumas</h3>
                         <p>Pusat kendali operasional layanan service AC profesional</p>
@@ -1136,7 +1159,7 @@
                 <div class="card">
                     <div class="card-header">
                         <h3>Pesanan Terbaru</h3>
-                        <button class="btn btn-outline btn-sm" onclick="navigateTo('admin-orders')">Kelola Semua</button>
+                        <button type="button" class="btn btn-outline btn-sm" onclick="navigateTo('admin-orders')">Kelola Semua</button>
                     </div>
                     <div class="table-responsive">
                         <table class="data-table">
@@ -1207,11 +1230,11 @@
                 </div>
 
                 <div class="tabs">
-                    <button class="tab active" onclick="switchUserTab('konsumen', this)">Konsumen</button>
-                    <button class="tab" onclick="switchUserTab('teknisi', this)">Teknisi</button>
-                    <button class="tab" onclick="switchUserTab('admin', this)">Admin</button>
-                    <button class="tab" onclick="switchUserTab('layanan', this)">Layanan</button>
-                    <button class="tab" onclick="switchUserTab('gambar', this)">Gambar</button>
+                    <button type="button" class="tab active" onclick="switchUserTab('konsumen', this)">Konsumen</button>
+                    <button type="button" class="tab" onclick="switchUserTab('teknisi', this)">Teknisi</button>
+                    <button type="button" class="tab" onclick="switchUserTab('admin', this)">Admin</button>
+                    <button type="button" class="tab" onclick="switchUserTab('layanan', this)">Layanan</button>
+                    <button type="button" class="tab" onclick="switchUserTab('gambar', this)">Gambar</button>
                 </div>
 
                 <div class="card" id="adminUserKonsumenCard">
@@ -1286,7 +1309,7 @@
                 <div class="card" id="adminUserServicesCard" style="display:none;">
                     <div class="card-header card-header-space-between">
                         <h3>Master Layanan</h3>
-                        <button class="btn btn-primary btn-sm" onclick="openAddServiceModal()">Tambah Layanan</button>
+                        <button type="button" class="btn btn-primary btn-sm" onclick="openAddServiceModal()">Tambah Layanan</button>
                     </div>
                     <div class="table-responsive">
                         <table class="data-table">
@@ -1309,7 +1332,7 @@
                 <div class="card" id="adminUserImageCard" style="display:none;">
                     <div class="card-header card-header-space-between">
                         <h3>Katalog Gambar Lokal</h3>
-                        <button class="btn btn-primary btn-sm" onclick="openAddImageCatalogModal()">Upload Gambar</button>
+                        <button type="button" class="btn btn-primary btn-sm" onclick="openAddImageCatalogModal()">Upload Gambar</button>
                     </div>
                     <div class="table-responsive">
                         <table class="data-table">
@@ -1364,7 +1387,7 @@
         <div class="modal">
             <div class="modal-header">
                 <h3>Tugaskan Teknisi</h3>
-                <button class="modal-close" onclick="closeModal('modalAssign')">&times;</button>
+                <button type="button" class="modal-close" onclick="closeModal('modalAssign')">&times;</button>
             </div>
             <div class="modal-body">
                 <p>Pesanan: <strong id="assignOrderId"></strong></p>
@@ -1381,8 +1404,8 @@
                 </div>
             </div>
             <div class="modal-footer">
-                <button class="btn btn-outline" onclick="closeModal('modalAssign')">Batal</button>
-                <button class="btn btn-primary" onclick="assignTeknisi()">Verifikasi & Tugaskan</button>
+                <button type="button" class="btn btn-outline" onclick="closeModal('modalAssign')">Batal</button>
+                <button type="button" class="btn btn-primary" onclick="assignTeknisi()">Verifikasi & Tugaskan</button>
             </div>
         </div>
     </div>
@@ -1392,12 +1415,12 @@
         <div class="modal modal-lg">
             <div class="modal-header">
                 <h3>Detail Pesanan</h3>
-                <button class="modal-close" onclick="closeModal('modalDetail')">&times;</button>
+                <button type="button" class="modal-close" onclick="closeModal('modalDetail')">&times;</button>
             </div>
             <div class="modal-body" id="modalDetailBody">
             </div>
             <div class="modal-footer">
-                <button class="btn btn-outline" onclick="closeModal('modalDetail')">Tutup</button>
+                <button type="button" class="btn btn-outline" onclick="closeModal('modalDetail')">Tutup</button>
             </div>
         </div>
     </div>
@@ -1406,7 +1429,7 @@
         <div class="modal">
             <div class="modal-header">
                 <h3>Edit Data Konsumen</h3>
-                <button class="modal-close" onclick="closeModal('modalEditKonsumen')">&times;</button>
+                <button type="button" class="modal-close" onclick="closeModal('modalEditKonsumen')">&times;</button>
             </div>
                 <div class="modal-body">
                     <input type="hidden" id="editKonsumenId">
@@ -1446,8 +1469,8 @@
                 </div>
             </div>
             <div class="modal-footer">
-                <button class="btn btn-outline" onclick="closeModal('modalEditKonsumen')">Batal</button>
-                <button class="btn btn-primary" onclick="saveEditKonsumen()">Simpan</button>
+                <button type="button" class="btn btn-outline" onclick="closeModal('modalEditKonsumen')">Batal</button>
+                <button type="button" class="btn btn-primary" onclick="saveEditKonsumen()">Simpan</button>
             </div>
         </div>
     </div>
@@ -1456,7 +1479,7 @@
         <div class="modal">
             <div class="modal-header">
                 <h3>Edit Data Teknisi</h3>
-                <button class="modal-close" onclick="closeModal('modalEditTeknisi')">&times;</button>
+                <button type="button" class="modal-close" onclick="closeModal('modalEditTeknisi')">&times;</button>
             </div>
                 <div class="modal-body">
                     <input type="hidden" id="editTeknisiId">
@@ -1518,8 +1541,8 @@
                     </div>
                 </div>
             <div class="modal-footer">
-                <button class="btn btn-outline" onclick="closeModal('modalEditTeknisi')">Batal</button>
-                <button class="btn btn-primary" onclick="saveEditTeknisi()">Simpan</button>
+                <button type="button" class="btn btn-outline" onclick="closeModal('modalEditTeknisi')">Batal</button>
+                <button type="button" class="btn btn-primary" onclick="saveEditTeknisi()">Simpan</button>
             </div>
         </div>
     </div>
@@ -1528,7 +1551,7 @@
         <div class="modal">
             <div class="modal-header">
                 <h3 id="adminModalTitle">Edit Data Admin</h3>
-                <button class="modal-close" onclick="closeModal('modalEditAdmin')">&times;</button>
+                <button type="button" class="modal-close" onclick="closeModal('modalEditAdmin')">&times;</button>
             </div>
             <div class="modal-body">
                 <input type="hidden" id="editAdminId">
@@ -1561,8 +1584,8 @@
                 </div>
             </div>
             <div class="modal-footer">
-                <button class="btn btn-outline" onclick="closeModal('modalEditAdmin')">Batal</button>
-                <button class="btn btn-primary" onclick="saveEditAdmin()">Simpan</button>
+                <button type="button" class="btn btn-outline" onclick="closeModal('modalEditAdmin')">Batal</button>
+                <button type="button" class="btn btn-primary" onclick="saveEditAdmin()">Simpan</button>
             </div>
         </div>
     </div>
@@ -1571,13 +1594,13 @@
         <div class="modal modal-lg">
             <div class="modal-header">
                 <h3 id="imageViewerTitle">Lihat Gambar</h3>
-                <button class="modal-close" onclick="closeModal('modalImageViewer')">&times;</button>
+                <button type="button" class="modal-close" onclick="closeModal('modalImageViewer')">&times;</button>
             </div>
             <div class="modal-body">
                 <div class="image-viewer-grid" id="imageViewerGallery"></div>
             </div>
             <div class="modal-footer">
-                <button class="btn btn-outline" onclick="closeModal('modalImageViewer')">Tutup</button>
+                <button type="button" class="btn btn-outline" onclick="closeModal('modalImageViewer')">Tutup</button>
             </div>
         </div>
     </div>
@@ -1586,7 +1609,7 @@
         <div class="modal modal-scrollable">
             <div class="modal-header">
                 <h3 id="imageCatalogModalTitle">Upload Gambar Katalog</h3>
-                <button class="modal-close" onclick="closeModal('modalImageCatalogForm')">&times;</button>
+                <button type="button" class="modal-close" onclick="closeModal('modalImageCatalogForm')">&times;</button>
             </div>
             <div class="modal-body">
                 <input type="hidden" id="imageCatalogFormId">
@@ -1626,8 +1649,8 @@
                 </div>
             </div>
             <div class="modal-footer">
-                <button class="btn btn-outline" onclick="closeModal('modalImageCatalogForm')">Batal</button>
-                <button class="btn btn-primary" onclick="saveImageCatalogItem()">Simpan</button>
+                <button type="button" class="btn btn-outline" onclick="closeModal('modalImageCatalogForm')">Batal</button>
+                <button type="button" class="btn btn-primary" onclick="saveImageCatalogItem()">Simpan</button>
             </div>
         </div>
     </div>
@@ -1636,7 +1659,7 @@
         <div class="modal modal-scrollable">
             <div class="modal-header">
                 <h3 id="serviceModalTitle">Tambah Layanan</h3>
-                <button class="modal-close" onclick="closeModal('modalServiceForm')">&times;</button>
+                <button type="button" class="modal-close" onclick="closeModal('modalServiceForm')">&times;</button>
             </div>
             <div class="modal-body">
                 <input type="hidden" id="serviceFormId">
@@ -1680,8 +1703,8 @@
                 </div>
             </div>
             <div class="modal-footer">
-                <button class="btn btn-outline" onclick="closeModal('modalServiceForm')">Batal</button>
-                <button class="btn btn-primary" onclick="saveService()">Simpan</button>
+                <button type="button" class="btn btn-outline" onclick="closeModal('modalServiceForm')">Batal</button>
+                <button type="button" class="btn btn-primary" onclick="saveService()">Simpan</button>
             </div>
         </div>
     </div>
@@ -1690,7 +1713,7 @@
         <div class="modal">
             <div class="modal-header">
                 <h3>Hapus Layanan</h3>
-                <button class="modal-close" onclick="closeModal('modalDeleteService')">&times;</button>
+                <button type="button" class="modal-close" onclick="closeModal('modalDeleteService')">&times;</button>
             </div>
             <div class="modal-body">
                 <input type="hidden" id="deleteServiceId">
@@ -1698,8 +1721,8 @@
                 <p class="text-muted text-sm mt-1">Order lama yang memakai layanan ini tetap akan aman dan tetap tampil normal.</p>
             </div>
             <div class="modal-footer">
-                <button class="btn btn-outline" onclick="closeModal('modalDeleteService')">Batal</button>
-                <button class="btn btn-danger" onclick="deleteService()">Hapus</button>
+                <button type="button" class="btn btn-outline" onclick="closeModal('modalDeleteService')">Batal</button>
+                <button type="button" class="btn btn-danger" onclick="deleteService()">Hapus</button>
             </div>
         </div>
     </div>
@@ -1707,8 +1730,8 @@
     <!-- Toast Notification -->
     <div class="toast-container" id="toastContainer"></div>
 
-    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-    <script src="app.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2" defer></script>
+    <script src="app.js" defer></script>
 </body>
 </html>
 
