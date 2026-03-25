@@ -65,10 +65,11 @@ Function lama berikut sudah tidak relevan untuk flow baru dan dihapus dari sourc
 
 Jalankan migration berikut:
 
-- `supabase/migrations/20260325_fix_profiles_birth_date_and_auth.sql`
-- `supabase/migrations/20260325_storage_policies_and_cleanup.sql`
-- `supabase/migrations/20260325_consumer_auth_phone_and_security.sql`
-- `supabase/migrations/20260326_admin_verification_and_public_auth.sql`
+- `supabase/migrations/202603250101_fix_profiles_birth_date_and_auth.sql`
+- `supabase/migrations/202603250102_storage_policies_and_cleanup.sql`
+- `supabase/migrations/202603250100_consumer_auth_phone_and_security.sql`
+- `supabase/migrations/202603260101_admin_verification_and_public_auth.sql`
+- `supabase/migrations/202603260102_fix_security_advisor_warnings.sql`
 
 Migration terbaru melakukan hal penting berikut:
 
@@ -113,3 +114,19 @@ Jika browser menampilkan error seperti `Requested function was not found` atau `
 Opsional env backend:
 
 - `AUTH_EMAIL_DOMAIN=auth.indosejuk.local`
+
+## Security Advisor
+
+Warning yang bisa diselesaikan dari codebase sudah ditutup lewat migration:
+
+- `Function Search Path Mutable` untuk `public.normalize_indonesian_phone`
+
+Warning berikut adalah setting level project Supabase Auth dan tidak bisa dipatch dari frontend / migration repo:
+
+- `Leaked Password Protection Disabled`
+
+Aktifkan manual di Supabase Dashboard:
+
+1. `Authentication`
+2. `Providers` atau `Security` sesuai layout dashboard Anda
+3. aktifkan `Leaked password protection`

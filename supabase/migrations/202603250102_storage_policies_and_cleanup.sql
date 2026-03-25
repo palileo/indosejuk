@@ -21,7 +21,19 @@ set public = excluded.public,
     file_size_limit = excluded.file_size_limit,
     allowed_mime_types = excluded.allowed_mime_types;
 
-alter table storage.objects enable row level security;
+do $$
+begin
+    begin
+        alter table storage.objects enable row level security;
+    exception
+        when insufficient_privilege then
+            -- Pada project tertentu, ownership `storage.objects` dikelola internal Supabase.
+            -- RLS storage umumnya sudah aktif; bila tidak bisa di-alter dari role ini,
+            -- lanjutkan migration dan hanya terapkan policy yang diizinkan.
+            null;
+    end;
+end
+$$;
 
 do $$
 begin

@@ -132,9 +132,6 @@
                     <button type="button" class="tab" id="loginRoleTab-teknisi" aria-selected="false" onclick="switchLoginRole('teknisi', this)">Teknisi</button>
                     <button type="button" class="tab is-hidden" id="loginRoleTab-admin" aria-selected="false" onclick="switchLoginRole('admin', this)" hidden>Admin</button>
                 </div>
-                <p id="adminLocalhostHint" class="admin-localhost-hint" hidden>
-                    Dashboard admin hanya tersedia di localhost.
-                </p>
                 <p id="authBackendNoticeLogin" class="admin-localhost-hint" hidden></p>
                 <form id="formLogin" onsubmit="return handleLoginSubmit(event)">
                     <input type="hidden" id="loginRole" value="konsumen">
