@@ -22,6 +22,8 @@ const PROFILE_STATUS_REJECTED = 'Ditolak';
 const PROFILE_STATUS_DISABLED = 'Nonaktif';
 const PROFILE_SCHEMA_DRIFT_CACHE_KEY = 'indoSejukProfileSchemaDrift';
 const PROFILE_SCHEMA_DRIFT_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+const ORDER_SCHEMA_DRIFT_CACHE_KEY = 'indoSejukOrderSchemaDrift';
+const ORDER_SCHEMA_DRIFT_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const DEFAULT_AUTH_EMAIL_DOMAIN = 'auth.indosejuk.local';
 const SYNTHETIC_AUTH_EMAIL_SUFFIX = '.indosejuk.local';
 const DEFAULT_PUBLIC_UPLOAD_BUCKET = 'app-public-uploads';
@@ -59,6 +61,8 @@ const OPTIONAL_PROFILE_COLUMNS = [
     'verified_by',
     'completed_jobs',
     'auth_email',
+    'referral',
+    'ac_units',
     'unit_image_paths',
     'unit_image_urls',
     'ktp_photo_path',
@@ -67,15 +71,133 @@ const OPTIONAL_PROFILE_COLUMNS = [
     'selfie_photo_url'
 ];
 const OPTIONAL_PROFILE_COLUMN_SET = new Set(OPTIONAL_PROFILE_COLUMNS);
-const OPTIONAL_ORDER_COLUMNS = new Set([
+const REQUIRED_ORDER_COLUMNS = [
+    'id',
+    'konsumen_id',
+    'service_id',
+    'price',
+    'status',
+    'created_at'
+];
+const OPTIONAL_ORDER_COLUMNS = [
+    'updated_at',
+    'order_number',
+    'konsumen_name',
+    'service_name',
+    'teknisi_id',
+    'teknisi_name',
+    'brand',
+    'ac_type',
+    'pk',
+    'refrigerant',
+    'preferred_date',
+    'address',
+    'notes',
+    'phone',
+    'ac_unit_key',
     'admin_confirmation_text',
     'verified_at',
     'verified_by',
+    'verified_by_name',
+    'proof_image_data',
     'proof_image_path',
     'proof_image_url'
-]);
+];
+const OPTIONAL_ORDER_COLUMN_SET = new Set(OPTIONAL_ORDER_COLUMNS);
 const REMOTE_SYNC_FUNCTION_NAME = 'sync-user-to-github';
 const PASSWORD_RESET_GENERIC_SUCCESS_MESSAGE = 'Jika akun ditemukan dan memiliki email verifikasi aktif, instruksi reset sudah dikirim.';
+const BANYUMAS_DISTRICT_OPTIONS = [
+    'Ajibarang, Banyumas',
+    'Banyumas, Banyumas',
+    'Baturraden, Banyumas',
+    'Cilongok, Banyumas',
+    'Gumelar, Banyumas',
+    'Jatilawang, Banyumas',
+    'Kalibagor, Banyumas',
+    'Karanglewas, Banyumas',
+    'Kebasen, Banyumas',
+    'Kedungbanteng, Banyumas',
+    'Kembaran, Banyumas',
+    'Kemranjen, Banyumas',
+    'Lumbir, Banyumas',
+    'Patikraja, Banyumas',
+    'Pekuncen, Banyumas',
+    'Purwojati, Banyumas',
+    'Purwokerto Barat, Banyumas',
+    'Purwokerto Selatan, Banyumas',
+    'Purwokerto Timur, Banyumas',
+    'Purwokerto Utara, Banyumas',
+    'Rawalo, Banyumas',
+    'Sokaraja, Banyumas',
+    'Somagede, Banyumas',
+    'Sumbang, Banyumas',
+    'Sumpiuh, Banyumas',
+    'Tambak, Banyumas',
+    'Wangon, Banyumas'
+];
+const AC_SPEC_OPTIONS = {
+    brand: [
+        'Daikin',
+        'Panasonic',
+        'LG',
+        'Samsung',
+        'Sharp',
+        'Midea',
+        'Gree',
+        'Haier',
+        'Hitachi',
+        'Toshiba',
+        'Mitsubishi',
+        'Changhong',
+        'AUX',
+        'TCL',
+        'Polytron',
+        'Aqua',
+        'Hisense',
+        'Electrolux',
+        'Tidak Tahu',
+        'Lainnya'
+    ],
+    type: [
+        'Split Wall',
+        'Inverter',
+        'Low Watt',
+        'Standard',
+        'Cassette',
+        'Floor Standing',
+        'Ceiling Duct',
+        'Portable',
+        'Window',
+        'VRV/VRF',
+        'Tidak Tahu',
+        'Lainnya'
+    ],
+    refrigerant: [
+        'R22',
+        'R32',
+        'R410A',
+        'R290',
+        'R134a',
+        'R407C',
+        'R404A',
+        'R600a',
+        'Tidak Tahu',
+        'Lainnya'
+    ],
+    capacity: [
+        '0.5 PK',
+        '0.75 PK',
+        '1 PK',
+        '1.5 PK',
+        '2 PK',
+        '2.5 PK',
+        '3 PK',
+        '4 PK',
+        '5 PK',
+        'Tidak Tahu',
+        'Lainnya'
+    ]
+};
 
 const appRuntimeConfig = (() => {
     const source = window.INDOSEJUK_RUNTIME_CONFIG || {};
@@ -102,6 +224,7 @@ let appData = null;
 let authBootstrapPromise = null;
 let authSignInInProgress = false;
 const missingProfileColumnsCache = new Set();
+const missingOrderColumnsCache = new Set();
 const syncToastCache = new Set();
 
 const remoteState = {
@@ -119,8 +242,9 @@ const remoteState = {
 };
 
 const draftUploads = {
-    regKonUnitImages: [],
-    regKonUnitFiles: [],
+    regKonUnitDraftImage: '',
+    regKonUnitDraftFile: null,
+    regKonSavedUnits: [],
     regTekKtpPhoto: '',
     regTekKtpFile: null,
     regTekSelfiePhoto: '',
@@ -149,6 +273,7 @@ const runtimeState = {
     changePasswordCodeSent: false,
     passwordRecoveryActive: false,
     sensitiveEmailSubmitting: false,
+    orderAutofillToken: 0,
     authBackendHealth: {
         functions: {},
         settings: null,
@@ -681,7 +806,9 @@ function buildRegistrationWhatsAppMessage(role, formValues = {}) {
         ]
         : [
             `Area/Kecamatan: ${formValues.district || '-'}`,
-            `Tanggal Lahir: ${formValues.birthDate ? formatDate(formValues.birthDate) : '-'}`
+            `Tanggal Lahir: ${formValues.birthDate ? formatDate(formValues.birthDate) : '-'}`,
+            `Referal: ${formValues.referral || '-'}`,
+            `Total data unit AC: ${normalizeAcUnitArray(formValues.ac_units || []).length || 0}`
         ];
 
     return buildMessageLines([...commonLines, ...roleSpecificLines]);
@@ -712,8 +839,9 @@ function buildOrderWhatsAppMessage(order = {}) {
         `Tanggal Preferensi: ${formatDate(order.preferredDate || order.createdAt)}`,
         `Telepon: ${formatDisplayPhone(order.phone)}`,
         `Alamat: ${order.address || '-'}`,
-        `Merek AC: ${order.brand || '-'}`,
-        `PK: ${order.pk || '-'}`,
+        `Merk AC: ${order.brand || '-'}`,
+        `Jenis AC: ${order.acType || '-'}`,
+        `Kapasitas AC: ${order.pk || '-'}`,
         `Refrigerant: ${order.refrigerant || '-'}`,
         `Catatan: ${order.notes || '-'}`
     ]);
@@ -845,6 +973,103 @@ async function withProfileColumnFallback(asyncOperation, options = {}) {
     }
 
     throw new Error(`Operasi profiles gagal dipulihkan setelah retry schema fallback${options.context ? ` (${options.context})` : ''}.`);
+}
+
+function persistMissingOrderColumnsCache() {
+    try {
+        const payload = {
+            columns: [...missingOrderColumnsCache],
+            updatedAt: Date.now()
+        };
+        localStorage.setItem(ORDER_SCHEMA_DRIFT_CACHE_KEY, JSON.stringify(payload));
+    } catch (_) {}
+}
+
+function hydrateMissingOrderColumnsCache() {
+    try {
+        const raw = localStorage.getItem(ORDER_SCHEMA_DRIFT_CACHE_KEY);
+        if (!raw) return;
+
+        const parsed = JSON.parse(raw);
+        const updatedAt = Number(parsed?.updatedAt || 0);
+        const columns = Array.isArray(parsed?.columns) ? parsed.columns : [];
+
+        if (!updatedAt || (Date.now() - updatedAt) > ORDER_SCHEMA_DRIFT_CACHE_TTL_MS) {
+            localStorage.removeItem(ORDER_SCHEMA_DRIFT_CACHE_KEY);
+            return;
+        }
+
+        columns.forEach((column) => {
+            const normalized = String(column || '').trim().toLowerCase();
+            if (OPTIONAL_ORDER_COLUMN_SET.has(normalized)) {
+                missingOrderColumnsCache.add(normalized);
+            }
+        });
+    } catch (_) {}
+}
+
+function markMissingOrderColumn(name, error = null) {
+    const normalized = String(name || '').trim().toLowerCase();
+    if (!normalized || !OPTIONAL_ORDER_COLUMN_SET.has(normalized)) return false;
+
+    const isNew = !missingOrderColumnsCache.has(normalized);
+    missingOrderColumnsCache.add(normalized);
+    persistMissingOrderColumnsCache();
+
+    console.warn(`Kolom optional orders "${normalized}" belum tersedia di schema cache Supabase. Operasi orders akan diulang tanpa kolom ini sampai migrasi terbaca normal.`, error || '');
+
+    return isNew;
+}
+
+function getOrderSelectClause(extraColumns = []) {
+    return [...new Set([
+        ...REQUIRED_ORDER_COLUMNS,
+        ...OPTIONAL_ORDER_COLUMNS,
+        ...(Array.isArray(extraColumns) ? extraColumns : [])
+    ])]
+        .filter((column) => column && !missingOrderColumnsCache.has(column))
+        .join(', ');
+}
+
+function filterOrderWritePayload(payload = {}) {
+    const filtered = {};
+    Object.entries(payload || {}).forEach(([key, value]) => {
+        if (value === undefined) return;
+        if (missingOrderColumnsCache.has(key) && OPTIONAL_ORDER_COLUMN_SET.has(key)) return;
+        filtered[key] = value;
+    });
+    return filtered;
+}
+
+async function withOrderColumnFallback(asyncOperation, options = {}) {
+    const maxAttempts = OPTIONAL_ORDER_COLUMNS.length + 2;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        try {
+            const result = await asyncOperation({
+                attempt,
+                selectClause: getOrderSelectClause(options.extraSelectColumns),
+                payload: filterOrderWritePayload(options.payload)
+            });
+
+            if (!result?.error) return result;
+
+            const missingColumn = extractMissingColumnName(result.error);
+            if (missingColumn && markMissingOrderColumn(missingColumn, result.error)) {
+                continue;
+            }
+
+            throw result.error;
+        } catch (error) {
+            const missingColumn = extractMissingColumnName(error);
+            if (missingColumn && markMissingOrderColumn(missingColumn, error)) {
+                continue;
+            }
+            throw error;
+        }
+    }
+
+    throw new Error(`Operasi orders gagal dipulihkan setelah retry schema fallback${options.context ? ` (${options.context})` : ''}.`);
 }
 
 function isEmailIdentifier(value) {
@@ -1272,6 +1497,165 @@ function normalizeTextArray(value) {
         }
     }
     return [];
+}
+
+function normalizeWhitespace(value) {
+    return String(value || '').replace(/\s+/g, ' ').trim();
+}
+
+function tryParseJsonArray(value) {
+    if (Array.isArray(value)) return value;
+    if (typeof value !== 'string') return [];
+    const trimmed = value.trim();
+    if (!trimmed) return [];
+    try {
+        const parsed = JSON.parse(trimmed);
+        return Array.isArray(parsed) ? parsed : [];
+    } catch (_) {
+        return [];
+    }
+}
+
+function findCanonicalAcOption(fieldKey, value) {
+    const normalized = normalizeWhitespace(value).toLowerCase();
+    if (!normalized) return '';
+    const options = Array.isArray(AC_SPEC_OPTIONS[fieldKey]) ? AC_SPEC_OPTIONS[fieldKey] : [];
+    const match = options.find((option) => normalizeWhitespace(option).toLowerCase() === normalized);
+    return match || '';
+}
+
+function normalizeAcCapacityValue(value) {
+    const canonical = findCanonicalAcOption('capacity', value);
+    if (canonical && canonical !== 'Lainnya') return canonical;
+
+    const normalized = normalizeWhitespace(value).replace(',', '.');
+    if (!normalized) return '';
+    if (/^tidak tahu$/i.test(normalized)) return 'Tidak Tahu';
+
+    const match = normalized.match(/^(\d+(?:\.\d+)?)\s*(pk)?$/i);
+    if (!match) return normalized;
+    const numeric = Number(match[1]);
+    if (!Number.isFinite(numeric)) return normalized;
+    const formatted = Number.isInteger(numeric) ? String(numeric) : String(numeric).replace(/\.0+$/, '');
+    return `${formatted} PK`;
+}
+
+function normalizeAcSpecValue(fieldKey, value) {
+    const canonical = findCanonicalAcOption(fieldKey, value);
+    if (canonical && canonical !== 'Lainnya') return canonical;
+
+    const normalized = normalizeWhitespace(value);
+    if (!normalized || /^lainnya$/i.test(normalized)) return '';
+
+    if (fieldKey === 'refrigerant') {
+        return normalized.toUpperCase();
+    }
+    if (fieldKey === 'capacity') {
+        return normalizeAcCapacityValue(normalized);
+    }
+    return normalized;
+}
+
+function resolveAcSpecValue(fieldKey, selectedValue, manualValue = '') {
+    const selected = normalizeWhitespace(selectedValue);
+    if (/^lainnya$/i.test(selected)) {
+        return normalizeAcSpecValue(fieldKey, manualValue);
+    }
+    return normalizeAcSpecValue(fieldKey, selected);
+}
+
+function buildAcUnitKey(seed = '') {
+    const randomPart = Math.random().toString(36).slice(2, 8);
+    const base = slugifyPathSegment(seed || `unit-${Date.now()}`);
+    return `${base}-${randomPart}`;
+}
+
+function normalizeAcUnitRecord(unit, options = {}) {
+    if (!unit || typeof unit !== 'object') return null;
+
+    const imagePath = normalizeWhitespace(unit.image_path || unit.imagePath);
+    const imageUrl = normalizeWhitespace(unit.image_url || unit.imageUrl || unit.photoUrl || unit.url);
+    const createdAt = unit.created_at || unit.createdAt || options.createdAt || '';
+    const normalized = {
+        key: normalizeWhitespace(unit.key || unit.id) || buildAcUnitKey(unit.brand || unit.type || options.seed || 'ac-unit'),
+        brand: normalizeAcSpecValue('brand', unit.brand),
+        type: normalizeAcSpecValue('type', unit.type || unit.ac_type || unit.acType || unit.jenis_ac),
+        refrigerant: normalizeAcSpecValue('refrigerant', unit.refrigerant),
+        capacity: normalizeAcSpecValue('capacity', unit.capacity || unit.pk || unit.ac_capacity || unit.acCapacity),
+        imagePath,
+        imageUrl,
+        createdAt,
+        updatedAt: unit.updated_at || unit.updatedAt || createdAt || '',
+        source: normalizeWhitespace(unit.source || options.source || 'profile'),
+        notes: normalizeWhitespace(unit.notes || ''),
+        legacyIndex: Number.isInteger(options.legacyIndex) ? options.legacyIndex : null
+    };
+
+    return normalized;
+}
+
+function normalizeAcUnitArray(value, options = {}) {
+    const directArray = Array.isArray(value) ? value : tryParseJsonArray(value);
+    const normalizedUnits = directArray
+        .map((unit, index) => normalizeAcUnitRecord(unit, {
+            ...options,
+            legacyIndex: Number.isInteger(unit?.legacyIndex) ? unit.legacyIndex : index
+        }))
+        .filter(Boolean);
+
+    if (normalizedUnits.length) return normalizedUnits;
+
+    const fallbackPaths = normalizeTextArray(options.unitImagePaths || options.unit_image_paths);
+    const fallbackUrls = normalizeTextArray(options.unitImageUrls || options.unit_image_urls);
+    return Array.from({ length: Math.max(fallbackPaths.length, fallbackUrls.length) }).map((_, index) => normalizeAcUnitRecord({
+        key: `legacy-unit-${index + 1}`,
+        image_path: fallbackPaths[index] || '',
+        image_url: fallbackUrls[index] || '',
+        created_at: options.joinedAt || options.created_at || ''
+    }, {
+        source: 'legacy-profile',
+        legacyIndex: index
+    })).filter(Boolean);
+}
+
+function collectLegacyUnitImagesFromUnits(units = []) {
+    return units.reduce((accumulator, unit) => {
+        if (unit?.imagePath) accumulator.paths.push(unit.imagePath);
+        if (unit?.imageUrl) accumulator.urls.push(unit.imageUrl);
+        return accumulator;
+    }, { paths: [], urls: [] });
+}
+
+function formatAcUnitLabel(unit = {}, index = 0) {
+    const parts = [unit.brand, unit.type, unit.capacity].filter(Boolean);
+    return parts.length ? parts.join(' • ') : `Unit AC ${index + 1}`;
+}
+
+function buildAcUnitSummary(unit = {}) {
+    return [
+        unit.brand,
+        unit.type,
+        unit.refrigerant,
+        unit.capacity
+    ].filter(Boolean);
+}
+
+function hasAcUnitStructuredData(unit = {}) {
+    return Boolean(
+        unit.brand
+        || unit.type
+        || unit.refrigerant
+        || unit.capacity
+        || (!unit.imagePath && !unit.imageUrl)
+    );
+}
+
+function getProfileAcUnits(profile) {
+    return normalizeAcUnitArray(profile?.ac_units || profile?.acUnits, {
+        unitImagePaths: profile?.unit_image_paths || profile?.unitImagePaths,
+        unitImageUrls: profile?.unit_image_urls || profile?.unitImageUrls,
+        joinedAt: profile?.joinedAt || profile?.created_at || ''
+    });
 }
 
 function createFileLikeFromDraft(draft, fallbackName = 'upload.jpg') {
@@ -1934,6 +2318,80 @@ function populateSpecializationOptions(selectId, selected = '') {
     select.value = selected || 'Semua Layanan';
 }
 
+function populateAcSpecOptions(selectId, fieldKey, selected = '', options = {}) {
+    const select = document.getElementById(selectId);
+    if (!select) return;
+
+    const placeholder = options.placeholder || {
+        brand: 'Pilih Merk AC',
+        type: 'Pilih Jenis AC',
+        refrigerant: 'Pilih Refrigerant',
+        capacity: 'Pilih Kapasitas AC'
+    }[fieldKey] || 'Pilih Opsi';
+
+    const values = Array.isArray(AC_SPEC_OPTIONS[fieldKey]) ? AC_SPEC_OPTIONS[fieldKey] : [];
+    select.innerHTML = [`<option value="">${escapeHtml(placeholder)}</option>`]
+        .concat(values.map((option) => `<option value="${escapeHtml(option)}">${escapeHtml(option)}</option>`))
+        .join('');
+
+    setAcSpecFieldValue(selectId, fieldKey, selected);
+}
+
+function handleAcOptionSelectChange(selectId, wrapperId, options = {}) {
+    const select = document.getElementById(selectId);
+    const wrapper = document.getElementById(wrapperId);
+    const manualInput = document.getElementById(options.manualInputId || `${selectId}Other`);
+    const isOther = String(select?.value || '').trim() === 'Lainnya';
+
+    if (wrapper) wrapper.style.display = isOther ? 'block' : 'none';
+    if (manualInput && !isOther && options.clearManual !== false) {
+        manualInput.value = '';
+    }
+}
+
+function setAcSpecFieldValue(selectId, fieldKey, value) {
+    const select = document.getElementById(selectId);
+    const wrapperId = `${selectId}OtherWrap`;
+    const manualInput = document.getElementById(`${selectId}Other`);
+    if (!select) return;
+
+    const canonical = normalizeAcSpecValue(fieldKey, value);
+    const matchedOption = findCanonicalAcOption(fieldKey, canonical);
+    if (matchedOption && matchedOption !== 'Lainnya') {
+        select.value = matchedOption;
+        if (manualInput) manualInput.value = '';
+        handleAcOptionSelectChange(selectId, wrapperId);
+        return;
+    }
+
+    if (canonical) {
+        select.value = 'Lainnya';
+        if (manualInput) manualInput.value = canonical;
+        handleAcOptionSelectChange(selectId, wrapperId, { clearManual: false });
+        return;
+    }
+
+    select.value = '';
+    if (manualInput) manualInput.value = '';
+    handleAcOptionSelectChange(selectId, wrapperId);
+}
+
+function getAcSpecFieldValue(selectId, fieldKey) {
+    const select = document.getElementById(selectId);
+    const manualInput = document.getElementById(`${selectId}Other`);
+    return resolveAcSpecValue(fieldKey, select?.value || '', manualInput?.value || '');
+}
+
+function populateConsumerDistrictOptions() {
+    const select = document.getElementById('regKonKecamatan');
+    if (!select) return;
+    const banyumasGroup = select.querySelector('optgroup[label="Banyumas"]');
+    if (!banyumasGroup) return;
+    banyumasGroup.innerHTML = BANYUMAS_DISTRICT_OPTIONS
+        .map((option) => `<option value="${escapeHtml(option)}">${escapeHtml(option)}</option>`)
+        .join('');
+}
+
 function renderAdminServicesTable() {
     if (!requireAdminAccess()) return;
     const body = document.getElementById('adminServicesListBody');
@@ -1985,6 +2443,7 @@ function switchUserTab(tab, element) {
     const ids = {
         konsumen: 'adminUserKonsumenCard',
         teknisi: 'adminUserTeknisiCard',
+        'foto-unit': 'adminUserFotoUnitCard',
         admin: 'adminUserAdminCard',
         layanan: 'adminUserServicesCard',
         gambar: 'adminUserImageCard'
@@ -2213,6 +2672,99 @@ function syncAgeField(dateInputId, ageInputId) {
     if (ageInput) ageInput.value = age;
 }
 
+function getRegisterUnitDraftPayload() {
+    return normalizeAcUnitRecord({
+        key: buildAcUnitKey('register-unit'),
+        brand: getAcSpecFieldValue('regKonUnitBrand', 'brand'),
+        type: getAcSpecFieldValue('regKonUnitType', 'type'),
+        refrigerant: getAcSpecFieldValue('regKonUnitRefrigerant', 'refrigerant'),
+        capacity: getAcSpecFieldValue('regKonUnitCapacity', 'capacity'),
+        image_url: draftUploads.regKonUnitDraftImage || '',
+        created_at: new Date().toISOString(),
+        source: 'register-draft'
+    });
+}
+
+function hasRegisterAcUnitDraftValues() {
+    const draftUnit = getRegisterUnitDraftPayload();
+    return Boolean(
+        draftUploads.regKonUnitDraftImage
+        || draftUnit.brand
+        || draftUnit.type
+        || draftUnit.refrigerant
+        || draftUnit.capacity
+    );
+}
+
+function renderRegisterAcUnitSavedList() {
+    const container = document.getElementById('regKonUnitSavedList');
+    if (!container) return;
+
+    const units = draftUploads.regKonSavedUnits;
+    container.innerHTML = units.length ? `
+        <div class="saved-unit-list-header">
+            <h5>Data Unit AC Tersimpan</h5>
+            <span>${units.length} unit</span>
+        </div>
+        <div class="saved-unit-card-grid">
+            ${units.map((unit, index) => `
+                <div class="saved-unit-card">
+                    ${unit.imageUrl ? `<img src="${escapeHtml(unit.imageUrl)}" alt="${escapeHtml(formatAcUnitLabel(unit, index))}" loading="lazy" decoding="async">` : '<div class="saved-unit-placeholder">Tanpa Foto</div>'}
+                    <div class="saved-unit-card-body">
+                        <strong>${escapeHtml(formatAcUnitLabel(unit, index))}</strong>
+                        <p>${escapeHtml(buildAcUnitSummary(unit).join(' • ') || 'Spesifikasi dasar belum diisi')}</p>
+                    </div>
+                </div>
+            `).join('')}
+        </div>
+    ` : '<div class="empty-state-box"><p>Belum ada data unit AC yang disimpan di draft register.</p></div>';
+}
+
+function resetRegisterAcUnitDraft(options = {}) {
+    draftUploads.regKonUnitDraftImage = '';
+    draftUploads.regKonUnitDraftFile = null;
+    const preview = document.getElementById('regKonUnitPreview');
+    if (preview) preview.innerHTML = '';
+    clearInputFileValue('regKonUnitCamera');
+    clearInputFileValue('regKonUnitDevice');
+    ['Brand', 'Type', 'Refrigerant', 'Capacity'].forEach((suffix) => {
+        const select = document.getElementById(`regKonUnit${suffix}`);
+        if (select) select.value = '';
+        const input = document.getElementById(`regKonUnit${suffix}Other`);
+        if (input) input.value = '';
+        handleAcOptionSelectChange(`regKonUnit${suffix}`, `regKonUnit${suffix}OtherWrap`);
+    });
+    if (!options.silent) {
+        showToast('Draft unit AC aktif berhasil dikosongkan.', 'success');
+    }
+}
+
+function saveRegisterAcUnit() {
+    const draftUnit = getRegisterUnitDraftPayload();
+    if (!hasRegisterAcUnitDraftValues()) {
+        showToast('Isi minimal satu data unit AC atau foto sebelum disimpan.', 'warning');
+        return;
+    }
+
+    if (!draftUnit.brand && !draftUnit.type && !draftUnit.refrigerant && !draftUnit.capacity && !draftUploads.regKonUnitDraftImage) {
+        showToast('Data unit AC masih kosong.', 'warning');
+        return;
+    }
+
+    draftUploads.regKonSavedUnits.push({
+        ...draftUnit,
+        draftFile: draftUploads.regKonUnitDraftFile ? { ...draftUploads.regKonUnitDraftFile } : null
+    });
+    renderRegisterAcUnitSavedList();
+    resetRegisterAcUnitDraft({ silent: true });
+    showToast('Data unit AC berhasil disimpan ke draft register.', 'success');
+}
+
+function prepareNextRegisterAcUnit() {
+    resetRegisterAcUnitDraft({ silent: true });
+    showToast('Form unit AC siap dipakai untuk unit berikutnya. Data yang sudah di-save tetap aman.', 'info');
+}
+
 function collectRegisterKonsumenForm() {
     const birthDate = resolveBirthDateValue('regKonBirthDate', 'regKonBirthDateManual');
     syncAgeField('regKonBirthDate', 'regKonAge');
@@ -2225,10 +2777,15 @@ function collectRegisterKonsumenForm() {
         district: document.getElementById('regKonKecamatan').value,
         birthDate,
         age: document.getElementById('regKonAge').value,
+        referral: document.getElementById('regKonReferral').value.trim(),
         address: document.getElementById('regKonAddress').value.trim(),
         locationText: document.getElementById('regKonLocationText')?.value.trim() || '',
         lat: document.getElementById('regKonLat').value,
-        lng: document.getElementById('regKonLng').value
+        lng: document.getElementById('regKonLng').value,
+        ac_units: draftUploads.regKonSavedUnits.map((unit) => ({
+            ...unit,
+            draftFile: unit.draftFile ? { ...unit.draftFile } : null
+        }))
     };
 }
 
@@ -2293,14 +2850,14 @@ async function previewRegUpload(event, previewId) {
         deleteLabel: 'Hapus Gambar'
     });
     if (previewId === 'regKonUnitPreview') {
-        draftUploads.regKonUnitImages = [dataUrl];
-        draftUploads.regKonUnitFiles = [{
+        draftUploads.regKonUnitDraftImage = dataUrl;
+        draftUploads.regKonUnitDraftFile = {
             dataUrl,
             name: file.name,
             type: file.type,
             size: file.size,
             lastModified: file.lastModified
-        }];
+        };
     }
     if (previewId === 'regTekIDPreview') {
         draftUploads.regTekKtpPhoto = dataUrl;
@@ -2341,12 +2898,19 @@ async function handleKonUnitUpload(event) {
             userId: profile.id,
             label: 'Foto unit'
         });
-        const nextPaths = [...normalizeTextArray(profile.unitImagePaths), uploaded.path];
-        const nextUrls = [...normalizeTextArray(profile.unitImageUrls), uploaded.url];
+        const nextUnits = [
+            ...getProfileAcUnits(profile),
+            normalizeAcUnitRecord({
+                key: buildAcUnitKey(file.name || 'dashboard-unit'),
+                image_path: uploaded.path,
+                image_url: uploaded.url,
+                created_at: new Date().toISOString(),
+                source: 'dashboard-upload'
+            })
+        ];
         const updatedProfile = await persistUploadedImageReference({
             target: 'konsumen-unit',
-            paths: nextPaths,
-            urls: nextUrls
+            units: nextUnits
         });
         await syncUploadedAssetToRemote({
             target: 'konsumen-unit',
@@ -2415,31 +2979,56 @@ async function finalizeSignupUploadsAfterSession(role) {
         : await requireAuthenticatedProfile(false);
     if (!profile) return null;
 
-    if (role === 'konsumen' && draftUploads.regKonUnitFiles.length) {
-        const uploads = [];
-        for (const draft of draftUploads.regKonUnitFiles) {
-            const file = createFileLikeFromDraft(draft, draft.name || 'foto-unit.jpg');
-            const uploaded = await uploadImageToSupabaseStorage({
-                file,
-                target: 'konsumen-unit',
-                userId: profile.id,
-                label: 'Foto unit'
-            });
-            uploads.push(uploaded);
+    if (role === 'konsumen' && draftUploads.regKonSavedUnits.length) {
+        const uploadedAssets = [];
+        const persistedUnits = [];
+
+        for (const draftUnit of draftUploads.regKonSavedUnits) {
+            let uploaded = null;
+            if (draftUnit.draftFile?.dataUrl) {
+                const file = createFileLikeFromDraft(draftUnit.draftFile, draftUnit.draftFile.name || 'foto-unit.jpg');
+                uploaded = await uploadImageToSupabaseStorage({
+                    file,
+                    target: 'konsumen-unit',
+                    userId: profile.id,
+                    label: 'Foto unit'
+                });
+            }
+
+            if (uploaded?.path) uploadedAssets.push(uploaded);
+            persistedUnits.push(normalizeAcUnitRecord({
+                ...draftUnit,
+                image_path: uploaded?.path || draftUnit.imagePath || '',
+                image_url: uploaded?.url || draftUnit.imageUrl || ''
+            }, {
+                source: 'register'
+            }));
         }
 
-        const updatedProfile = await persistUploadedImageReference({
-            target: 'konsumen-unit',
-            paths: uploads.map((item) => item.path),
-            urls: uploads.map((item) => item.url)
-        });
-        await syncUploadedAssetToRemote({
-            target: 'konsumen-unit',
-            profileId: profile.id,
-            bucket: getPublicUploadBucket(),
-            paths: uploads.map((item) => item.path)
-        });
-        return updatedProfile;
+        try {
+            const updatedProfile = await persistUploadedImageReference({
+                target: 'konsumen-unit',
+                units: persistedUnits
+            });
+            if (uploadedAssets.length) {
+                await syncUploadedAssetToRemote({
+                    target: 'konsumen-unit',
+                    profileId: profile.id,
+                    bucket: getPublicUploadBucket(),
+                    paths: uploadedAssets.map((item) => item.path)
+                });
+            }
+            return updatedProfile;
+        } catch (error) {
+            for (const asset of uploadedAssets) {
+                await deleteImageFromSupabaseStorage({
+                    bucket: asset.bucket || getPublicUploadBucket(),
+                    path: asset.path,
+                    url: asset.url
+                }).catch(() => {});
+            }
+            throw error;
+        }
     }
 
     if (role === 'teknisi') {
@@ -2525,6 +3114,7 @@ function openEditKonsumen(userId) {
     document.getElementById('editKonsumenPhone').value = user.phone || '';
     document.getElementById('editKonsumenBirthDate').value = user.birthDate || '';
     document.getElementById('editKonsumenAge').value = user.age || '';
+    document.getElementById('editKonsumenReferral').value = user.referral || '';
     document.getElementById('editKonsumenStatus').value = user.status || PROFILE_STATUS_PENDING;
     document.getElementById('editKonsumenAddress').value = user.address || '';
     document.getElementById('modalEditKonsumen').style.display = 'flex';
@@ -2551,12 +3141,14 @@ async function saveEditKonsumen() {
             phone: normalizePhone(document.getElementById('editKonsumenPhone').value),
             birth_date: document.getElementById('editKonsumenBirthDate').value,
             age: document.getElementById('editKonsumenAge').value,
+            referral: document.getElementById('editKonsumenReferral').value.trim(),
             address: document.getElementById('editKonsumenAddress').value.trim(),
             district: user.district,
             location_text: user.locationText,
             lat: user.lat,
             lng: user.lng,
             status: nextStatus,
+            ac_units: getProfileAcUnits(user),
             verified_at: nextStatus === PROFILE_STATUS_ACTIVE ? (user.verifiedAt || new Date().toISOString()) : user.verifiedAt,
             verified_by: nextStatus === PROFILE_STATUS_ACTIVE ? (user.verifiedBy || remoteState.profile?.id || '') : user.verifiedBy
         }));
@@ -2800,26 +3392,20 @@ function toggleImageCatalogItem(imageId) {
 }
 
 async function updateOrderByAdmin(orderId, payload = {}) {
-    const workingPayload = { ...payload };
-
-    while (true) {
-        const { data, error } = await supabaseClient
+    const { data } = await withOrderColumnFallback(
+        ({ selectClause, payload: safePayload }) => supabaseClient
             .from('orders')
-            .update(workingPayload)
+            .update(safePayload)
             .eq('id', orderId)
-            .select('*')
-            .single();
-
-        if (!error) return mapOrderRecord(data);
-
-        const missingColumn = extractMissingColumnName(error);
-        if (missingColumn && OPTIONAL_ORDER_COLUMNS.has(missingColumn) && missingColumn in workingPayload) {
-            delete workingPayload[missingColumn];
-            continue;
+            .select(selectClause)
+            .single(),
+        {
+            context: `updateOrderByAdmin:${orderId}`,
+            payload
         }
+    );
 
-        throw error;
-    }
+    return mapOrderRecord(data);
 }
 
 async function openAssignModal(orderId) {
@@ -2921,6 +3507,10 @@ async function openOrderDetail(orderId) {
             <dt>Teknisi</dt><dd>${escapeHtml(order.teknisiName || 'Belum ditugaskan')}</dd>
             <dt>Tanggal</dt><dd>${escapeHtml(formatDate(order.preferredDate))}</dd>
             <dt>Alamat</dt><dd>${escapeHtml(order.address || '-')}</dd>
+            <dt>Merk AC</dt><dd>${escapeHtml(order.brand || '-')}</dd>
+            <dt>Jenis AC</dt><dd>${escapeHtml(order.acType || '-')}</dd>
+            <dt>Kapasitas AC</dt><dd>${escapeHtml(order.pk || '-')}</dd>
+            <dt>Refrigerant</dt><dd>${escapeHtml(order.refrigerant || '-')}</dd>
             <dt>Status</dt><dd>${escapeHtml(order.status)}</dd>
             <dt>Verifikasi Admin</dt><dd>${escapeHtml(formatVerificationInfo(order))}</dd>
             <dt>Konfirmasi Admin</dt><dd>${escapeHtml(order.adminConfirmationText || '-')}</dd>
@@ -2932,15 +3522,15 @@ async function openOrderDetail(orderId) {
 }
 
 async function confirmRemoveKonsumenUnitImage(index) {
-    if (!window.confirm('Hapus gambar unit ini dari Supabase Storage dan profil Anda?')) return;
+    if (!window.confirm('Hapus data unit AC ini dari Supabase Storage dan profil Anda?')) return;
     try {
         await removeUploadedImage({ target: 'konsumen-unit', index });
-        setElementText('konUnitUploadStatus', 'Gambar unit berhasil dihapus.');
+        setElementText('konUnitUploadStatus', 'Data unit AC berhasil dihapus.');
         await renderKonsumenUnit();
-        showToast('Gambar unit berhasil dihapus.', 'success');
+        showToast('Data unit AC berhasil dihapus.', 'success');
     } catch (error) {
         console.error('Gagal menghapus gambar unit:', error);
-        showToast(toUserFacingError(error, 'Gagal menghapus gambar unit.'), 'error');
+        showToast(toUserFacingError(error, 'Gagal menghapus data unit AC.'), 'error');
     }
 }
 
@@ -3640,6 +4230,9 @@ function toUserFacingError(error, fallback = 'Terjadi kesalahan.') {
     if (missingColumn && OPTIONAL_PROFILE_COLUMN_SET.has(missingColumn)) {
         return 'Struktur profile Supabase sedang menyesuaikan schema. Aplikasi akan lanjut memakai fallback aman dan data inti tetap bisa dipakai.';
     }
+    if (missingColumn && OPTIONAL_ORDER_COLUMN_SET.has(missingColumn)) {
+        return 'Struktur orders Supabase sedang menyesuaikan schema. Aplikasi akan retry dengan fallback aman sampai cache schema sinkron.';
+    }
 
     return message || fallback;
 }
@@ -4064,12 +4657,7 @@ function getTeknisiDocsForUser(userId) {
 function clearImagePreviewState(target, options = {}) {
     switch (target) {
     case 'register-konsumen-unit':
-        draftUploads.regKonUnitImages = [];
-        draftUploads.regKonUnitFiles = [];
-        const regKonPreview = document.getElementById('regKonUnitPreview');
-        if (regKonPreview) regKonPreview.innerHTML = '';
-        clearInputFileValue('regKonUnitCamera');
-        clearInputFileValue('regKonUnitDevice');
+        resetRegisterAcUnitDraft({ silent: true });
         break;
     case 'register-teknisi-ktp':
         draftUploads.regTekKtpPhoto = '';
@@ -4112,26 +4700,21 @@ async function updateOrderForCurrentTeknisi(orderId, payload = {}) {
     const profile = await requireAuthenticatedProfile(false);
     if (!profile || profile.role !== 'teknisi') throw new Error('Session teknisi dibutuhkan.');
 
-    const workingPayload = { ...payload };
-    while (true) {
-        const { data, error } = await supabaseClient
+    const { data } = await withOrderColumnFallback(
+        ({ selectClause, payload: safePayload }) => supabaseClient
             .from('orders')
-            .update(workingPayload)
+            .update(safePayload)
             .eq('id', orderId)
             .eq('teknisi_id', profile.id)
-            .select('*')
-            .single();
-
-        if (!error) return mapOrderRecord(data);
-
-        const missingColumn = extractMissingColumnName(error);
-        if (missingColumn && OPTIONAL_ORDER_COLUMNS.has(missingColumn) && missingColumn in workingPayload) {
-            delete workingPayload[missingColumn];
-            continue;
+            .select(selectClause)
+            .single(),
+        {
+            context: `updateOrderForCurrentTeknisi:${orderId}`,
+            payload
         }
+    );
 
-        throw error;
-    }
+    return mapOrderRecord(data);
 }
 
 async function persistUploadedImageReference(options = {}) {
@@ -4139,22 +4722,46 @@ async function persistUploadedImageReference(options = {}) {
     if (!profile) throw new Error('Session login dibutuhkan untuk menyimpan referensi gambar.');
 
     if (options.target === 'konsumen-unit') {
-        const nextPaths = normalizeTextArray(options.paths);
-        const nextUrls = normalizeTextArray(options.urls);
+        const nextUnits = normalizeAcUnitArray(options.units, {
+            unitImagePaths: options.paths,
+            unitImageUrls: options.urls,
+            joinedAt: profile.joinedAt
+        });
+        const nextLegacyImages = collectLegacyUnitImagesFromUnits(nextUnits);
         const updatedProfile = await upsertOwnProfile(validateProfilePayloadForRole('konsumen', {
             ...profile,
-            unit_image_paths: nextPaths,
-            unit_image_urls: nextUrls
+            referral: options.referral ?? profile.referral,
+            ac_units: nextUnits,
+            unit_image_paths: nextLegacyImages.paths,
+            unit_image_urls: nextLegacyImages.urls
         }));
-        if (nextPaths.length && updatedProfile.unitImagePaths.length < nextPaths.length) {
-            const newestPath = nextPaths[nextPaths.length - 1];
-            const newestUrl = nextUrls[nextUrls.length - 1] || '';
+        if (nextLegacyImages.paths.length && updatedProfile.unitImagePaths.length < nextLegacyImages.paths.length) {
+            const newestPath = nextLegacyImages.paths[nextLegacyImages.paths.length - 1];
+            const newestUrl = nextLegacyImages.urls[nextLegacyImages.urls.length - 1] || '';
             await deleteImageFromSupabaseStorage({ bucket: getPublicUploadBucket(), path: newestPath, url: newestUrl });
             throw new Error('Kolom storage foto unit belum siap di schema profiles. Jalankan migration storage terlebih dahulu.');
         }
+        const persistedUnits = getProfileAcUnits(updatedProfile);
+        const metadataRequired = nextUnits.some(hasAcUnitStructuredData);
+        const metadataLost = metadataRequired && nextUnits.some((unit, index) => {
+            const persisted = persistedUnits[index];
+            return !persisted
+                || persisted.brand !== unit.brand
+                || persisted.type !== unit.type
+                || persisted.refrigerant !== unit.refrigerant
+                || persisted.capacity !== unit.capacity;
+        });
+        if (metadataLost) {
+            const newestPath = nextLegacyImages.paths[nextLegacyImages.paths.length - 1] || '';
+            const newestUrl = nextLegacyImages.urls[nextLegacyImages.urls.length - 1] || '';
+            if (newestPath || newestUrl) {
+                await deleteImageFromSupabaseStorage({ bucket: getPublicUploadBucket(), path: newestPath, url: newestUrl });
+            }
+            throw new Error('Kolom metadata unit AC belum siap di schema profiles. Jalankan migration ac_units terlebih dahulu.');
+        }
         applySupabaseSession(updatedProfile);
         updateLocalUiCache((cache) => {
-            cache.unitImagesByUser[profile.id] = nextUrls;
+            cache.unitImagesByUser[profile.id] = nextLegacyImages.urls;
         });
         return updatedProfile;
     }
@@ -4206,23 +4813,22 @@ async function removeUploadedImage(options = {}) {
     if (!profile) throw new Error('Session login dibutuhkan untuk menghapus gambar.');
 
     if (options.target === 'konsumen-unit') {
-        const currentPaths = normalizeTextArray(profile.unitImagePaths);
-        const currentUrls = normalizeTextArray(profile.unitImageUrls);
+        const currentUnits = getProfileAcUnits(profile);
         const targetIndex = Number(options.index);
         if (!Number.isInteger(targetIndex) || targetIndex < 0) throw new Error('Index gambar unit tidak valid.');
-        const path = currentPaths[targetIndex] || '';
-        const url = currentUrls[targetIndex] || '';
+        const targetUnit = currentUnits[targetIndex];
+        if (!targetUnit) throw new Error('Data unit AC tidak ditemukan.');
+        const path = targetUnit.imagePath || '';
+        const url = targetUnit.imageUrl || '';
         await deleteImageFromSupabaseStorage({
             bucket: getPublicUploadBucket(),
             path,
             url
         });
-        const nextPaths = currentPaths.filter((_, index) => index !== targetIndex);
-        const nextUrls = currentUrls.filter((_, index) => index !== targetIndex);
+        const nextUnits = currentUnits.filter((_, index) => index !== targetIndex);
         const updatedProfile = await persistUploadedImageReference({
             target: 'konsumen-unit',
-            paths: nextPaths,
-            urls: nextUrls
+            units: nextUnits
         });
         await syncDeletionToRemote({
             target: 'konsumen-unit',
@@ -4300,6 +4906,12 @@ function clearRemoteSessionState(options = {}) {
 
 function sanitizeProfileRecord(profile) {
     if (!profile) return null;
+    const normalizedUnits = normalizeAcUnitArray(profile.ac_units || profile.acUnits, {
+        unitImagePaths: profile.unit_image_paths || profile.unitImagePaths,
+        unitImageUrls: profile.unit_image_urls || profile.unitImageUrls,
+        joinedAt: profile.created_at || profile.joinedAt || ''
+    });
+    const legacyImages = collectLegacyUnitImagesFromUnits(normalizedUnits);
     return {
         ...profile,
         role: String(profile.role || '').trim().toLowerCase(),
@@ -4321,14 +4933,16 @@ function sanitizeProfileRecord(profile) {
         locationText: String(profile.location_text || profile.locationText || '').trim(),
         lat: profile.lat || '',
         lng: profile.lng || '',
+        referral: String(profile.referral || '').trim(),
         nik: String(profile.nik || '').trim(),
         specialization: String(profile.specialization || '').trim(),
         verifiedAt: profile.verified_at || profile.verifiedAt || '',
         verifiedBy: profile.verified_by || profile.verifiedBy || '',
         verifiedByName: profile.verified_by_name || profile.verifiedByName || '',
-        unitImagePaths: normalizeTextArray(profile.unit_image_paths || profile.unitImagePaths),
-        unitImageUrls: normalizeTextArray(profile.unit_image_urls || profile.unitImageUrls),
-        unitImages: normalizeTextArray(profile.unit_image_urls || profile.unitImageUrls || profile.unitImages),
+        acUnits: normalizedUnits,
+        unitImagePaths: legacyImages.paths,
+        unitImageUrls: legacyImages.urls,
+        unitImages: legacyImages.urls,
         ktpPhotoPath: String(profile.ktp_photo_path || profile.ktpPhotoPath || '').trim(),
         ktpPhotoUrl: String(profile.ktp_photo_url || profile.ktpPhotoUrl || '').trim(),
         selfiePhotoPath: String(profile.selfie_photo_path || profile.selfiePhotoPath || '').trim(),
@@ -4350,6 +4964,11 @@ function mapOrderRecord(order) {
         konsumenName: order.konsumen_name || order.konsumenName || '-',
         teknisiId: order.teknisi_id || order.teknisiId || null,
         teknisiName: order.teknisi_name || order.teknisiName || null,
+        brand: normalizeAcSpecValue('brand', order.brand),
+        acType: normalizeAcSpecValue('type', order.ac_type || order.acType || order.jenis_ac),
+        pk: normalizeAcSpecValue('capacity', order.pk || order.ac_capacity || order.acCapacity),
+        refrigerant: normalizeAcSpecValue('refrigerant', order.refrigerant),
+        acUnitKey: order.ac_unit_key || order.acUnitKey || '',
         proofImagePath: order.proof_image_path || order.proofImagePath || '',
         proofImageUrl: order.proof_image_url || order.proofImageUrl || '',
         proofImage: order.proof_image_data || order.proof_image_url || order.proofImage || '',
@@ -4620,6 +5239,8 @@ function extractPendingProfileSeed(user) {
         location_text: String(metadata.location_text || metadata.locationText || '').trim(),
         lat: metadata.lat || '',
         lng: metadata.lng || '',
+        referral: String(metadata.referral || '').trim(),
+        ac_units: normalizeAcUnitArray(metadata.ac_units || metadata.acUnits || []),
         nik: String(metadata.nik || '').trim(),
         specialization: String(metadata.specialization || '').trim(),
         experience: metadata.experience || '',
@@ -4672,10 +5293,15 @@ function validateProfilePayloadForRole(role, payload = {}, options = {}) {
         location_text: String(payload.location_text || payload.locationText || '').trim(),
         lat: payload.lat || '',
         lng: payload.lng || '',
+        referral: String(payload.referral || '').trim(),
         status: normalizeProfileStatus(payload.status || (normalizedRole === 'admin' ? PROFILE_STATUS_ACTIVE : PROFILE_STATUS_PENDING)),
         verified_at: payload.verified_at || payload.verifiedAt || '',
         verified_by: payload.verified_by || payload.verifiedBy || '',
         completed_jobs: payload.completed_jobs ?? payload.completedJobs,
+        ac_units: normalizeAcUnitArray(payload.ac_units ?? payload.acUnits, {
+            unitImagePaths: payload.unit_image_paths ?? payload.unitImagePaths,
+            unitImageUrls: payload.unit_image_urls ?? payload.unitImageUrls
+        }),
         unit_image_paths: normalizeTextArray(payload.unit_image_paths ?? payload.unitImagePaths),
         unit_image_urls: normalizeTextArray(payload.unit_image_urls ?? payload.unitImageUrls),
         ktp_photo_path: payload.ktp_photo_path || payload.ktpPhotoPath || '',
@@ -4705,10 +5331,12 @@ function validateProfilePayloadForRole(role, payload = {}, options = {}) {
         location_text: toNullableText(cleanPayload.location_text),
         lat: toNullableText(cleanPayload.lat),
         lng: toNullableText(cleanPayload.lng),
+        referral: toNullableText(cleanPayload.referral),
         status: cleanPayload.status,
         verified_at: toNullableText(cleanPayload.verified_at),
         verified_by: toNullableText(cleanPayload.verified_by),
         completed_jobs: toNullableNumber(cleanPayload.completed_jobs),
+        ac_units: cleanPayload.ac_units,
         unit_image_paths: cleanPayload.unit_image_paths,
         unit_image_urls: cleanPayload.unit_image_urls
     };
@@ -5070,21 +5698,27 @@ function renderAppShell() {
 async function fetchOrdersForRole(profile) {
     if (!profile) return [];
 
-    let query = supabaseClient
-        .from('orders')
-        .select('*')
-        .order('created_at', { ascending: false });
-
-    if (profile.role === 'konsumen') {
-        query = query.eq('konsumen_id', profile.id);
-    } else if (profile.role === 'teknisi') {
-        query = query.eq('teknisi_id', profile.id);
-    } else if (profile.role !== 'admin') {
+    if (profile.role !== 'konsumen' && profile.role !== 'teknisi' && profile.role !== 'admin') {
         throw new Error(`Role ${profile.role} tidak didukung untuk query orders.`);
     }
 
-    const { data, error } = await query;
-    if (error) throw error;
+    const { data } = await withOrderColumnFallback(({ selectClause }) => {
+        let query = supabaseClient
+            .from('orders')
+            .select(selectClause)
+            .order('created_at', { ascending: false });
+
+        if (profile.role === 'konsumen') {
+            query = query.eq('konsumen_id', profile.id);
+        } else if (profile.role === 'teknisi') {
+            query = query.eq('teknisi_id', profile.id);
+        }
+
+        return query;
+    }, {
+        context: `fetchOrdersForRole:${profile.role}`
+    });
+
     return (data || []).map(mapOrderRecord);
 }
 
@@ -5432,6 +6066,8 @@ async function registerPublicAccountSupabase(role, formValues) {
                 age: formValues.age,
                 birth_date: formValues.birthDate,
                 district: formValues.district || '',
+                referral: formValues.referral || '',
+                ac_units: normalizeAcUnitArray(formValues.ac_units || []),
                 location_text: formValues.locationText,
                 lat: formValues.lat,
                 lng: formValues.lng,
@@ -5470,6 +6106,8 @@ async function registerPublicAccountSupabase(role, formValues) {
                 age: formValues.age ?? null,
                 birth_date: formValues.birthDate || '',
                 district: formValues.district || '',
+                referral: formValues.referral || '',
+                ac_units: normalizeAcUnitArray(formValues.ac_units || []),
                 location_text: formValues.locationText || '',
                 lat: formValues.lat || '',
                 lng: formValues.lng || '',
@@ -5538,7 +6176,9 @@ async function finalizePendingRegistration(role, formValues, authResult) {
 
 function resetRegisterKonsumenUi() {
     document.getElementById('formRegKonsumen')?.reset();
+    draftUploads.regKonSavedUnits = [];
     clearImagePreviewState('register-konsumen-unit');
+    renderRegisterAcUnitSavedList();
     document.getElementById('regKonLocationResult').style.display = 'none';
 }
 
@@ -5561,6 +6201,9 @@ function primeLoginAfterRegistration(role, formValues = {}) {
 async function handleRegisterKonsumen(event) {
     event.preventDefault();
 
+    if (hasRegisterAcUnitDraftValues()) {
+        saveRegisterAcUnit();
+    }
     const form = collectRegisterKonsumenForm();
     const manualBirthDateInput = document.getElementById('regKonBirthDateManual');
     if (manualBirthDateInput && !manualBirthDateInput.checkValidity()) {
@@ -5723,6 +6366,52 @@ async function renderKonsumenHome() {
     `).join('');
 }
 
+function applyOrderUnitToForm(unit = null) {
+    const token = ++runtimeState.orderAutofillToken;
+    const selectedUnit = unit ? normalizeAcUnitRecord(unit) : null;
+    if (token !== runtimeState.orderAutofillToken) return;
+
+    if (!selectedUnit) return;
+    setAcSpecFieldValue('orderBrand', 'brand', selectedUnit.brand);
+    setAcSpecFieldValue('orderType', 'type', selectedUnit.type);
+    setAcSpecFieldValue('orderRefrigerant', 'refrigerant', selectedUnit.refrigerant);
+    setAcSpecFieldValue('orderCapacity', 'capacity', selectedUnit.capacity);
+}
+
+function handleOrderUnitSelectionChange() {
+    const profile = getCurrentUser();
+    const select = document.getElementById('orderUnitSelector');
+    const hint = document.getElementById('orderUnitSelectionHint');
+    const units = getProfileAcUnits(profile);
+    const selectedUnit = units.find((unit) => unit.key === select?.value) || null;
+    if (selectedUnit) {
+        applyOrderUnitToForm(selectedUnit);
+        if (hint) hint.textContent = `Spesifikasi mengikuti ${formatAcUnitLabel(selectedUnit)}. Anda masih bisa override manual sebelum submit.`;
+        return;
+    }
+    if (hint) hint.textContent = units.length
+        ? 'Isi manual / belum pilih unit. Anda bisa memilih unit tersimpan kapan saja untuk autofill.'
+        : 'Belum ada unit AC tersimpan. Isi spesifikasi secara manual.';
+}
+
+function getSelectedOrderUnit() {
+    const profile = getCurrentUser();
+    const select = document.getElementById('orderUnitSelector');
+    const units = getProfileAcUnits(profile);
+    return units.find((unit) => unit.key === select?.value) || null;
+}
+
+function collectOrderAcSpecValues() {
+    const selectedUnit = getSelectedOrderUnit();
+    return {
+        brand: getAcSpecFieldValue('orderBrand', 'brand'),
+        ac_type: getAcSpecFieldValue('orderType', 'type'),
+        pk: getAcSpecFieldValue('orderCapacity', 'capacity'),
+        refrigerant: getAcSpecFieldValue('orderRefrigerant', 'refrigerant'),
+        ac_unit_key: selectedUnit?.key || ''
+    };
+}
+
 function renderKonsumenOrder(prefill = '') {
     const user = getCurrentUser();
     const serviceSelect = document.getElementById('orderService');
@@ -5731,8 +6420,35 @@ function renderKonsumenOrder(prefill = '') {
         const target = getServices(false).find((service) => service.name === prefill);
         if (target) serviceSelect.value = target.id;
     }
+    populateAcSpecOptions('orderBrand', 'brand');
+    populateAcSpecOptions('orderType', 'type');
+    populateAcSpecOptions('orderRefrigerant', 'refrigerant');
+    populateAcSpecOptions('orderCapacity', 'capacity');
+
+    const unitSelect = document.getElementById('orderUnitSelector');
+    const units = getProfileAcUnits(user);
+    if (!units.length) {
+        getUnitImagesForUser(user.id).forEach((image, index) => {
+            units.push(normalizeAcUnitRecord({
+                key: `local-unit-${index + 1}`,
+                image_url: image,
+                created_at: user.joinedAt || ''
+            }, {
+                source: 'local-cache'
+            }));
+        });
+    }
+    if (unitSelect) {
+        unitSelect.innerHTML = '<option value="">Isi manual / belum pilih unit</option>' + units
+            .map((unit, index) => `<option value="${escapeHtml(unit.key)}">${escapeHtml(formatAcUnitLabel(unit, index))}</option>`)
+            .join('');
+        if (units.length) {
+            unitSelect.value = units[0].key;
+        }
+    }
     document.getElementById('orderPhone').value = user?.phone || '';
     document.getElementById('orderAddress').value = user?.address || '';
+    handleOrderUnitSelectionChange();
 }
 
 async function renderKonsumenHistory() {
@@ -5746,7 +6462,7 @@ async function renderKonsumenHistory() {
         <tr>
             ${tableCell('No. Pesanan', escapeHtml(getOrderLabel(order)))}
             ${tableCell('Layanan', escapeHtml(order.serviceName))}
-            ${tableCell('Merek AC', escapeHtml(order.brand || '-'))}
+            ${tableCell('Merk AC', escapeHtml(order.brand || '-'))}
             ${tableCell('Tanggal', escapeHtml(formatDate(order.preferredDate || order.createdAt)))}
             ${tableCell('Teknisi', escapeHtml(order.teknisiName || 'Belum ditugaskan'))}
             ${tableCell('Status', renderStatusBadge(order.status))}
@@ -5765,6 +6481,7 @@ function renderKonsumenProfile() {
     document.getElementById('profileKonsumenPhone').value = user.phone || '';
     document.getElementById('profileKonsumenBirthDate').value = user.birthDate || '';
     document.getElementById('profileKonsumenAge').value = user.age || '';
+    document.getElementById('profileKonsumenReferral').value = user.referral || '';
     document.getElementById('profileKonsumenAddress').value = user.address || '';
     document.getElementById('profileKonsumenLocation').textContent = formatLocationSummary(user);
     document.getElementById('profileKonsumenJoined').textContent = formatDate(user.joinedAt);
@@ -5780,37 +6497,35 @@ async function renderKonsumenUnit() {
     }
 
     syncStorageStatusMessage('konUnitUploadStatus', getPublicUploadBucket(), 'Foto unit yang diunggah akan tersimpan ke Supabase Storage.');
-
-    const imageSources = [];
-    const remotePaths = normalizeTextArray(user.unitImagePaths);
-    const remoteUrls = normalizeTextArray(user.unitImageUrls);
-    for (let index = 0; index < remotePaths.length; index += 1) {
-        const path = remotePaths[index];
-        const existingUrl = remoteUrls[index] || '';
-        const resolvedUrl = existingUrl || await resolveStorageImageUrl(getPublicUploadBucket(), path);
-        if (resolvedUrl) {
-            imageSources.push({
-                path,
-                url: resolvedUrl
-            });
+    const units = getProfileAcUnits(user);
+    for (const unit of units) {
+        if (!unit.imageUrl && unit.imagePath) {
+            unit.imageUrl = await resolveStorageImageUrl(getPublicUploadBucket(), unit.imagePath);
         }
     }
 
-    if (!imageSources.length) {
-        getUnitImagesForUser(user.id).forEach((image) => {
-            imageSources.push({
-                path: '',
-                url: image
-            });
-        });
-    }
-
-    gallery.innerHTML = imageSources.length ? imageSources.map((image, index) => createPreviewCardHtml(image.url, {
-        alt: `Foto unit ${index + 1}`,
-        deleteTarget: 'confirmRemoveKonsumenUnitImage',
-        deleteArgs: [index],
-        deleteLabel: 'Hapus Gambar'
-    })).join('') : '<div class="empty-state-box"><p>Belum ada foto unit.</p></div>';
+    gallery.innerHTML = units.length ? units.map((unit, index) => `
+        <article class="unit-card">
+            <div class="unit-card-media">
+                ${unit.imageUrl
+                    ? `<img src="${escapeHtml(unit.imageUrl)}" alt="${escapeHtml(formatAcUnitLabel(unit, index))}" loading="lazy" decoding="async">`
+                    : '<div class="saved-unit-placeholder">Tanpa Foto</div>'}
+            </div>
+            <div class="unit-card-body">
+                <div class="unit-card-header">
+                    <h4>${escapeHtml(formatAcUnitLabel(unit, index))}</h4>
+                    <button type="button" class="btn btn-danger btn-xs" onclick="confirmRemoveKonsumenUnitImage(${index})">Hapus Unit</button>
+                </div>
+                <div class="unit-spec-list">
+                    <span class="unit-spec-pill">${escapeHtml(`Merk: ${unit.brand || '-'}`)}</span>
+                    <span class="unit-spec-pill">${escapeHtml(`Jenis: ${unit.type || '-'}`)}</span>
+                    <span class="unit-spec-pill">${escapeHtml(`Refrigerant: ${unit.refrigerant || '-'}`)}</span>
+                    <span class="unit-spec-pill">${escapeHtml(`Kapasitas: ${unit.capacity || '-'}`)}</span>
+                </div>
+                <p class="text-muted text-sm">Tanggal input: ${escapeHtml(formatDateTime(unit.createdAt || user.joinedAt))}</p>
+            </div>
+        </article>
+    `).join('') : '<div class="empty-state-box"><p>Belum ada foto unit.</p></div>';
 }
 
 async function renderTeknisiHome() {
@@ -6023,7 +6738,7 @@ async function renderAdminOrders() {
             ${tableCell('No. Pesanan', escapeHtml(getOrderLabel(order)))}
             ${tableCell('Konsumen', escapeHtml(order.konsumenName))}
             ${tableCell('Layanan', escapeHtml(order.serviceName))}
-            ${tableCell('Merek AC', escapeHtml(order.brand || '-'))}
+            ${tableCell('Merk AC', escapeHtml(order.brand || '-'))}
             ${tableCell('Tanggal', escapeHtml(formatDate(order.preferredDate)))}
             ${tableCell('Alamat', escapeHtml(order.address || '-'))}
             ${tableCell('Teknisi', escapeHtml(order.teknisiName || '-'))}
@@ -6042,14 +6757,16 @@ async function renderAdminUsers() {
     if (!requireAdminAccess()) return;
     renderAdminServicesTable();
     renderAdminImageCatalogTable();
-    renderTableLoading('adminKonsumenListBody', 9, 4);
-    renderTableLoading('adminTeknisiListBody', 9, 4);
+    renderTableLoading('adminKonsumenListBody', 10, 4);
+    renderTableLoading('adminTeknisiListBody', 10, 4);
+    renderTableLoading('adminFotoUnitBody', 7, 4);
     renderTableLoading('adminAdminListBody', 5, 3);
 
     try {
         await loadAdminMasterData();
         renderAdminKonsumenTable(remoteState.adminProfiles.konsumen);
         renderAdminTeknisiTable(remoteState.adminProfiles.teknisi);
+        await renderAdminFotoUnitTable(remoteState.adminProfiles.konsumen);
         renderAdminAdminTable(remoteState.adminProfiles.admin);
     } catch (error) {
         console.error('Gagal memuat data master admin dari Supabase:', error);
@@ -6137,7 +6854,10 @@ function renderAdminKonsumenTable(users = []) {
             ${tableCell('Email', escapeHtml(user.email || '-'))}
             ${tableCell('Telepon', escapeHtml(user.phone || '-'))}
             ${tableCell('Usia', escapeHtml(user.age || '-'))}
-            ${tableCell('Alamat', escapeHtml(user.address || '-'))}
+            ${tableCell('Alamat', `
+                <div>${escapeHtml(user.address || '-')}</div>
+                <div class="text-muted text-sm">Referal: ${escapeHtml(user.referral || '-')}</div>
+            `)}
             ${tableCell('Status', renderStatusBadge(user.status || PROFILE_STATUS_PENDING))}
             ${tableCell('Verifikasi Admin', escapeHtml(formatVerificationInfo(user)))}
             ${tableCell('Total Pesanan', String(orders.filter((order) => order.konsumenId === user.id).length))}
@@ -6172,6 +6892,46 @@ function renderAdminTeknisiTable(users = []) {
             ${tableCell('Aksi', renderAdminUserActions(user, 'teknisi'))}
         </tr>
     `).join('') : '<tr><td colspan="10" class="empty-state">Tidak ada data</td></tr>';
+}
+
+async function renderAdminFotoUnitTable(users = []) {
+    if (!requireAdminAccess()) return;
+    const body = document.getElementById('adminFotoUnitBody');
+    if (!body) return;
+
+    const rows = users.flatMap((user) => getProfileAcUnits(user).map((unit, index) => ({
+        user,
+        unit,
+        index
+    }))).sort((left, right) => String(right.unit.createdAt || '').localeCompare(String(left.unit.createdAt || '')));
+
+    const hydratedRows = await Promise.all(rows.map(async ({ user, unit, index }) => {
+        if (!unit.imageUrl && unit.imagePath) {
+            return {
+                user,
+                index,
+                unit: {
+                    ...unit,
+                    imageUrl: await resolveStorageImageUrl(getPublicUploadBucket(), unit.imagePath)
+                }
+            };
+        }
+        return { user, unit, index };
+    }));
+
+    body.innerHTML = hydratedRows.length ? hydratedRows.map(({ user, unit, index }) => `
+        <tr>
+            ${tableCell('Nama Konsumen', escapeHtml(user.name || '-'))}
+            ${tableCell('Foto Unit', unit.imageUrl
+                ? `<img src="${escapeHtml(unit.imageUrl)}" alt="${escapeHtml(formatAcUnitLabel(unit, index))}" class="table-thumb">`
+                : '<span class="text-muted">Tidak ada foto</span>')}
+            ${tableCell('Merk AC', escapeHtml(unit.brand || '-'))}
+            ${tableCell('Jenis AC', escapeHtml(unit.type || '-'))}
+            ${tableCell('Refrigerant', escapeHtml(unit.refrigerant || '-'))}
+            ${tableCell('Kapasitas AC', escapeHtml(unit.capacity || '-'))}
+            ${tableCell('Tanggal Input', escapeHtml(formatDateTime(unit.createdAt || user.joinedAt)))}
+        </tr>
+    `).join('') : '<tr><td colspan="7" class="empty-state">Belum ada data foto unit konsumen</td></tr>';
 }
 
 function renderAdminAdminTable(users = []) {
@@ -6218,12 +6978,14 @@ async function saveProfile(role) {
                 phone: document.getElementById('profileKonsumenPhone').value,
                 birth_date: document.getElementById('profileKonsumenBirthDate').value,
                 age: document.getElementById('profileKonsumenAge').value,
+                referral: document.getElementById('profileKonsumenReferral').value.trim(),
                 address: document.getElementById('profileKonsumenAddress').value.trim(),
                 district: profile.district,
                 location_text: profile.locationText,
                 lat: profile.lat,
                 lng: profile.lng,
-                status: profile.status
+                status: profile.status,
+                ac_units: getProfileAcUnits(profile)
             });
         }
 
@@ -6277,22 +7039,29 @@ async function createOrderSupabase(orderValues) {
         service_name: orderValues.service_name,
         price: Number(orderValues.price || 0),
         brand: toNullableText(orderValues.brand),
+        ac_type: toNullableText(orderValues.ac_type),
         pk: toNullableText(orderValues.pk),
         refrigerant: toNullableText(orderValues.refrigerant),
         preferred_date: toNullableText(orderValues.preferred_date),
         address: toNullableText(orderValues.address),
         notes: toNullableText(orderValues.notes),
         phone: toNullableText(orderValues.phone),
+        ac_unit_key: toNullableText(orderValues.ac_unit_key),
         status: 'Menunggu'
     };
 
-    const { data, error } = await supabaseClient
-        .from('orders')
-        .insert(insertPayload)
-        .select('*')
-        .single();
+    const { data } = await withOrderColumnFallback(
+        ({ selectClause, payload: safePayload }) => supabaseClient
+            .from('orders')
+            .insert(safePayload)
+            .select(selectClause)
+            .single(),
+        {
+            context: 'createOrderSupabase',
+            payload: insertPayload
+        }
+    );
 
-    if (error) throw error;
     return mapOrderRecord(data);
 }
 
@@ -6311,13 +7080,12 @@ async function handleOrderSubmit(event) {
     }
 
     try {
+        const acSpecValues = collectOrderAcSpecValues();
         const order = await createOrderSupabase({
             service_id: service.id,
             service_name: service.name,
             price: service.price,
-            brand: document.getElementById('orderBrand').value.trim(),
-            pk: document.getElementById('orderPK').value.trim(),
-            refrigerant: document.getElementById('orderRefrigerant').value.trim(),
+            ...acSpecValues,
             preferred_date: document.getElementById('orderDate').value,
             address: document.getElementById('orderAddress').value.trim(),
             notes: document.getElementById('orderNotes').value.trim(),
@@ -6327,6 +7095,7 @@ async function handleOrderSubmit(event) {
         notifyAdminNewOrder(order, waPopup);
         await loadCurrentOrdersForProfile();
         document.getElementById('formOrder').reset();
+        renderKonsumenOrder();
         await navigateTo('konsumen-home');
         showToast(`Pesanan ${getOrderLabel(order)} berhasil dibuat dan menunggu verifikasi admin.`, 'success');
     } catch (error) {
@@ -6399,7 +7168,14 @@ async function initApp() {
     saveData(appData);
     purgeLegacyKonsumenTeknisiCache();
     hydrateMissingProfileColumnsCache();
+    hydrateMissingOrderColumnsCache();
     runtimeState.passwordRecoveryActive = hasPasswordRecoveryContext();
+    populateConsumerDistrictOptions();
+    populateAcSpecOptions('regKonUnitBrand', 'brand');
+    populateAcSpecOptions('regKonUnitType', 'type');
+    populateAcSpecOptions('regKonUnitRefrigerant', 'refrigerant');
+    populateAcSpecOptions('regKonUnitCapacity', 'capacity');
+    renderRegisterAcUnitSavedList();
     populateSpecializationOptions('regTekSpecialization', 'Semua Layanan');
     syncAdminAccessUI();
     syncLoginRoleCopy('konsumen');

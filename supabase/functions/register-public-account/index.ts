@@ -41,6 +41,27 @@ function normalizePhone(value: unknown) {
   return digits;
 }
 
+function normalizeAcUnits(value: unknown) {
+  if (!Array.isArray(value)) return [];
+
+  return value
+    .filter((item) => item && typeof item === "object")
+    .map((item) => {
+      const record = item as Record<string, unknown>;
+      return {
+        key: String(record.key || record.id || "").trim(),
+        brand: String(record.brand || "").trim(),
+        type: String(record.type || record.ac_type || record.acType || "").trim(),
+        refrigerant: String(record.refrigerant || "").trim(),
+        capacity: String(record.capacity || record.pk || record.ac_capacity || record.acCapacity || "").trim(),
+        image_path: String(record.image_path || record.imagePath || "").trim(),
+        image_url: String(record.image_url || record.imageUrl || record.photoUrl || record.url || "").trim(),
+        created_at: String(record.created_at || record.createdAt || "").trim(),
+      };
+    })
+    .filter((item) => Object.values(item).some(Boolean));
+}
+
 async function isUsernameTaken(username: string) {
   const { count, error } = await supabaseAdmin!
     .from("profiles")
@@ -103,6 +124,8 @@ serve(async (req) => {
   }
 
   const authEmail = publicEmail || `${role}.${phone}@${AUTH_EMAIL_DOMAIN}`;
+  const referral = String(body?.referral || body?.referal || "").trim();
+  const acUnits = normalizeAcUnits(body?.ac_units);
 
   try {
     if (await isUsernameTaken(username)) {
@@ -127,6 +150,8 @@ serve(async (req) => {
         age: body?.age ?? null,
         birth_date: String(body?.birth_date || "").trim(),
         district: String(body?.district || "").trim(),
+        referral,
+        ac_units: acUnits,
         location_text: String(body?.location_text || "").trim(),
         lat: String(body?.lat || "").trim(),
         lng: String(body?.lng || "").trim(),

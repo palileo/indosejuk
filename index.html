@@ -239,20 +239,33 @@
                             <select id="regKonKecamatan" required>
                                 <option value="">Pilih Kecamatan / Area</option>
                                 <optgroup label="Banyumas">
-                                    <option value="Purwokerto Utara, Banyumas">Purwokerto Utara, Banyumas</option>
-                                    <option value="Purwokerto Selatan, Banyumas">Purwokerto Selatan, Banyumas</option>
-                                    <option value="Purwokerto Barat, Banyumas">Purwokerto Barat, Banyumas</option>
-                                    <option value="Purwokerto Timur, Banyumas">Purwokerto Timur, Banyumas</option>
-                                    <option value="Sokaraja, Banyumas">Sokaraja, Banyumas</option>
-                                    <option value="Kembaran, Banyumas">Kembaran, Banyumas</option>
+                                    <option value="Ajibarang, Banyumas">Ajibarang, Banyumas</option>
+                                    <option value="Banyumas, Banyumas">Banyumas, Banyumas</option>
                                     <option value="Baturraden, Banyumas">Baturraden, Banyumas</option>
-                                    <option value="Sumbang, Banyumas">Sumbang, Banyumas</option>
-                                    <option value="Kedungbanteng, Banyumas">Kedungbanteng, Banyumas</option>
-                                    <option value="Karanglewas, Banyumas">Karanglewas, Banyumas</option>
-                                    <option value="Patikraja, Banyumas">Patikraja, Banyumas</option>
-                                    <option value="Wangon, Banyumas">Wangon, Banyumas</option>
+                                    <option value="Cilongok, Banyumas">Cilongok, Banyumas</option>
+                                    <option value="Gumelar, Banyumas">Gumelar, Banyumas</option>
                                     <option value="Jatilawang, Banyumas">Jatilawang, Banyumas</option>
+                                    <option value="Kalibagor, Banyumas">Kalibagor, Banyumas</option>
+                                    <option value="Karanglewas, Banyumas">Karanglewas, Banyumas</option>
+                                    <option value="Kebasen, Banyumas">Kebasen, Banyumas</option>
+                                    <option value="Kedungbanteng, Banyumas">Kedungbanteng, Banyumas</option>
+                                    <option value="Kembaran, Banyumas">Kembaran, Banyumas</option>
+                                    <option value="Kemranjen, Banyumas">Kemranjen, Banyumas</option>
+                                    <option value="Lumbir, Banyumas">Lumbir, Banyumas</option>
+                                    <option value="Patikraja, Banyumas">Patikraja, Banyumas</option>
+                                    <option value="Pekuncen, Banyumas">Pekuncen, Banyumas</option>
+                                    <option value="Purwojati, Banyumas">Purwojati, Banyumas</option>
+                                    <option value="Purwokerto Barat, Banyumas">Purwokerto Barat, Banyumas</option>
+                                    <option value="Purwokerto Selatan, Banyumas">Purwokerto Selatan, Banyumas</option>
+                                    <option value="Purwokerto Timur, Banyumas">Purwokerto Timur, Banyumas</option>
+                                    <option value="Purwokerto Utara, Banyumas">Purwokerto Utara, Banyumas</option>
                                     <option value="Rawalo, Banyumas">Rawalo, Banyumas</option>
+                                    <option value="Sokaraja, Banyumas">Sokaraja, Banyumas</option>
+                                    <option value="Wangon, Banyumas">Wangon, Banyumas</option>
+                                    <option value="Somagede, Banyumas">Somagede, Banyumas</option>
+                                    <option value="Sumbang, Banyumas">Sumbang, Banyumas</option>
+                                    <option value="Sumpiuh, Banyumas">Sumpiuh, Banyumas</option>
+                                    <option value="Tambak, Banyumas">Tambak, Banyumas</option>
                                 </optgroup>
                                 <optgroup label="Ajibarang">
                                     <option value="Ajibarang Kulon, Ajibarang">Ajibarang Kulon, Ajibarang</option>
@@ -358,6 +371,10 @@
                             <label for="regKonAge">Usia</label>
                             <input type="number" id="regKonAge" readonly placeholder="Otomatis dari tanggal lahir">
                         </div>
+                        <div class="form-group">
+                            <label for="regKonReferral">Referal</label>
+                            <input type="text" id="regKonReferral" placeholder="Nama referal, kode promo, atau sumber info">
+                        </div>
                         <div class="form-group full-width">
                             <label for="regKonAddress">Alamat Lengkap <span class="required">*</span></label>
                             <textarea id="regKonAddress" rows="2" required placeholder="Jl. ..., RT/RW, Kelurahan/Desa, Kecamatan, Kabupaten/Kota"></textarea>
@@ -408,6 +425,42 @@
                             </div>
                         </div>
                         <div class="upload-preview-grid" id="regKonUnitPreview"></div>
+                        <div class="unit-spec-grid">
+                            <div class="form-group">
+                                <label for="regKonUnitBrand">Merk AC</label>
+                                <select id="regKonUnitBrand" onchange="handleAcOptionSelectChange('regKonUnitBrand', 'regKonUnitBrandOtherWrap')"></select>
+                                <div class="conditional-input" id="regKonUnitBrandOtherWrap" style="display:none;">
+                                    <input type="text" id="regKonUnitBrandOther" placeholder="Tulis merk AC lainnya">
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label for="regKonUnitType">Jenis AC</label>
+                                <select id="regKonUnitType" onchange="handleAcOptionSelectChange('regKonUnitType', 'regKonUnitTypeOtherWrap')"></select>
+                                <div class="conditional-input" id="regKonUnitTypeOtherWrap" style="display:none;">
+                                    <input type="text" id="regKonUnitTypeOther" placeholder="Tulis jenis AC lainnya">
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label for="regKonUnitRefrigerant">Refrigerant</label>
+                                <select id="regKonUnitRefrigerant" onchange="handleAcOptionSelectChange('regKonUnitRefrigerant', 'regKonUnitRefrigerantOtherWrap')"></select>
+                                <div class="conditional-input" id="regKonUnitRefrigerantOtherWrap" style="display:none;">
+                                    <input type="text" id="regKonUnitRefrigerantOther" placeholder="Tulis refrigerant lainnya">
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label for="regKonUnitCapacity">Kapasitas AC</label>
+                                <select id="regKonUnitCapacity" onchange="handleAcOptionSelectChange('regKonUnitCapacity', 'regKonUnitCapacityOtherWrap')"></select>
+                                <div class="conditional-input" id="regKonUnitCapacityOtherWrap" style="display:none;">
+                                    <input type="text" id="regKonUnitCapacityOther" placeholder="Tulis kapasitas AC lainnya">
+                                </div>
+                            </div>
+                        </div>
+                        <div class="btn-action-group unit-entry-actions">
+                            <button type="button" class="btn btn-primary btn-sm" onclick="saveRegisterAcUnit()">Save</button>
+                            <button type="button" class="btn btn-outline btn-sm" onclick="resetRegisterAcUnitDraft()">Reset</button>
+                            <button type="button" class="btn btn-info btn-sm" onclick="prepareNextRegisterAcUnit()">Tambah Data Unit AC</button>
+                        </div>
+                        <div class="saved-unit-list" id="regKonUnitSavedList"></div>
                         <p class="text-muted text-sm upload-helper-note">Foto unit akan dikirim aman ke Supabase Storage selama proses pendaftaran, lalu akun tetap menunggu verifikasi manual admin sebelum dashboard aktif bisa dipakai.</p>
                     </div>
 
@@ -686,60 +739,45 @@
                     <form id="formOrder" onsubmit="return handleOrderSubmit(event)">
                         <div class="form-grid">
                             <div class="form-group">
+                                <label for="orderUnitSelector">Pilih Unit AC Tersimpan</label>
+                                <select id="orderUnitSelector" onchange="handleOrderUnitSelectionChange()">
+                                    <option value="">Isi manual / belum pilih unit</option>
+                                </select>
+                                <p class="text-muted text-sm" id="orderUnitSelectionHint">Pilih unit tersimpan agar spesifikasi terisi otomatis, lalu tetap bisa Anda ubah manual bila perlu.</p>
+                            </div>
+                            <div class="form-group">
                                 <label for="orderService">Jenis Layanan <span class="required">*</span></label>
                                 <select id="orderService" required>
                                     <option value="">Pilih Layanan</option>
                                 </select>
                             </div>
                             <div class="form-group">
-                                <label for="orderBrand">Merek AC</label>
-                                <select id="orderBrand">
-                                    <option value="">Pilih Merek</option>
-                                    <option value="Daikin">Daikin</option>
-                                    <option value="Panasonic">Panasonic</option>
-                                    <option value="LG">LG</option>
-                                    <option value="Samsung">Samsung</option>
-                                    <option value="Sharp">Sharp</option>
-                                    <option value="Midea">Midea</option>
-                                    <option value="Gree">Gree</option>
-                                    <option value="Haier">Haier</option>
-                                    <option value="Hitachi">Hitachi</option>
-                                    <option value="Toshiba">Toshiba</option>
-                                    <option value="Mitsubishi">Mitsubishi</option>
-                                    <option value="Changhong">Changhong</option>
-                                    <option value="AUX">AUX</option>
-                                    <option value="TCL">TCL</option>
-                                    <option value="Polytron">Polytron</option>
-                                    <option value="Lainnya">Lainnya</option>
-                                </select>
+                                <label for="orderBrand">Merk AC</label>
+                                <select id="orderBrand" onchange="handleAcOptionSelectChange('orderBrand', 'orderBrandOtherWrap')"></select>
+                                <div class="conditional-input" id="orderBrandOtherWrap" style="display:none;">
+                                    <input type="text" id="orderBrandOther" placeholder="Tulis merk AC lainnya">
+                                </div>
                             </div>
                             <div class="form-group">
-                                <label for="orderPK">Kapasitas PK</label>
-                                <select id="orderPK">
-                                    <option value="">Pilih PK</option>
-                                    <option value="0.5 PK">0.5 PK</option>
-                                    <option value="0.75 PK">0.75 PK</option>
-                                    <option value="1 PK">1 PK</option>
-                                    <option value="1.5 PK">1.5 PK</option>
-                                    <option value="2 PK">2 PK</option>
-                                    <option value="2.5 PK">2.5 PK</option>
-                                    <option value="3 PK">3 PK</option>
-                                    <option value="5 PK">5 PK</option>
-                                </select>
+                                <label for="orderType">Jenis AC</label>
+                                <select id="orderType" onchange="handleAcOptionSelectChange('orderType', 'orderTypeOtherWrap')"></select>
+                                <div class="conditional-input" id="orderTypeOtherWrap" style="display:none;">
+                                    <input type="text" id="orderTypeOther" placeholder="Tulis jenis AC lainnya">
+                                </div>
                             </div>
                             <div class="form-group">
-                                <label for="orderRefrigerant">Jenis Refrigerant</label>
-                                <select id="orderRefrigerant">
-                                    <option value="">Pilih Refrigerant</option>
-                                    <option value="R22">R22</option>
-                                    <option value="R32">R32</option>
-                                    <option value="R410A">R410A</option>
-                                    <option value="R290">R290</option>
-                                    <option value="R134a">R134a</option>
-                                    <option value="R407C">R407C</option>
-                                    <option value="R404A">R404A</option>
-                                    <option value="Tidak Tahu">Tidak Tahu</option>
-                                </select>
+                                <label for="orderCapacity">Kapasitas AC</label>
+                                <select id="orderCapacity" onchange="handleAcOptionSelectChange('orderCapacity', 'orderCapacityOtherWrap')"></select>
+                                <div class="conditional-input" id="orderCapacityOtherWrap" style="display:none;">
+                                    <input type="text" id="orderCapacityOther" placeholder="Tulis kapasitas AC lainnya">
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label for="orderRefrigerant">Refrigerant</label>
+                                <select id="orderRefrigerant" onchange="handleAcOptionSelectChange('orderRefrigerant', 'orderRefrigerantOtherWrap')"></select>
+                                <div class="conditional-input" id="orderRefrigerantOtherWrap" style="display:none;">
+                                    <input type="text" id="orderRefrigerantOther" placeholder="Tulis refrigerant lainnya">
+                                </div>
                             </div>
                             <div class="form-group">
                                 <label for="orderDate">Tanggal Preferensi <span class="required">*</span></label>
@@ -781,7 +819,7 @@
                                 <tr>
                                     <th>No. Pesanan</th>
                                     <th>Layanan</th>
-                                    <th>Merek AC</th>
+                                    <th>Merk AC</th>
                                     <th>Tanggal</th>
                                     <th>Teknisi</th>
                                     <th>Status</th>
@@ -827,6 +865,10 @@
                             <div class="form-group">
                                 <label for="profileKonsumenAge">Usia</label>
                                 <input type="number" id="profileKonsumenAge" readonly>
+                            </div>
+                            <div class="form-group">
+                                <label for="profileKonsumenReferral">Referal</label>
+                                <input type="text" id="profileKonsumenReferral">
                             </div>
                             <div class="form-group full-width">
                                 <label for="profileKonsumenAddress">Alamat</label>
@@ -1233,7 +1275,7 @@
                                     <th>No. Pesanan</th>
                                     <th>Konsumen</th>
                                     <th>Layanan</th>
-                                    <th>Merek AC</th>
+                                    <th>Merk AC</th>
                                     <th>Tanggal</th>
                                     <th>Alamat</th>
                                     <th>Teknisi</th>
@@ -1259,6 +1301,7 @@
                 <div class="tabs">
                     <button type="button" class="tab active" onclick="switchUserTab('konsumen', this)">Konsumen</button>
                     <button type="button" class="tab" onclick="switchUserTab('teknisi', this)">Teknisi</button>
+                    <button type="button" class="tab" onclick="switchUserTab('foto-unit', this)">Foto Unit</button>
                     <button type="button" class="tab" onclick="switchUserTab('admin', this)">Admin</button>
                     <button type="button" class="tab" onclick="switchUserTab('layanan', this)">Layanan</button>
                     <button type="button" class="tab" onclick="switchUserTab('gambar', this)">Gambar</button>
@@ -1311,6 +1354,29 @@
                             </thead>
                             <tbody id="adminTeknisiListBody">
                                 <tr><td colspan="10" class="empty-state">Tidak ada data</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="card" id="adminUserFotoUnitCard" style="display:none;">
+                    <div class="card-header"><h3>Foto Unit Konsumen</h3></div>
+                    <p class="text-muted text-sm">Menampilkan foto unit dan metadata AC yang sudah disimpan konsumen saat register maupun upload lanjutan.</p>
+                    <div class="table-responsive">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Nama Konsumen</th>
+                                    <th>Foto Unit</th>
+                                    <th>Merk AC</th>
+                                    <th>Jenis AC</th>
+                                    <th>Refrigerant</th>
+                                    <th>Kapasitas AC</th>
+                                    <th>Tanggal Input</th>
+                                </tr>
+                            </thead>
+                            <tbody id="adminFotoUnitBody">
+                                <tr><td colspan="7" class="empty-state">Belum ada data foto unit konsumen</td></tr>
                             </tbody>
                         </table>
                     </div>
@@ -1492,6 +1558,10 @@
                         <div class="form-group">
                             <label for="editKonsumenAge">Usia</label>
                             <input type="number" id="editKonsumenAge" readonly>
+                        </div>
+                        <div class="form-group">
+                            <label for="editKonsumenReferral">Referal</label>
+                            <input type="text" id="editKonsumenReferral">
                         </div>
                         <div class="form-group">
                             <label for="editKonsumenStatus">Status</label>
