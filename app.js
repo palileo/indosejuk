@@ -960,6 +960,20 @@ function hydrateMissingProfileColumnsCache() {
     } catch (_) {}
 }
 
+function clearMissingProfileColumns(columns = []) {
+    let changed = false;
+    (Array.isArray(columns) ? columns : [columns]).forEach((column) => {
+        const normalized = String(column || '').trim().toLowerCase();
+        if (normalized && missingProfileColumnsCache.delete(normalized)) {
+            changed = true;
+        }
+    });
+    if (changed) {
+        persistMissingProfileColumnsCache();
+    }
+    return changed;
+}
+
 function markMissingProfileColumn(name, error = null) {
     const normalized = String(name || '').trim().toLowerCase();
     if (!normalized || !OPTIONAL_PROFILE_COLUMN_SET.has(normalized)) return false;
@@ -1706,6 +1720,26 @@ function hasAcUnitStructuredData(unit = {}) {
         || unit.capacity
         || (!unit.imagePath && !unit.imageUrl)
     );
+}
+
+function findMatchingPersistedAcUnit(units = [], targetUnit = {}, fallbackIndex = -1) {
+    if (!Array.isArray(units) || !targetUnit) return null;
+    if (targetUnit.key) {
+        const byKey = units.find((unit) => unit?.key === targetUnit.key);
+        if (byKey) return byKey;
+    }
+    if (targetUnit.imagePath) {
+        const byPath = units.find((unit) => unit?.imagePath === targetUnit.imagePath);
+        if (byPath) return byPath;
+    }
+    if (targetUnit.imageUrl) {
+        const byUrl = units.find((unit) => unit?.imageUrl === targetUnit.imageUrl);
+        if (byUrl) return byUrl;
+    }
+    if (Number.isInteger(fallbackIndex) && fallbackIndex >= 0) {
+        return units[fallbackIndex] || null;
+    }
+    return null;
 }
 
 function getProfileAcUnits(profile) {
@@ -3578,6 +3612,7 @@ async function persistKonsumenUnitDraft() {
                 url: uploaded.url
             }).catch(() => {});
         }
+        setElementText('konUnitUploadStatus', toUserFacingError(error, 'Penyimpanan data unit AC gagal.'));
         throw error;
     } finally {
         state.submitting = false;
@@ -4907,6 +4942,7 @@ function toUserFacingError(error, fallback = 'Terjadi kesalahan.') {
     if (normalized.includes('password should be at least')) return `Password minimal ${PASSWORD_MIN_LENGTH} karakter.`;
     if (normalized.includes('same password')) return 'Sandi baru harus berbeda dari sandi sebelumnya.';
     if (normalized.includes('reauthentication') || normalized.includes('nonce')) return 'Kode verifikasi perubahan sandi tidak valid atau sudah kedaluwarsa. Kirim ulang kode lalu coba lagi.';
+    if (normalized.includes('metadata unit ac belum bisa dikonfirmasi')) return 'Data unit AC belum berhasil diverifikasi sesaat setelah disimpan. Coba tekan Save sekali lagi dalam beberapa detik.';
     if (normalized.includes('menunggu verifikasi')) return 'Akun Anda masih Menunggu Verifikasi admin.';
     if (normalized.includes('nonaktif')) return 'Akun Anda sedang Nonaktif.';
     if (normalized.includes('ditolak')) return 'Akun Anda ditolak oleh admin.';
@@ -5405,6 +5441,7 @@ async function persistUploadedImageReference(options = {}) {
     if (!profile) throw new Error('Session login dibutuhkan untuk menyimpan referensi gambar.');
 
     if (options.target === 'konsumen-unit') {
+        clearMissingProfileColumns(['ac_units', 'unit_image_paths', 'unit_image_urls']);
         const nextUnits = normalizeAcUnitArray(options.units, {
             unitImagePaths: options.paths,
             unitImageUrls: options.urls,
@@ -5427,7 +5464,7 @@ async function persistUploadedImageReference(options = {}) {
         const persistedUnits = getProfileAcUnits(updatedProfile);
         const metadataRequired = nextUnits.some(hasAcUnitStructuredData);
         const metadataLost = metadataRequired && nextUnits.some((unit, index) => {
-            const persisted = persistedUnits[index];
+            const persisted = findMatchingPersistedAcUnit(persistedUnits, unit, index);
             return !persisted
                 || persisted.brand !== unit.brand
                 || persisted.type !== unit.type
@@ -5438,7 +5475,7 @@ async function persistUploadedImageReference(options = {}) {
             if (cleanupPath || cleanupUrl) {
                 await deleteImageFromSupabaseStorage({ bucket: getPublicUploadBucket(), path: cleanupPath, url: cleanupUrl });
             }
-            throw new Error('Kolom metadata unit AC belum siap di schema profiles. Jalankan migration ac_units terlebih dahulu.');
+            throw new Error('Metadata unit AC belum bisa dikonfirmasi dari profile setelah penyimpanan. Coba simpan ulang sebentar lagi.');
         }
         applySupabaseSession(updatedProfile);
         updateLocalUiCache((cache) => {
