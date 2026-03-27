@@ -744,6 +744,7 @@
                                     <option value="">Isi manual / belum pilih unit</option>
                                 </select>
                                 <p class="text-muted text-sm" id="orderUnitSelectionHint">Pilih unit tersimpan agar spesifikasi terisi otomatis, lalu tetap bisa Anda ubah manual bila perlu.</p>
+                                <div class="card-subtle order-unit-selection-preview" id="orderUnitSelectionPreview" hidden></div>
                             </div>
                             <div class="form-group">
                                 <label for="orderService">Jenis Layanan <span class="required">*</span></label>
@@ -897,7 +898,7 @@
             <section class="view" id="viewKonsumenUnit" style="display:none;">
                 <div class="page-header">
                     <h2>Upload Foto Unit AC</h2>
-                    <p>Upload foto unit AC Anda untuk memudahkan teknisi mengenali perangkat</p>
+                    <p>Kelola foto dan metadata unit AC Anda agar teknisi mengenali perangkat dengan lebih akurat</p>
                 </div>
                 <div class="card form-card">
                     <div class="upload-section">
@@ -918,6 +919,7 @@
                                 </label>
                             </div>
                         </div>
+                        <p class="text-muted text-sm upload-helper-note">Data unit yang disimpan saat register juga otomatis muncul di bawah panel ini, termasuk merk AC, jenis AC, refrigerant, dan kapasitas AC.</p>
                     </div>
                     <div class="upload-preview-grid" id="konUnitPreviewGrid"></div>
                     <div class="unit-gallery" id="konUnitGallery"></div>

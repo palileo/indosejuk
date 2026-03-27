@@ -2720,6 +2720,52 @@ function renderRegisterAcUnitSavedList() {
     ` : '<div class="empty-state-box"><p>Belum ada data unit AC yang disimpan di draft register.</p></div>';
 }
 
+function buildOrderUnitSelectionPreviewMarkup(unit = null, index = 0) {
+    if (!unit) {
+        return '<p class="text-muted text-sm">Belum ada unit yang dipilih. Anda bisa isi spesifikasi secara manual atau pilih salah satu unit tersimpan.</p>';
+    }
+
+    return `
+        <div class="order-unit-selection-preview__content">
+            <div class="order-unit-selection-preview__media">
+                ${unit.imageUrl
+                    ? `<img src="${escapeHtml(unit.imageUrl)}" alt="${escapeHtml(formatAcUnitLabel(unit, index))}" loading="lazy" decoding="async">`
+                    : '<div class="saved-unit-placeholder">Tanpa Foto</div>'}
+            </div>
+            <div class="order-unit-selection-preview__body">
+                <strong>${escapeHtml(formatAcUnitLabel(unit, index))}</strong>
+                <div class="unit-spec-list">
+                    <span class="unit-spec-pill">${escapeHtml(`Merk: ${unit.brand || '-'}`)}</span>
+                    <span class="unit-spec-pill">${escapeHtml(`Jenis: ${unit.type || '-'}`)}</span>
+                    <span class="unit-spec-pill">${escapeHtml(`Refrigerant: ${unit.refrigerant || '-'}`)}</span>
+                    <span class="unit-spec-pill">${escapeHtml(`Kapasitas: ${unit.capacity || '-'}`)}</span>
+                </div>
+                <p class="text-muted text-sm">Unit tersimpan ini dipakai sebagai referensi awal order, tetapi setiap field tetap bisa Anda ubah manual sebelum submit.</p>
+            </div>
+        </div>
+    `;
+}
+
+function renderOrderUnitSelectionPreview(units = [], selectedUnit = null) {
+    const preview = document.getElementById('orderUnitSelectionPreview');
+    if (!preview) return;
+
+    preview.hidden = false;
+
+    if (!units.length) {
+        preview.innerHTML = '<p class="text-muted text-sm">Belum ada unit AC tersimpan. Isi spesifikasi order secara manual seperti biasa.</p>';
+        return;
+    }
+
+    if (!selectedUnit) {
+        preview.innerHTML = '<p class="text-muted text-sm">Pilih salah satu unit tersimpan untuk autofill spesifikasi order, atau biarkan kosong bila Anda ingin isi manual.</p>';
+        return;
+    }
+
+    const selectedIndex = units.findIndex((unit) => unit.key === selectedUnit.key);
+    preview.innerHTML = buildOrderUnitSelectionPreviewMarkup(selectedUnit, selectedIndex >= 0 ? selectedIndex : 0);
+}
+
 function resetRegisterAcUnitDraft(options = {}) {
     draftUploads.regKonUnitDraftImage = '';
     draftUploads.regKonUnitDraftFile = null;
@@ -3405,7 +3451,7 @@ async function updateOrderByAdmin(orderId, payload = {}) {
         }
     );
 
-    return mapOrderRecord(data);
+    return mapOrderRecord(data, { fallbackSnapshot: payload });
 }
 
 async function openAssignModal(orderId) {
@@ -3571,13 +3617,17 @@ async function startJob(orderId) {
     if (!profile || profile.role !== 'teknisi') return;
 
     try {
-        const { error } = await supabaseClient
-            .from('orders')
-            .update({ status: 'Dikerjakan' })
-            .eq('id', orderId)
-            .eq('teknisi_id', profile.id);
-
-        if (error) throw error;
+        await withOrderColumnFallback(
+            ({ payload: safePayload }) => supabaseClient
+                .from('orders')
+                .update(safePayload)
+                .eq('id', orderId)
+                .eq('teknisi_id', profile.id),
+            {
+                context: `startJob:${orderId}`,
+                payload: { status: 'Dikerjakan' }
+            }
+        );
 
         await loadCurrentOrdersForProfile();
         await renderTeknisiHome();
@@ -4714,7 +4764,7 @@ async function updateOrderForCurrentTeknisi(orderId, payload = {}) {
         }
     );
 
-    return mapOrderRecord(data);
+    return mapOrderRecord(data, { fallbackSnapshot: payload });
 }
 
 async function persistUploadedImageReference(options = {}) {
@@ -4952,31 +5002,95 @@ function sanitizeProfileRecord(profile) {
     };
 }
 
-function mapOrderRecord(order) {
+function findKnownProfileById(userId = '') {
+    const normalizedId = String(userId || '').trim();
+    if (!normalizedId) return null;
+
+    if (remoteState.profile?.id === normalizedId) return remoteState.profile;
+
+    for (const role of ['konsumen', 'teknisi', 'admin']) {
+        const remoteMatch = (remoteState.adminProfiles?.[role] || []).find((profile) => profile.id === normalizedId);
+        if (remoteMatch) return remoteMatch;
+    }
+
+    const localUsers = getData()?.users || {};
+    for (const role of ['konsumen', 'teknisi', 'admin']) {
+        const localMatch = (localUsers[role] || []).find((profile) => profile.id === normalizedId);
+        if (localMatch) return localMatch;
+    }
+
+    return null;
+}
+
+function resolveKnownProfileName(userId = '', fallback = '') {
+    return findKnownProfileById(userId)?.name || fallback || '';
+}
+
+function resolveKnownServiceName(serviceId = '', fallback = '') {
+    const normalizedId = String(serviceId || '').trim();
+    if (!normalizedId) return fallback || '';
+    const service = getServices(false).find((item) => item.id === normalizedId);
+    return service?.name || fallback || '';
+}
+
+function findKnownAcUnitForOrder(order = {}, fallbackSnapshot = {}) {
+    const konsumenId = order.konsumen_id || order.konsumenId || fallbackSnapshot.konsumen_id || fallbackSnapshot.konsumenId || '';
+    const acUnitKey = order.ac_unit_key || order.acUnitKey || fallbackSnapshot.ac_unit_key || fallbackSnapshot.acUnitKey || '';
+    if (!konsumenId || !acUnitKey) return null;
+
+    const profile = findKnownProfileById(konsumenId);
+    return getProfileAcUnits(profile).find((unit) => unit.key === acUnitKey) || null;
+}
+
+function mapOrderRecord(order, options = {}) {
     if (!order) return null;
+    const fallbackSnapshot = options.fallbackSnapshot || {};
+    const serviceId = order.service_id || order.serviceId || fallbackSnapshot.service_id || fallbackSnapshot.serviceId || '';
+    const konsumenId = order.konsumen_id || order.konsumenId || fallbackSnapshot.konsumen_id || fallbackSnapshot.konsumenId || null;
+    const teknisiId = order.teknisi_id || order.teknisiId || fallbackSnapshot.teknisi_id || fallbackSnapshot.teknisiId || null;
+    const selectedUnit = findKnownAcUnitForOrder(order, fallbackSnapshot);
+
     return {
         ...order,
-        displayId: order.order_number || order.id,
-        serviceId: order.service_id || order.serviceId || '',
-        serviceName: order.service_name || order.serviceName || '-',
-        preferredDate: order.preferred_date || order.preferredDate || '',
-        konsumenId: order.konsumen_id || order.konsumenId || null,
-        konsumenName: order.konsumen_name || order.konsumenName || '-',
-        teknisiId: order.teknisi_id || order.teknisiId || null,
-        teknisiName: order.teknisi_name || order.teknisiName || null,
-        brand: normalizeAcSpecValue('brand', order.brand),
-        acType: normalizeAcSpecValue('type', order.ac_type || order.acType || order.jenis_ac),
-        pk: normalizeAcSpecValue('capacity', order.pk || order.ac_capacity || order.acCapacity),
-        refrigerant: normalizeAcSpecValue('refrigerant', order.refrigerant),
-        acUnitKey: order.ac_unit_key || order.acUnitKey || '',
-        proofImagePath: order.proof_image_path || order.proofImagePath || '',
-        proofImageUrl: order.proof_image_url || order.proofImageUrl || '',
-        proofImage: order.proof_image_data || order.proof_image_url || order.proofImage || '',
+        displayId: order.order_number || order.orderNumber || fallbackSnapshot.order_number || fallbackSnapshot.orderNumber || order.id,
+        serviceId,
+        serviceName: resolveKnownServiceName(
+            serviceId,
+            order.service_name || order.serviceName || fallbackSnapshot.service_name || fallbackSnapshot.serviceName || ''
+        ) || '-',
+        preferredDate: order.preferred_date || order.preferredDate || fallbackSnapshot.preferred_date || fallbackSnapshot.preferredDate || '',
+        konsumenId,
+        konsumenName: resolveKnownProfileName(
+            konsumenId,
+            order.konsumen_name || order.konsumenName || fallbackSnapshot.konsumen_name || fallbackSnapshot.konsumenName || ''
+        ) || '-',
+        teknisiId,
+        teknisiName: resolveKnownProfileName(
+            teknisiId,
+            order.teknisi_name || order.teknisiName || fallbackSnapshot.teknisi_name || fallbackSnapshot.teknisiName || ''
+        ) || null,
+        brand: normalizeAcSpecValue('brand', order.brand || fallbackSnapshot.brand || selectedUnit?.brand),
+        acType: normalizeAcSpecValue(
+            'type',
+            order.ac_type || order.acType || order.jenis_ac || fallbackSnapshot.ac_type || fallbackSnapshot.acType || selectedUnit?.type
+        ),
+        pk: normalizeAcSpecValue(
+            'capacity',
+            order.pk || order.ac_capacity || order.acCapacity || fallbackSnapshot.pk || selectedUnit?.capacity
+        ),
+        refrigerant: normalizeAcSpecValue('refrigerant', order.refrigerant || fallbackSnapshot.refrigerant || selectedUnit?.refrigerant),
+        phone: normalizePhone(order.phone || fallbackSnapshot.phone || ''),
+        address: normalizeWhitespace(order.address || fallbackSnapshot.address || ''),
+        notes: normalizeWhitespace(order.notes || fallbackSnapshot.notes || ''),
+        acUnitKey: order.ac_unit_key || order.acUnitKey || fallbackSnapshot.ac_unit_key || fallbackSnapshot.acUnitKey || '',
+        proofImagePath: order.proof_image_path || order.proofImagePath || fallbackSnapshot.proof_image_path || fallbackSnapshot.proofImagePath || '',
+        proofImageUrl: order.proof_image_url || order.proofImageUrl || fallbackSnapshot.proof_image_url || fallbackSnapshot.proofImageUrl || '',
+        proofImage: order.proof_image_data || order.proof_image_url || order.proofImage || fallbackSnapshot.proof_image_data || fallbackSnapshot.proofImage || '',
         createdAt: order.created_at || order.createdAt || '',
-        adminConfirmationText: order.admin_confirmation_text || order.adminConfirmationText || '',
-        verifiedAt: order.verified_at || order.verifiedAt || '',
-        verifiedBy: order.verified_by || order.verifiedBy || '',
-        verifiedByName: order.verified_by_name || order.verifiedByName || ''
+        adminConfirmationText: order.admin_confirmation_text || order.adminConfirmationText || fallbackSnapshot.admin_confirmation_text || fallbackSnapshot.adminConfirmationText || '',
+        verifiedAt: order.verified_at || order.verifiedAt || fallbackSnapshot.verified_at || fallbackSnapshot.verifiedAt || '',
+        verifiedBy: order.verified_by || order.verifiedBy || fallbackSnapshot.verified_by || fallbackSnapshot.verifiedBy || '',
+        verifiedByName: order.verified_by_name || order.verifiedByName || fallbackSnapshot.verified_by_name || fallbackSnapshot.verifiedByName || ''
     };
 }
 
@@ -6386,11 +6500,15 @@ function handleOrderUnitSelectionChange() {
     const selectedUnit = units.find((unit) => unit.key === select?.value) || null;
     if (selectedUnit) {
         applyOrderUnitToForm(selectedUnit);
+        renderOrderUnitSelectionPreview(units, selectedUnit);
         if (hint) hint.textContent = `Spesifikasi mengikuti ${formatAcUnitLabel(selectedUnit)}. Anda masih bisa override manual sebelum submit.`;
         return;
     }
+    renderOrderUnitSelectionPreview(units, null);
     if (hint) hint.textContent = units.length
-        ? 'Isi manual / belum pilih unit. Anda bisa memilih unit tersimpan kapan saja untuk autofill.'
+        ? units.length === 1
+            ? 'Unit tersimpan tersedia. Pilih unit tersebut bila ingin autofill spesifikasi, atau biarkan kosong untuk isi manual.'
+            : 'Isi manual / belum pilih unit. Pilih salah satu unit tersimpan untuk autofill spesifikasi order.'
         : 'Belum ada unit AC tersimpan. Isi spesifikasi secara manual.';
 }
 
@@ -6442,12 +6560,13 @@ function renderKonsumenOrder(prefill = '') {
         unitSelect.innerHTML = '<option value="">Isi manual / belum pilih unit</option>' + units
             .map((unit, index) => `<option value="${escapeHtml(unit.key)}">${escapeHtml(formatAcUnitLabel(unit, index))}</option>`)
             .join('');
-        if (units.length) {
+        if (units.length === 1) {
             unitSelect.value = units[0].key;
         }
     }
     document.getElementById('orderPhone').value = user?.phone || '';
     document.getElementById('orderAddress').value = user?.address || '';
+    renderOrderUnitSelectionPreview(units, units.length === 1 ? units[0] : null);
     handleOrderUnitSelectionChange();
 }
 
@@ -6492,7 +6611,7 @@ async function renderKonsumenUnit() {
     const gallery = document.getElementById('konUnitGallery');
     if (!gallery) return;
     if (!user) {
-        gallery.innerHTML = '<div class="empty-state-box"><p>Belum ada foto unit.</p></div>';
+        gallery.innerHTML = '<div class="empty-state-box"><p>Belum ada data unit AC.</p></div>';
         return;
     }
 
@@ -6525,7 +6644,7 @@ async function renderKonsumenUnit() {
                 <p class="text-muted text-sm">Tanggal input: ${escapeHtml(formatDateTime(unit.createdAt || user.joinedAt))}</p>
             </div>
         </article>
-    `).join('') : '<div class="empty-state-box"><p>Belum ada foto unit.</p></div>';
+    `).join('') : '<div class="empty-state-box"><p>Belum ada data unit AC.</p></div>';
 }
 
 async function renderTeknisiHome() {
@@ -7062,7 +7181,12 @@ async function createOrderSupabase(orderValues) {
         }
     );
 
-    return mapOrderRecord(data);
+    return mapOrderRecord(data, {
+        fallbackSnapshot: {
+            ...insertPayload,
+            konsumen_name: profile.name
+        }
+    });
 }
 
 async function handleOrderSubmit(event) {
