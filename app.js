@@ -12,6 +12,7 @@ const supabaseClient = window.supabase?.createClient
 const STORAGE_KEY = 'indoSejukACData';
 const LEGACY_STORAGE_KEY = 'sejukac_data';
 const SCHEMA_VERSION = 2;
+const APP_BUILD_VERSION = '20260328-1';
 const FALLBACK_IMAGE = 'image/logo.png';
 const OCR_CDN_URL = 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js';
 const SERVICE_WORKER_URL = './sw.js';
@@ -20,9 +21,11 @@ const PROFILE_STATUS_PENDING = 'Menunggu Verifikasi';
 const PROFILE_STATUS_ACTIVE = 'Aktif';
 const PROFILE_STATUS_REJECTED = 'Ditolak';
 const PROFILE_STATUS_DISABLED = 'Nonaktif';
-const PROFILE_SCHEMA_DRIFT_CACHE_KEY = 'indoSejukProfileSchemaDrift';
+const PROFILE_SCHEMA_DRIFT_CACHE_PREFIX = 'indoSejukProfileSchemaDrift';
+const PROFILE_SCHEMA_DRIFT_CACHE_KEY = `${PROFILE_SCHEMA_DRIFT_CACHE_PREFIX}:${APP_BUILD_VERSION}`;
 const PROFILE_SCHEMA_DRIFT_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
-const ORDER_SCHEMA_DRIFT_CACHE_KEY = 'indoSejukOrderSchemaDrift';
+const ORDER_SCHEMA_DRIFT_CACHE_PREFIX = 'indoSejukOrderSchemaDrift';
+const ORDER_SCHEMA_DRIFT_CACHE_KEY = `${ORDER_SCHEMA_DRIFT_CACHE_PREFIX}:${APP_BUILD_VERSION}`;
 const ORDER_SCHEMA_DRIFT_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const DEFAULT_AUTH_EMAIL_DOMAIN = 'auth.indosejuk.local';
 const SYNTHETIC_AUTH_EMAIL_SUFFIX = '.indosejuk.local';
@@ -934,6 +937,19 @@ function persistMissingProfileColumnsCache() {
             updatedAt: Date.now()
         };
         localStorage.setItem(PROFILE_SCHEMA_DRIFT_CACHE_KEY, JSON.stringify(payload));
+    } catch (_) {}
+}
+
+function purgeSchemaDriftCache(prefix, activeKey) {
+    try {
+        const staleKeys = [];
+        for (let index = 0; index < localStorage.length; index += 1) {
+            const key = localStorage.key(index);
+            if (key && key.startsWith(prefix) && key !== activeKey) {
+                staleKeys.push(key);
+            }
+        }
+        staleKeys.forEach((key) => localStorage.removeItem(key));
     } catch (_) {}
 }
 
@@ -8044,6 +8060,8 @@ async function initApp() {
     appData = loadStoredData();
     saveData(appData);
     purgeLegacyKonsumenTeknisiCache();
+    purgeSchemaDriftCache(PROFILE_SCHEMA_DRIFT_CACHE_PREFIX, PROFILE_SCHEMA_DRIFT_CACHE_KEY);
+    purgeSchemaDriftCache(ORDER_SCHEMA_DRIFT_CACHE_PREFIX, ORDER_SCHEMA_DRIFT_CACHE_KEY);
     hydrateMissingProfileColumnsCache();
     hydrateMissingOrderColumnsCache();
     runtimeState.passwordRecoveryActive = hasPasswordRecoveryContext();
