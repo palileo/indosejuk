@@ -1095,14 +1095,21 @@ function normalizeLoginIdentifier(value) {
 
 function getLoginUiConfig(role = 'konsumen') {
     return {
+        title: role === 'admin'
+            ? 'Login Admin'
+            : role === 'teknisi'
+                ? 'Login Teknisi'
+                : 'Login Konsumen',
         label: 'Email, Username, atau No. Telepon',
         placeholder: role === 'admin'
             ? 'Masukkan email, username, atau nomor telepon admin'
             : 'Masukkan email, username, atau nomor telepon Anda',
         inputMode: 'email',
         description: role === 'admin'
-            ? 'Gunakan email, username, atau nomor telepon admin. Role final tetap diverifikasi dari profil Supabase dan admin hanya aktif di localhost.'
-            : 'Gunakan email, username, atau nomor telepon beserta password akun Anda. Role final akan diverifikasi dari profil Supabase yang sah.',
+            ? 'Gunakan kredensial admin yang valid. Akses admin tetap diverifikasi dari profil Supabase dan hanya aktif di localhost.'
+            : role === 'teknisi'
+                ? 'Gunakan email, username, atau nomor telepon teknisi beserta sandi akun Anda. Role final akan diverifikasi dari profil Supabase yang sah.'
+                : 'Gunakan email, username, atau nomor telepon konsumen beserta sandi akun Anda. Role final akan diverifikasi dari profil Supabase yang sah.',
         help: 'Login menerima email, username, atau nomor telepon yang terdaftar.',
         resetLabel: 'Email, Username, atau No. Telepon',
         resetPlaceholder: 'Masukkan email, username, atau nomor telepon akun',
@@ -1114,11 +1121,13 @@ function getLoginUiConfig(role = 'konsumen') {
 function syncLoginRoleCopy(role = document.getElementById('loginRole')?.value || 'konsumen') {
     const safeRole = ['konsumen', 'teknisi', 'admin'].includes(role) ? role : 'konsumen';
     const config = getLoginUiConfig(safeRole);
+    const title = document.getElementById('loginFormTitle');
     const label = document.getElementById('loginIdentifierLabel');
     const input = document.getElementById('loginIdentifier');
     const help = document.getElementById('loginIdentifierHelp');
     const description = document.getElementById('loginRoleDescription');
 
+    if (title) title.textContent = config.title;
     if (label) {
         label.innerHTML = `${escapeHtml(config.label)} <span class="required">*</span>`;
     }
