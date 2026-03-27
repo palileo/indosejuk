@@ -199,6 +199,22 @@ const AC_SPEC_OPTIONS = {
     ]
 };
 
+const AC_SPEC_FIELD_CONFIG = [
+    { suffix: 'Brand', key: 'brand' },
+    { suffix: 'Type', key: 'type' },
+    { suffix: 'Refrigerant', key: 'refrigerant' },
+    { suffix: 'Capacity', key: 'capacity' }
+];
+
+const KONSUMEN_PROFILE_FIELD_IDS = [
+    'profileKonsumenName',
+    'profileKonsumenUsername',
+    'profileKonsumenPhone',
+    'profileKonsumenBirthDate',
+    'profileKonsumenReferral',
+    'profileKonsumenAddress'
+];
+
 const appRuntimeConfig = (() => {
     const source = window.INDOSEJUK_RUNTIME_CONFIG || {};
     const storage = source.storage || {};
@@ -273,6 +289,27 @@ const runtimeState = {
     changePasswordCodeSent: false,
     passwordRecoveryActive: false,
     sensitiveEmailSubmitting: false,
+    passwordConfirmation: {
+        action: null,
+        submitting: false
+    },
+    profileEditor: {
+        konsumen: {
+            isEditing: false,
+            isDirty: false,
+            submitting: false,
+            snapshot: null
+        }
+    },
+    konsumenUnitDraft: {
+        active: false,
+        isDirty: false,
+        submitting: false,
+        editingKey: '',
+        initialSnapshot: null,
+        previewUrl: '',
+        file: null
+    },
     orderAutofillToken: 0,
     authBackendHealth: {
         functions: {},
@@ -311,6 +348,18 @@ const DEFAULT_SERVICES = [
     { id: 'SRV006', name: 'Service Berkala', price: 100000, description: 'Maintenance rutin untuk menjaga AC tetap awet, higienis, dan hemat listrik.', imageCatalogId: 'IMG009', image: 'image/service-berkala.png', active: true },
     { id: 'SRV007', name: 'Cek & Diagnosa', price: 50000, description: 'Pengecekan awal untuk menemukan sumber masalah sebelum tindakan teknis.', imageCatalogId: 'IMG008', image: 'image/service-cek-diagnosa.png', active: true }
 ];
+
+function createEmptyKonsumenUnitDraftState() {
+    return {
+        active: false,
+        isDirty: false,
+        submitting: false,
+        editingKey: '',
+        initialSnapshot: null,
+        previewUrl: '',
+        file: null
+    };
+}
 
 function createDefaultUsers() {
     return {
@@ -2391,6 +2440,30 @@ function getAcSpecFieldValue(selectId, fieldKey) {
     return resolveAcSpecValue(fieldKey, select?.value || '', manualInput?.value || '');
 }
 
+function populateAcSpecFormFields(prefix, unit = {}) {
+    AC_SPEC_FIELD_CONFIG.forEach(({ suffix, key }) => {
+        setAcSpecFieldValue(`${prefix}${suffix}`, key, unit[key] || '');
+    });
+}
+
+function resetAcSpecFormFields(prefix) {
+    AC_SPEC_FIELD_CONFIG.forEach(({ suffix }) => {
+        const selectId = `${prefix}${suffix}`;
+        const select = document.getElementById(selectId);
+        if (select) select.value = '';
+        const input = document.getElementById(`${selectId}Other`);
+        if (input) input.value = '';
+        handleAcOptionSelectChange(selectId, `${selectId}OtherWrap`);
+    });
+}
+
+function collectAcSpecFormValues(prefix) {
+    return AC_SPEC_FIELD_CONFIG.reduce((accumulator, { suffix, key }) => {
+        accumulator[key] = getAcSpecFieldValue(`${prefix}${suffix}`, key);
+        return accumulator;
+    }, {});
+}
+
 function populateConsumerDistrictOptions() {
     const select = document.getElementById('regKonKecamatan');
     if (!select) return;
@@ -2467,6 +2540,136 @@ function switchUserTab(tab, element) {
 function closeModal(modalId) {
     const modal = document.getElementById(modalId);
     if (modal) modal.style.display = 'none';
+}
+
+function resetPasswordConfirmModal() {
+    runtimeState.passwordConfirmation.submitting = false;
+    runtimeState.passwordConfirmation.action = null;
+    const input = document.getElementById('passwordConfirmInput');
+    const account = document.getElementById('passwordConfirmAccount');
+    const title = document.getElementById('passwordConfirmTitle');
+    const intro = document.getElementById('passwordConfirmIntro');
+    const status = document.getElementById('passwordConfirmStatus');
+    const submitButton = document.getElementById('btnSubmitPasswordConfirm');
+
+    if (input) input.value = '';
+    if (account) account.value = '';
+    if (title) title.textContent = 'Konfirmasi Password';
+    if (intro) intro.textContent = 'Masukkan password akun aktif untuk melanjutkan perubahan sensitif ini.';
+    if (status) status.textContent = 'Perubahan hanya akan diproses setelah password berhasil diverifikasi.';
+    if (submitButton) {
+        submitButton.disabled = false;
+        submitButton.textContent = 'Verifikasi & Lanjutkan';
+    }
+}
+
+function closePasswordConfirmModal(force = false) {
+    if (runtimeState.passwordConfirmation.submitting && !force) return false;
+    resetPasswordConfirmModal();
+    closeModal('modalPasswordConfirm');
+    return false;
+}
+
+function openPasswordConfirmModal(options = {}) {
+    const profile = getCurrentUser();
+    if (!profile) return false;
+
+    resetPasswordConfirmModal();
+    runtimeState.passwordConfirmation.action = {
+        title: options.title || 'Konfirmasi Password',
+        intro: options.intro || 'Masukkan password akun aktif untuk melanjutkan perubahan sensitif ini.',
+        confirmLabel: options.confirmLabel || 'Verifikasi & Lanjutkan',
+        onConfirm: typeof options.onConfirm === 'function' ? options.onConfirm : async () => {}
+    };
+
+    const accountField = document.getElementById('passwordConfirmAccount');
+    const title = document.getElementById('passwordConfirmTitle');
+    const intro = document.getElementById('passwordConfirmIntro');
+    const submitButton = document.getElementById('btnSubmitPasswordConfirm');
+    const modal = document.getElementById('modalPasswordConfirm');
+    if (accountField) {
+        accountField.value = profile.username || profile.phone || profile.email || profile.authEmail || profile.id;
+    }
+    if (title) title.textContent = runtimeState.passwordConfirmation.action.title;
+    if (intro) intro.textContent = runtimeState.passwordConfirmation.action.intro;
+    if (submitButton) submitButton.textContent = runtimeState.passwordConfirmation.action.confirmLabel;
+    if (modal) modal.style.display = 'flex';
+    document.getElementById('passwordConfirmInput')?.focus();
+    return false;
+}
+
+async function verifyCurrentPassword(password, options = {}) {
+    if (!canUseSupabase()) {
+        throw new Error('Supabase client belum siap.');
+    }
+
+    const profile = options.profile || await requireAuthenticatedProfile(false);
+    if (!profile) {
+        throw new Error('Session login dibutuhkan.');
+    }
+
+    const authEmail = normalizeEmail(remoteState.user?.email || profile.authEmail || profile.auth_email || '');
+    if (!authEmail) {
+        throw new Error('Email auth akun tidak ditemukan untuk verifikasi password.');
+    }
+
+    const { error } = await supabaseClient.auth.signInWithPassword({
+        email: authEmail,
+        password: String(password || '')
+    });
+    if (error) {
+        const message = String(error.message || '').toLowerCase();
+        if (message.includes('invalid login credentials')) {
+            throw new Error('Password konfirmasi tidak sesuai. Periksa lalu coba lagi.');
+        }
+        throw error;
+    }
+
+    return true;
+}
+
+async function handlePasswordConfirmSubmit(event) {
+    event.preventDefault();
+    const action = runtimeState.passwordConfirmation.action;
+    if (!action || runtimeState.passwordConfirmation.submitting) return false;
+
+    const passwordInput = document.getElementById('passwordConfirmInput');
+    const status = document.getElementById('passwordConfirmStatus');
+    const submitButton = document.getElementById('btnSubmitPasswordConfirm');
+    const password = passwordInput?.value || '';
+
+    if (!String(password).trim()) {
+        if (status) status.textContent = 'Masukkan password akun Anda terlebih dahulu.';
+        showToast('Masukkan password akun Anda terlebih dahulu.', 'warning');
+        return false;
+    }
+
+    runtimeState.passwordConfirmation.submitting = true;
+    if (submitButton) {
+        submitButton.disabled = true;
+        submitButton.textContent = 'Memverifikasi...';
+    }
+    if (status) status.textContent = 'Memverifikasi password akun...';
+
+    try {
+        await verifyCurrentPassword(password);
+        if (status) status.textContent = 'Password valid. Menyimpan perubahan...';
+        await action.onConfirm();
+        runtimeState.passwordConfirmation.submitting = false;
+        closePasswordConfirmModal(true);
+    } catch (error) {
+        console.error('Konfirmasi password gagal:', error);
+        if (status) status.textContent = toUserFacingError(error, 'Konfirmasi password gagal.');
+        showToast(toUserFacingError(error, 'Konfirmasi password gagal.'), 'error');
+    } finally {
+        runtimeState.passwordConfirmation.submitting = false;
+        if (submitButton) {
+            submitButton.disabled = false;
+            submitButton.textContent = action.confirmLabel || 'Verifikasi & Lanjutkan';
+        }
+    }
+
+    return false;
 }
 
 function openImageViewer(title, images) {
@@ -2682,12 +2885,10 @@ function syncAgeField(dateInputId, ageInputId) {
 }
 
 function getRegisterUnitDraftPayload() {
+    const specValues = collectAcSpecFormValues('regKonUnit');
     return normalizeAcUnitRecord({
         key: buildAcUnitKey('register-unit'),
-        brand: getAcSpecFieldValue('regKonUnitBrand', 'brand'),
-        type: getAcSpecFieldValue('regKonUnitType', 'type'),
-        refrigerant: getAcSpecFieldValue('regKonUnitRefrigerant', 'refrigerant'),
-        capacity: getAcSpecFieldValue('regKonUnitCapacity', 'capacity'),
+        ...specValues,
         image_url: draftUploads.regKonUnitDraftImage || '',
         created_at: new Date().toISOString(),
         source: 'register-draft'
@@ -2782,13 +2983,7 @@ function resetRegisterAcUnitDraft(options = {}) {
     if (preview) preview.innerHTML = '';
     clearInputFileValue('regKonUnitCamera');
     clearInputFileValue('regKonUnitDevice');
-    ['Brand', 'Type', 'Refrigerant', 'Capacity'].forEach((suffix) => {
-        const select = document.getElementById(`regKonUnit${suffix}`);
-        if (select) select.value = '';
-        const input = document.getElementById(`regKonUnit${suffix}Other`);
-        if (input) input.value = '';
-        handleAcOptionSelectChange(`regKonUnit${suffix}`, `regKonUnit${suffix}OtherWrap`);
-    });
+    resetAcSpecFormFields('regKonUnit');
     if (!options.silent) {
         showToast('Draft unit AC aktif berhasil dikosongkan.', 'success');
     }
@@ -2818,6 +3013,315 @@ function saveRegisterAcUnit() {
 function prepareNextRegisterAcUnit() {
     resetRegisterAcUnitDraft({ silent: true });
     showToast('Form unit AC siap dipakai untuk unit berikutnya. Data yang sudah di-save tetap aman.', 'info');
+}
+
+function getKonsumenProfileSnapshot(profile = getCurrentUser()) {
+    return {
+        name: String(profile?.name || '').trim(),
+        username: String(profile?.username || '').trim(),
+        phone: normalizePhone(profile?.phone),
+        birthDate: profile?.birthDate || profile?.birth_date || '',
+        referral: String(profile?.referral || '').trim(),
+        address: String(profile?.address || '').trim()
+    };
+}
+
+function getKonsumenProfileFormSnapshot() {
+    return {
+        name: String(document.getElementById('profileKonsumenName')?.value || '').trim(),
+        username: String(document.getElementById('profileKonsumenUsername')?.value || '').trim(),
+        phone: normalizePhone(document.getElementById('profileKonsumenPhone')?.value || ''),
+        birthDate: document.getElementById('profileKonsumenBirthDate')?.value || '',
+        referral: String(document.getElementById('profileKonsumenReferral')?.value || '').trim(),
+        address: String(document.getElementById('profileKonsumenAddress')?.value || '').trim()
+    };
+}
+
+function applyKonsumenProfileSnapshotToForm(snapshot = {}) {
+    const normalized = {
+        name: snapshot.name || '',
+        username: snapshot.username || '',
+        phone: snapshot.phone || '',
+        birthDate: snapshot.birthDate || '',
+        referral: snapshot.referral || '',
+        address: snapshot.address || ''
+    };
+    document.getElementById('profileKonsumenName').value = normalized.name;
+    document.getElementById('profileKonsumenUsername').value = normalized.username;
+    document.getElementById('profileKonsumenPhone').value = normalized.phone;
+    document.getElementById('profileKonsumenBirthDate').value = normalized.birthDate;
+    syncAgeField('profileKonsumenBirthDate', 'profileKonsumenAge');
+    document.getElementById('profileKonsumenReferral').value = normalized.referral;
+    document.getElementById('profileKonsumenAddress').value = normalized.address;
+}
+
+function syncKonsumenProfileEditorUi() {
+    const state = runtimeState.profileEditor.konsumen;
+    const isEditing = Boolean(state.isEditing);
+    KONSUMEN_PROFILE_FIELD_IDS.forEach((fieldId) => {
+        const field = document.getElementById(fieldId);
+        if (field) field.disabled = !isEditing || state.submitting;
+    });
+
+    const emailField = document.getElementById('profileKonsumenEmail');
+    if (emailField) {
+        emailField.readOnly = true;
+        emailField.disabled = true;
+    }
+    const ageField = document.getElementById('profileKonsumenAge');
+    if (ageField) ageField.disabled = true;
+
+    const editButton = document.getElementById('btnEditKonsumenProfile');
+    const cancelButton = document.getElementById('btnCancelKonsumenProfileEdit');
+    const saveButton = document.getElementById('btnSaveKonsumenProfile');
+    const status = document.getElementById('profileKonsumenEditStatus');
+
+    if (editButton) {
+        editButton.hidden = isEditing;
+        editButton.disabled = state.submitting;
+    }
+    if (cancelButton) {
+        cancelButton.hidden = !isEditing;
+        cancelButton.disabled = state.submitting;
+    }
+    if (saveButton) {
+        saveButton.hidden = !isEditing;
+        saveButton.disabled = state.submitting || !state.isDirty;
+        saveButton.textContent = state.submitting ? 'Menyimpan...' : 'Save';
+    }
+    if (status) {
+        if (state.submitting) {
+            status.textContent = 'Menyimpan perubahan profil ke Supabase...';
+        } else if (isEditing && state.isDirty) {
+            status.textContent = 'Perubahan profil belum tersimpan. Klik Save lalu konfirmasi password untuk melanjutkan.';
+        } else if (isEditing) {
+            status.textContent = 'Mode edit aktif. Ubah field yang diperlukan lalu klik Save.';
+        } else {
+            status.textContent = 'Profil terkunci untuk mencegah perubahan tidak sengaja.';
+        }
+    }
+}
+
+function syncKonsumenProfileDirtyState() {
+    const state = runtimeState.profileEditor.konsumen;
+    const snapshot = state.snapshot || getKonsumenProfileSnapshot();
+    const current = getKonsumenProfileFormSnapshot();
+    state.isDirty = ['name', 'username', 'phone', 'birthDate', 'referral', 'address']
+        .some((key) => String(current[key] || '') !== String(snapshot[key] || ''));
+    syncKonsumenProfileEditorUi();
+    return state.isDirty;
+}
+
+function startKonsumenProfileEdit() {
+    const profile = getCurrentUser();
+    if (!profile || runtimeState.profileEditor.konsumen.submitting) return false;
+    clearTimeout(profileAutosaveTimeouts.konsumen);
+    runtimeState.profileEditor.konsumen.snapshot = getKonsumenProfileSnapshot(profile);
+    applyKonsumenProfileSnapshotToForm(runtimeState.profileEditor.konsumen.snapshot);
+    runtimeState.profileEditor.konsumen.isEditing = true;
+    runtimeState.profileEditor.konsumen.isDirty = false;
+    syncKonsumenProfileEditorUi();
+    return false;
+}
+
+function cancelKonsumenProfileEdit(options = {}) {
+    const state = runtimeState.profileEditor.konsumen;
+    if (state.submitting) return false;
+    clearTimeout(profileAutosaveTimeouts.konsumen);
+    const snapshot = state.snapshot || getKonsumenProfileSnapshot(getCurrentUser());
+    applyKonsumenProfileSnapshotToForm(snapshot);
+    state.isEditing = false;
+    state.isDirty = false;
+    state.snapshot = getKonsumenProfileSnapshot(getCurrentUser());
+    syncKonsumenProfileEditorUi();
+    if (!options.silent) {
+        showToast('Perubahan profil dibatalkan.', 'info');
+    }
+    return false;
+}
+
+function getKonsumenUnitDraftState() {
+    return runtimeState.konsumenUnitDraft;
+}
+
+function resetKonsumenUnitDraftState() {
+    const state = getKonsumenUnitDraftState();
+    const nextState = createEmptyKonsumenUnitDraftState();
+    nextState.submitting = state.submitting;
+    runtimeState.konsumenUnitDraft = nextState;
+    return runtimeState.konsumenUnitDraft;
+}
+
+function getKonsumenUnitDraftPayload() {
+    const state = getKonsumenUnitDraftState();
+    const snapshot = state.initialSnapshot || {};
+    const specValues = collectAcSpecFormValues('konUnit');
+    return normalizeAcUnitRecord({
+        key: snapshot.key || buildAcUnitKey('dashboard-unit'),
+        ...specValues,
+        image_path: snapshot.imagePath || '',
+        image_url: state.previewUrl || snapshot.imageUrl || '',
+        created_at: snapshot.createdAt || new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        source: snapshot.key ? 'dashboard-edit' : 'dashboard-draft'
+    });
+}
+
+function hasKonsumenUnitDraftValues() {
+    const state = getKonsumenUnitDraftState();
+    const draft = getKonsumenUnitDraftPayload();
+    return Boolean(
+        state.previewUrl
+        || state.file
+        || draft.brand
+        || draft.type
+        || draft.refrigerant
+        || draft.capacity
+        || state.initialSnapshot
+    );
+}
+
+function syncKonsumenUnitDraftDirtyState() {
+    const state = getKonsumenUnitDraftState();
+    const draft = getKonsumenUnitDraftPayload();
+    const snapshot = state.initialSnapshot ? normalizeAcUnitRecord(state.initialSnapshot) : null;
+
+    if (!snapshot) {
+        state.isDirty = Boolean(
+            state.previewUrl
+            || state.file
+            || draft.brand
+            || draft.type
+            || draft.refrigerant
+            || draft.capacity
+        );
+        state.active = state.active || state.isDirty;
+        return state.isDirty;
+    }
+
+    state.active = true;
+    state.isDirty = Boolean(state.file)
+        || draft.brand !== snapshot.brand
+        || draft.type !== snapshot.type
+        || draft.refrigerant !== snapshot.refrigerant
+        || draft.capacity !== snapshot.capacity;
+    return state.isDirty;
+}
+
+function renderKonsumenUnitDraftUi() {
+    const state = getKonsumenUnitDraftState();
+    const preview = document.getElementById('konUnitPreviewGrid');
+    const saveButton = document.getElementById('btnSaveKonUnitDraft');
+    const cancelButton = document.getElementById('btnCancelKonUnitDraft');
+    const newButton = document.getElementById('btnNewKonUnitDraft');
+    const status = document.getElementById('konUnitDraftStatus');
+
+    if (preview) {
+        const previewUrl = state.previewUrl || state.initialSnapshot?.imageUrl || '';
+        preview.innerHTML = previewUrl ? createPreviewCardHtml(previewUrl, {
+            alt: 'Preview draft unit AC',
+            caption: state.editingKey ? 'Foto unit draft saat ini' : 'Foto unit draft baru',
+            deleteTarget: 'clearKonsumenUnitDraftImage',
+            deleteLabel: 'Reset Foto Draft'
+        }) : '';
+    }
+
+    if (saveButton) {
+        saveButton.disabled = state.submitting || !state.isDirty;
+        saveButton.textContent = state.submitting ? 'Menyimpan...' : 'Save';
+    }
+    if (cancelButton) {
+        cancelButton.disabled = state.submitting || (!state.active && !state.isDirty && !state.initialSnapshot);
+    }
+    if (newButton) {
+        newButton.disabled = state.submitting;
+    }
+    if (status) {
+        if (state.submitting) {
+            status.textContent = 'Menyimpan draft unit AC ke Supabase...';
+        } else if (state.editingKey && state.isDirty) {
+            status.textContent = 'Anda sedang mengedit unit AC yang sudah tersimpan. Perubahan baru akan diproses saat Save.';
+        } else if (state.editingKey) {
+            status.textContent = 'Mode edit unit aktif. Ubah metadata atau foto lalu klik Save.';
+        } else if (state.isDirty) {
+            status.textContent = 'Draft unit AC baru siap disimpan. Klik Save lalu konfirmasi password.';
+        } else {
+            status.textContent = 'Belum ada draft unit AC yang aktif.';
+        }
+    }
+}
+
+function startNewKonsumenUnitDraft(options = {}) {
+    if (getKonsumenUnitDraftState().submitting) return false;
+    resetKonsumenUnitDraftState();
+    resetAcSpecFormFields('konUnit');
+    clearInputFileValue('konUnitCamera');
+    clearInputFileValue('konUnitDevice');
+    renderKonsumenUnitDraftUi();
+    if (!options.silent) {
+        setElementText('konUnitUploadStatus', 'Draft unit AC baru siap diisi. Belum ada perubahan yang dikirim ke Supabase.');
+    }
+    return false;
+}
+
+function cancelKonsumenUnitDraft(options = {}) {
+    if (getKonsumenUnitDraftState().submitting) return false;
+    startNewKonsumenUnitDraft({ silent: true });
+    if (!options.silent) {
+        setElementText('konUnitUploadStatus', 'Draft unit AC dibatalkan. Tidak ada perubahan yang disimpan.');
+        showToast('Draft unit AC dibatalkan.', 'info');
+    }
+    return false;
+}
+
+function clearKonsumenUnitDraftImage() {
+    const state = getKonsumenUnitDraftState();
+    state.previewUrl = '';
+    state.file = null;
+    clearInputFileValue('konUnitCamera');
+    clearInputFileValue('konUnitDevice');
+    syncKonsumenUnitDraftDirtyState();
+    renderKonsumenUnitDraftUi();
+    return false;
+}
+
+function handleKonsumenUnitDraftInput(event) {
+    const targetId = event?.target?.id || '';
+    if (!/^konUnit(Brand|Type|Refrigerant|Capacity)(Other)?$/.test(targetId)) return;
+    const state = getKonsumenUnitDraftState();
+    state.active = true;
+    syncKonsumenUnitDraftDirtyState();
+    renderKonsumenUnitDraftUi();
+}
+
+async function editKonsumenUnit(index) {
+    const profile = getCurrentUser();
+    if (!profile || getKonsumenUnitDraftState().submitting) return false;
+
+    const units = getProfileAcUnits(profile);
+    const targetUnit = normalizeAcUnitRecord(units[index]);
+    if (!targetUnit) {
+        showToast('Data unit AC tidak ditemukan.', 'warning');
+        return false;
+    }
+
+    if (!targetUnit.imageUrl && targetUnit.imagePath) {
+        targetUnit.imageUrl = await resolveStorageImageUrl(getPublicUploadBucket(), targetUnit.imagePath);
+    }
+
+    const state = getKonsumenUnitDraftState();
+    state.active = true;
+    state.editingKey = targetUnit.key;
+    state.initialSnapshot = targetUnit;
+    state.previewUrl = '';
+    state.file = null;
+    populateAcSpecFormFields('konUnit', targetUnit);
+    clearInputFileValue('konUnitCamera');
+    clearInputFileValue('konUnitDevice');
+    syncKonsumenUnitDraftDirtyState();
+    renderKonsumenUnitDraftUi();
+    setElementText('konUnitUploadStatus', `Mode edit aktif untuk ${formatAcUnitLabel(targetUnit, index)}. Perubahan baru diproses saat Save.`);
+    return false;
 }
 
 function collectRegisterKonsumenForm() {
@@ -2939,51 +3443,167 @@ async function previewRegUpload(event, previewId) {
 
 async function handleKonUnitUpload(event) {
     const file = event.target.files?.[0];
-    const profile = getCurrentUser();
-    if (!file || !profile) return;
-    const lockKey = `upload:konsumen-unit:${profile.id}`;
-    if (runtimeState.uploadLocks[lockKey]) return;
-    runtimeState.uploadLocks[lockKey] = true;
-    setElementText('konUnitUploadStatus', 'Mengunggah foto unit ke Supabase Storage...');
+    if (!file) return;
 
     try {
-        const uploaded = await uploadImageToSupabaseStorage({
-            file,
-            target: 'konsumen-unit',
-            userId: profile.id,
-            label: 'Foto unit'
-        });
-        const nextUnits = [
-            ...getProfileAcUnits(profile),
-            normalizeAcUnitRecord({
-                key: buildAcUnitKey(file.name || 'dashboard-unit'),
-                image_path: uploaded.path,
-                image_url: uploaded.url,
-                created_at: new Date().toISOString(),
-                source: 'dashboard-upload'
-            })
-        ];
+        validateImageFile(file, { label: 'Foto unit' });
+        const dataUrl = await readFileAsDataUrl(file);
+        const state = getKonsumenUnitDraftState();
+        state.active = true;
+        state.previewUrl = dataUrl;
+        state.file = {
+            dataUrl,
+            name: file.name,
+            type: file.type,
+            size: file.size,
+            lastModified: file.lastModified
+        };
+        syncKonsumenUnitDraftDirtyState();
+        renderKonsumenUnitDraftUi();
+        setElementText('konUnitUploadStatus', 'Foto unit sudah masuk ke draft. Klik Save untuk menyimpan ke Supabase Storage.');
+    } catch (error) {
+        console.error('Gagal menyiapkan draft foto unit:', error);
+        setElementText('konUnitUploadStatus', toUserFacingError(error, 'Foto unit belum bisa dipakai sebagai draft.'));
+        showToast(toUserFacingError(error, 'Foto unit belum bisa dipakai sebagai draft.'), 'error');
+    } finally {
+        clearInputFileValue(event.target.id);
+    }
+}
+
+async function persistKonsumenUnitDraft() {
+    const profile = await requireAuthenticatedProfile(false);
+    if (!profile || profile.role !== 'konsumen') throw new Error('Session konsumen dibutuhkan untuk menyimpan unit AC.');
+
+    const state = getKonsumenUnitDraftState();
+    if (state.submitting) return null;
+    if (!syncKonsumenUnitDraftDirtyState()) {
+        throw new Error('Belum ada perubahan unit AC yang perlu disimpan.');
+    }
+    if (!hasKonsumenUnitDraftValues()) {
+        throw new Error('Isi minimal satu metadata unit AC atau pilih foto sebelum menyimpan.');
+    }
+
+    const currentUnits = getProfileAcUnits(profile);
+    const existingIndex = state.editingKey ? currentUnits.findIndex((unit) => unit.key === state.editingKey) : -1;
+    const existingUnit = existingIndex >= 0 ? normalizeAcUnitRecord(currentUnits[existingIndex]) : null;
+    const baseDraft = getKonsumenUnitDraftPayload();
+    const draftRecord = normalizeAcUnitRecord({
+        ...baseDraft,
+        key: existingUnit?.key || baseDraft.key || buildAcUnitKey(state.file?.name || 'dashboard-unit'),
+        image_path: existingUnit?.imagePath || '',
+        image_url: existingUnit?.imageUrl || '',
+        created_at: existingUnit?.createdAt || baseDraft.createdAt || new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        source: existingUnit ? 'dashboard-edit' : 'dashboard-upload'
+    });
+
+    let uploaded = null;
+    state.submitting = true;
+    renderKonsumenUnitDraftUi();
+    setElementText('konUnitUploadStatus', 'Menyimpan data unit AC ke Supabase...');
+
+    try {
+        if (state.file) {
+            uploaded = await uploadImageToSupabaseStorage({
+                file: createFileLikeFromDraft(state.file, state.file.name || 'unit-ac.jpg'),
+                target: 'konsumen-unit',
+                userId: profile.id,
+                label: 'Foto unit'
+            });
+            draftRecord.imagePath = uploaded.path;
+            draftRecord.imageUrl = uploaded.url;
+        }
+
+        const nextUnits = [...currentUnits];
+        if (existingIndex >= 0) {
+            nextUnits[existingIndex] = draftRecord;
+        } else {
+            nextUnits.push(draftRecord);
+        }
+
         const updatedProfile = await persistUploadedImageReference({
             target: 'konsumen-unit',
-            units: nextUnits
+            units: nextUnits,
+            cleanupPath: uploaded?.path || '',
+            cleanupUrl: uploaded?.url || ''
         });
-        await syncUploadedAssetToRemote({
-            target: 'konsumen-unit',
-            profileId: profile.id,
-            bucket: uploaded.bucket,
-            path: uploaded.path
-        });
-        clearInputFileValue(event.target.id);
-        setElementText('konUnitUploadStatus', 'Foto unit berhasil tersimpan di Supabase Storage.');
+
+        if (uploaded) {
+            await syncUploadedAssetToRemote({
+                target: 'konsumen-unit',
+                profileId: profile.id,
+                bucket: uploaded.bucket,
+                path: uploaded.path
+            });
+        }
+
+        if (uploaded && existingUnit?.imagePath && existingUnit.imagePath !== uploaded.path) {
+            try {
+                await deleteImageFromSupabaseStorage({
+                    bucket: getPublicUploadBucket(),
+                    path: existingUnit.imagePath,
+                    url: existingUnit.imageUrl || ''
+                });
+                await syncDeletionToRemote({
+                    target: 'konsumen-unit',
+                    profileId: profile.id,
+                    path: existingUnit.imagePath,
+                    bucket: getPublicUploadBucket()
+                });
+            } catch (cleanupError) {
+                console.warn('Foto unit lama belum berhasil dibersihkan setelah edit:', cleanupError);
+                showToast('Data unit tersimpan, tetapi foto lama belum sempat dibersihkan dari storage.', 'warning');
+            }
+        }
+
+        resetKonsumenUnitDraftState();
+        resetAcSpecFormFields('konUnit');
+        clearInputFileValue('konUnitCamera');
+        clearInputFileValue('konUnitDevice');
+        renderAppShell();
         await renderKonsumenUnit();
-        showToast(`Foto unit berhasil diunggah untuk ${updatedProfile.name}.`, 'success');
+        setElementText(
+            'konUnitUploadStatus',
+            uploaded
+                ? 'Foto dan metadata unit AC berhasil tersimpan ke Supabase.'
+                : 'Metadata unit AC berhasil tersimpan ke Supabase.'
+        );
+        showToast(existingUnit ? 'Data unit AC berhasil diperbarui.' : 'Data unit AC berhasil disimpan.', 'success');
+        return updatedProfile;
     } catch (error) {
-        console.error('Gagal upload foto unit:', error);
-        setElementText('konUnitUploadStatus', toUserFacingError(error, 'Upload foto unit gagal.'));
-        showToast(toUserFacingError(error, 'Upload foto unit gagal.'), 'error');
+        if (uploaded?.path) {
+            await deleteImageFromSupabaseStorage({
+                bucket: getPublicUploadBucket(),
+                path: uploaded.path,
+                url: uploaded.url
+            }).catch(() => {});
+        }
+        throw error;
     } finally {
-        runtimeState.uploadLocks[lockKey] = false;
+        state.submitting = false;
+        renderKonsumenUnitDraftUi();
     }
+}
+
+function saveKonsumenUnitDraft() {
+    const state = getKonsumenUnitDraftState();
+    if (state.submitting) return false;
+    if (!syncKonsumenUnitDraftDirtyState()) {
+        showToast('Belum ada perubahan unit AC yang perlu disimpan.', 'info');
+        return false;
+    }
+
+    openPasswordConfirmModal({
+        title: state.editingKey ? 'Konfirmasi Simpan Edit Unit AC' : 'Konfirmasi Simpan Unit AC',
+        intro: state.editingKey
+            ? 'Masukkan password akun Anda untuk menyimpan perubahan foto atau metadata unit AC ke Supabase.'
+            : 'Masukkan password akun Anda untuk menyimpan draft unit AC baru ke Supabase.',
+        confirmLabel: state.editingKey ? 'Verifikasi & Simpan Edit' : 'Verifikasi & Simpan Unit',
+        onConfirm: async () => {
+            await persistKonsumenUnitDraft();
+        }
+    });
+    return false;
 }
 
 async function handleTekDocUpload(event, type) {
@@ -3578,10 +4198,14 @@ async function openOrderDetail(orderId) {
 
 async function confirmRemoveKonsumenUnitImage(index) {
     if (!window.confirm('Hapus data unit AC ini dari Supabase Storage dan profil Anda?')) return;
+    const targetKey = getProfileAcUnits(getCurrentUser())[index]?.key || '';
     try {
         await removeUploadedImage({ target: 'konsumen-unit', index });
-        setElementText('konUnitUploadStatus', 'Data unit AC berhasil dihapus.');
+        if (targetKey && getKonsumenUnitDraftState().editingKey === targetKey) {
+            cancelKonsumenUnitDraft({ silent: true });
+        }
         await renderKonsumenUnit();
+        setElementText('konUnitUploadStatus', 'Data unit AC berhasil dihapus.');
         showToast('Data unit AC berhasil dihapus.', 'success');
     } catch (error) {
         console.error('Gagal menghapus gambar unit:', error);
@@ -4787,6 +5411,8 @@ async function persistUploadedImageReference(options = {}) {
             joinedAt: profile.joinedAt
         });
         const nextLegacyImages = collectLegacyUnitImagesFromUnits(nextUnits);
+        const cleanupPath = options.cleanupPath || nextLegacyImages.paths[nextLegacyImages.paths.length - 1] || '';
+        const cleanupUrl = options.cleanupUrl || nextLegacyImages.urls[nextLegacyImages.urls.length - 1] || '';
         const updatedProfile = await upsertOwnProfile(validateProfilePayloadForRole('konsumen', {
             ...profile,
             referral: options.referral ?? profile.referral,
@@ -4795,9 +5421,7 @@ async function persistUploadedImageReference(options = {}) {
             unit_image_urls: nextLegacyImages.urls
         }));
         if (nextLegacyImages.paths.length && updatedProfile.unitImagePaths.length < nextLegacyImages.paths.length) {
-            const newestPath = nextLegacyImages.paths[nextLegacyImages.paths.length - 1];
-            const newestUrl = nextLegacyImages.urls[nextLegacyImages.urls.length - 1] || '';
-            await deleteImageFromSupabaseStorage({ bucket: getPublicUploadBucket(), path: newestPath, url: newestUrl });
+            await deleteImageFromSupabaseStorage({ bucket: getPublicUploadBucket(), path: cleanupPath, url: cleanupUrl });
             throw new Error('Kolom storage foto unit belum siap di schema profiles. Jalankan migration storage terlebih dahulu.');
         }
         const persistedUnits = getProfileAcUnits(updatedProfile);
@@ -4811,10 +5435,8 @@ async function persistUploadedImageReference(options = {}) {
                 || persisted.capacity !== unit.capacity;
         });
         if (metadataLost) {
-            const newestPath = nextLegacyImages.paths[nextLegacyImages.paths.length - 1] || '';
-            const newestUrl = nextLegacyImages.urls[nextLegacyImages.urls.length - 1] || '';
-            if (newestPath || newestUrl) {
-                await deleteImageFromSupabaseStorage({ bucket: getPublicUploadBucket(), path: newestPath, url: newestUrl });
+            if (cleanupPath || cleanupUrl) {
+                await deleteImageFromSupabaseStorage({ bucket: getPublicUploadBucket(), path: cleanupPath, url: cleanupUrl });
             }
             throw new Error('Kolom metadata unit AC belum siap di schema profiles. Jalankan migration ac_units terlebih dahulu.');
         }
@@ -4960,6 +5582,15 @@ function clearRemoteSessionState(options = {}) {
     currentRole = null;
     uploadingOrderId = null;
     uploadProofImage = null;
+    runtimeState.profileEditor.konsumen = {
+        isEditing: false,
+        isDirty: false,
+        submitting: false,
+        snapshot: null
+    };
+    runtimeState.konsumenUnitDraft = createEmptyKonsumenUnitDraftState();
+    resetPasswordConfirmModal();
+    closeModal('modalPasswordConfirm');
     if (!options.preserveView) currentView = null;
 }
 
@@ -6602,17 +7233,19 @@ function renderKonsumenProfile() {
     const user = getCurrentUser();
     if (!user || user.role !== 'konsumen') return;
 
-    document.getElementById('profileKonsumenName').value = user.name || '';
-    document.getElementById('profileKonsumenUsername').value = user.username || '';
+    const profileState = runtimeState.profileEditor.konsumen;
+    profileState.snapshot = getKonsumenProfileSnapshot(user);
+    if (!profileState.isEditing) {
+        applyKonsumenProfileSnapshotToForm(profileState.snapshot);
+    }
     document.getElementById('profileKonsumenEmail').value = user.email || '';
-    document.getElementById('profileKonsumenEmail').readOnly = true;
-    document.getElementById('profileKonsumenPhone').value = user.phone || '';
-    document.getElementById('profileKonsumenBirthDate').value = user.birthDate || '';
-    document.getElementById('profileKonsumenAge').value = user.age || '';
-    document.getElementById('profileKonsumenReferral').value = user.referral || '';
-    document.getElementById('profileKonsumenAddress').value = user.address || '';
+    document.getElementById('profileKonsumenAge').value = calculateAge(getKonsumenProfileFormSnapshot().birthDate || user.birthDate || '') || user.age || '';
     document.getElementById('profileKonsumenLocation').textContent = formatLocationSummary(user);
     document.getElementById('profileKonsumenJoined').textContent = formatDate(user.joinedAt);
+    if (!profileState.isEditing) {
+        profileState.isDirty = false;
+    }
+    syncKonsumenProfileEditorUi();
 }
 
 async function renderKonsumenUnit() {
@@ -6620,11 +7253,12 @@ async function renderKonsumenUnit() {
     const gallery = document.getElementById('konUnitGallery');
     if (!gallery) return;
     if (!user) {
+        startNewKonsumenUnitDraft({ silent: true });
         gallery.innerHTML = '<div class="empty-state-box"><p>Belum ada data unit AC.</p></div>';
         return;
     }
 
-    syncStorageStatusMessage('konUnitUploadStatus', getPublicUploadBucket(), 'Foto unit yang diunggah akan tersimpan ke Supabase Storage.');
+    syncStorageStatusMessage('konUnitUploadStatus', getPublicUploadBucket(), 'Draft unit yang di-save akan tersimpan ke Supabase Storage dan profile ac_units.');
     const units = getProfileAcUnits(user);
     for (const unit of units) {
         if (!unit.imageUrl && unit.imagePath) {
@@ -6632,28 +7266,40 @@ async function renderKonsumenUnit() {
         }
     }
 
-    gallery.innerHTML = units.length ? units.map((unit, index) => `
-        <article class="unit-card">
-            <div class="unit-card-media">
-                ${unit.imageUrl
-                    ? `<img src="${escapeHtml(unit.imageUrl)}" alt="${escapeHtml(formatAcUnitLabel(unit, index))}" loading="lazy" decoding="async">`
-                    : '<div class="saved-unit-placeholder">Tanpa Foto</div>'}
-            </div>
-            <div class="unit-card-body">
-                <div class="unit-card-header">
-                    <h4>${escapeHtml(formatAcUnitLabel(unit, index))}</h4>
-                    <button type="button" class="btn btn-danger btn-xs" onclick="confirmRemoveKonsumenUnitImage(${index})">Hapus Unit</button>
-                </div>
-                <div class="unit-spec-list">
-                    <span class="unit-spec-pill">${escapeHtml(`Merk: ${unit.brand || '-'}`)}</span>
-                    <span class="unit-spec-pill">${escapeHtml(`Jenis: ${unit.type || '-'}`)}</span>
-                    <span class="unit-spec-pill">${escapeHtml(`Refrigerant: ${unit.refrigerant || '-'}`)}</span>
-                    <span class="unit-spec-pill">${escapeHtml(`Kapasitas: ${unit.capacity || '-'}`)}</span>
-                </div>
-                <p class="text-muted text-sm">Tanggal input: ${escapeHtml(formatDateTime(unit.createdAt || user.joinedAt))}</p>
-            </div>
-        </article>
-    `).join('') : '<div class="empty-state-box"><p>Belum ada data unit AC.</p></div>';
+    gallery.innerHTML = units.length ? `
+        <div class="saved-unit-list-header">
+            <h4>Daftar Unit AC Tersimpan</h4>
+            <span>${units.length} unit</span>
+        </div>
+        <div class="saved-unit-card-grid">
+            ${units.map((unit, index) => `
+                <article class="unit-card">
+                    <div class="unit-card-media">
+                        ${unit.imageUrl
+                            ? `<img src="${escapeHtml(unit.imageUrl)}" alt="${escapeHtml(formatAcUnitLabel(unit, index))}" loading="lazy" decoding="async">`
+                            : '<div class="saved-unit-placeholder">Tanpa Foto</div>'}
+                    </div>
+                    <div class="unit-card-body">
+                        <div class="unit-card-header">
+                            <h4>${escapeHtml(formatAcUnitLabel(unit, index))}</h4>
+                        </div>
+                        <div class="unit-spec-list">
+                            <span class="unit-spec-pill">${escapeHtml(`Merk: ${unit.brand || '-'}`)}</span>
+                            <span class="unit-spec-pill">${escapeHtml(`Jenis: ${unit.type || '-'}`)}</span>
+                            <span class="unit-spec-pill">${escapeHtml(`Refrigerant: ${unit.refrigerant || '-'}`)}</span>
+                            <span class="unit-spec-pill">${escapeHtml(`Kapasitas: ${unit.capacity || '-'}`)}</span>
+                        </div>
+                        <p class="text-muted text-sm">Tanggal input: ${escapeHtml(formatDateTime(unit.createdAt || user.joinedAt) || '-')}</p>
+                        <div class="btn-action-group unit-card-actions">
+                            <button type="button" class="btn btn-outline btn-xs" onclick="editKonsumenUnit(${index})">Edit</button>
+                            <button type="button" class="btn btn-danger btn-xs" onclick="confirmRemoveKonsumenUnitImage(${index})">Hapus Unit</button>
+                        </div>
+                    </div>
+                </article>
+            `).join('')}
+        </div>
+    ` : '<div class="empty-state-box"><p>Belum ada data unit AC.</p></div>';
+    renderKonsumenUnitDraftUi();
 }
 
 async function renderTeknisiHome() {
@@ -7081,6 +7727,13 @@ const profileAutosaveTimeouts = { konsumen: null, teknisi: null };
 
 function handleProfileFormInput(role) {
     if (!['konsumen', 'teknisi'].includes(role)) return;
+
+    if (role === 'konsumen') {
+        if (!runtimeState.profileEditor.konsumen.isEditing) return;
+        syncKonsumenProfileDirtyState();
+        return;
+    }
+
     clearTimeout(profileAutosaveTimeouts[role]);
     profileAutosaveTimeouts[role] = setTimeout(() => {
         saveProfile(role).catch((error) => {
@@ -7089,71 +7742,123 @@ function handleProfileFormInput(role) {
     }, 600);
 }
 
+function buildOwnProfilePayload(role, profile) {
+    if (!profile || profile.role !== role) return null;
+
+    if (role === 'konsumen') {
+        return validateProfilePayloadForRole('konsumen', {
+            id: profile.id,
+            role: 'konsumen',
+            username: document.getElementById('profileKonsumenUsername').value.trim(),
+            name: document.getElementById('profileKonsumenName').value.trim(),
+            email: profile.email,
+            phone: document.getElementById('profileKonsumenPhone').value,
+            birth_date: document.getElementById('profileKonsumenBirthDate').value,
+            age: document.getElementById('profileKonsumenAge').value,
+            referral: document.getElementById('profileKonsumenReferral').value.trim(),
+            address: document.getElementById('profileKonsumenAddress').value.trim(),
+            district: profile.district,
+            location_text: profile.locationText,
+            lat: profile.lat,
+            lng: profile.lng,
+            status: profile.status,
+            ac_units: getProfileAcUnits(profile)
+        });
+    }
+
+    if (role === 'teknisi') {
+        return validateProfilePayloadForRole('teknisi', {
+            id: profile.id,
+            role: 'teknisi',
+            username: document.getElementById('profileTeknisiUsername').value.trim(),
+            name: document.getElementById('profileTeknisiName').value.trim(),
+            email: profile.email,
+            phone: document.getElementById('profileTeknisiPhone').value,
+            nik: document.getElementById('profileTeknisiNIK').value.trim(),
+            birth_date: document.getElementById('profileTeknisiBirthDate').value,
+            age: document.getElementById('profileTeknisiAge').value,
+            specialization: document.getElementById('profileTeknisiSpecialization').value,
+            experience: document.getElementById('profileTeknisiExperience').value,
+            address: document.getElementById('profileTeknisiAddress').value.trim(),
+            location_text: profile.locationText,
+            lat: profile.lat,
+            lng: profile.lng,
+            status: profile.status
+        });
+    }
+
+    return null;
+}
+
+async function persistOwnProfileUpdate(role, options = {}) {
+    const profile = await requireAuthenticatedProfile(false);
+    if (!profile || profile.role !== role) return null;
+
+    const payload = buildOwnProfilePayload(role, profile);
+    if (!payload) return null;
+
+    const usernameTaken = await isUsernameTakenRemote(payload.username, profile.id);
+    if (usernameTaken) {
+        throw new Error('Username sudah dipakai akun lain.');
+    }
+
+    const updatedProfile = await upsertOwnProfile(payload);
+    applySupabaseSession(updatedProfile);
+    void syncNewUserToRemote(updatedProfile, { reason: options.reason || `profile-update-${role}` });
+    return updatedProfile;
+}
+
 async function saveProfile(role) {
     const profile = await requireAuthenticatedProfile(false);
-    if (!profile || profile.role !== role) return;
+    if (!profile || profile.role !== role) return false;
+
+    if (role === 'konsumen') {
+        const editorState = runtimeState.profileEditor.konsumen;
+        if (!editorState.isEditing) return false;
+        if (editorState.submitting) return false;
+        if (!syncKonsumenProfileDirtyState()) {
+            showToast('Belum ada perubahan profil yang perlu disimpan.', 'info');
+            return false;
+        }
+
+        openPasswordConfirmModal({
+            title: 'Konfirmasi Simpan Profil',
+            intro: 'Masukkan password akun Anda untuk menyimpan perubahan profil konsumen ke Supabase.',
+            confirmLabel: 'Verifikasi & Simpan Profil',
+            onConfirm: async () => {
+                editorState.submitting = true;
+                syncKonsumenProfileEditorUi();
+                try {
+                    const updatedProfile = await persistOwnProfileUpdate('konsumen', {
+                        reason: 'profile-manual-save-konsumen'
+                    });
+                    editorState.isEditing = false;
+                    editorState.isDirty = false;
+                    editorState.snapshot = getKonsumenProfileSnapshot(updatedProfile);
+                    renderAppShell();
+                    renderKonsumenProfile();
+                    showToast('Profil konsumen berhasil diperbarui.', 'success');
+                } finally {
+                    editorState.submitting = false;
+                    syncKonsumenProfileEditorUi();
+                }
+            }
+        });
+        return false;
+    }
 
     try {
-        let payload = null;
-
-        if (role === 'konsumen') {
-            payload = validateProfilePayloadForRole('konsumen', {
-                id: profile.id,
-                role: 'konsumen',
-                username: document.getElementById('profileKonsumenUsername').value.trim(),
-                name: document.getElementById('profileKonsumenName').value.trim(),
-                email: profile.email,
-                phone: document.getElementById('profileKonsumenPhone').value,
-                birth_date: document.getElementById('profileKonsumenBirthDate').value,
-                age: document.getElementById('profileKonsumenAge').value,
-                referral: document.getElementById('profileKonsumenReferral').value.trim(),
-                address: document.getElementById('profileKonsumenAddress').value.trim(),
-                district: profile.district,
-                location_text: profile.locationText,
-                lat: profile.lat,
-                lng: profile.lng,
-                status: profile.status,
-                ac_units: getProfileAcUnits(profile)
-            });
-        }
-
-        if (role === 'teknisi') {
-            payload = validateProfilePayloadForRole('teknisi', {
-                id: profile.id,
-                role: 'teknisi',
-                username: document.getElementById('profileTeknisiUsername').value.trim(),
-                name: document.getElementById('profileTeknisiName').value.trim(),
-                email: profile.email,
-                phone: document.getElementById('profileTeknisiPhone').value,
-                nik: document.getElementById('profileTeknisiNIK').value.trim(),
-                birth_date: document.getElementById('profileTeknisiBirthDate').value,
-                age: document.getElementById('profileTeknisiAge').value,
-                specialization: document.getElementById('profileTeknisiSpecialization').value,
-                experience: document.getElementById('profileTeknisiExperience').value,
-                address: document.getElementById('profileTeknisiAddress').value.trim(),
-                location_text: profile.locationText,
-                lat: profile.lat,
-                lng: profile.lng,
-                status: profile.status
-            });
-        }
-
-        if (!payload) return;
-
-        const usernameTaken = await isUsernameTakenRemote(payload.username, profile.id);
-        if (usernameTaken) {
-            showToast('Username sudah dipakai akun lain.', 'warning');
-            return;
-        }
-
-        const updatedProfile = await upsertOwnProfile(payload);
-        applySupabaseSession(updatedProfile);
-        void syncNewUserToRemote(updatedProfile, { reason: `profile-autosave-${role}` });
+        const updatedProfile = await persistOwnProfileUpdate(role, {
+            reason: `profile-autosave-${role}`
+        });
+        if (!updatedProfile) return false;
         renderAppShell();
     } catch (error) {
         console.error(`Gagal menyimpan profile ${role}:`, error);
         showToast(toUserFacingError(error, 'Gagal menyimpan profile.'), 'error');
     }
+
+    return false;
 }
 
 async function createOrderSupabase(orderValues) {
@@ -7247,6 +7952,8 @@ function initDomEvents() {
     document.getElementById('imageCatalogFormFile')?.addEventListener('change', handleImageCatalogUpload);
     document.getElementById('formKonsumenProfile')?.addEventListener('input', () => handleProfileFormInput('konsumen'));
     document.getElementById('formTeknisiProfile')?.addEventListener('input', () => handleProfileFormInput('teknisi'));
+    document.getElementById('viewKonsumenUnit')?.addEventListener('input', handleKonsumenUnitDraftInput);
+    document.getElementById('viewKonsumenUnit')?.addEventListener('change', handleKonsumenUnitDraftInput);
     document.getElementById('btnSendPasswordChangeCode')?.addEventListener('click', () => {
         void sendPasswordChangeVerificationCode();
     });
@@ -7308,7 +8015,12 @@ async function initApp() {
     populateAcSpecOptions('regKonUnitType', 'type');
     populateAcSpecOptions('regKonUnitRefrigerant', 'refrigerant');
     populateAcSpecOptions('regKonUnitCapacity', 'capacity');
+    populateAcSpecOptions('konUnitBrand', 'brand');
+    populateAcSpecOptions('konUnitType', 'type');
+    populateAcSpecOptions('konUnitRefrigerant', 'refrigerant');
+    populateAcSpecOptions('konUnitCapacity', 'capacity');
     renderRegisterAcUnitSavedList();
+    renderKonsumenUnitDraftUi();
     populateSpecializationOptions('regTekSpecialization', 'Semua Layanan');
     syncAdminAccessUI();
     syncLoginRoleCopy('konsumen');

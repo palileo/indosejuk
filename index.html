@@ -838,7 +838,7 @@
             <section class="view" id="viewKonsumenProfile" style="display:none;">
                 <div class="page-header">
                     <h2>Profil Konsumen</h2>
-                    <p>Perubahan profil tersinkron otomatis ke Supabase.</p>
+                    <p>Profil terkunci secara default. Gunakan mode edit saat benar-benar perlu mengubah data.</p>
                 </div>
                 <div class="card form-card">
                     <form id="formKonsumenProfile">
@@ -876,6 +876,14 @@
                                 <textarea id="profileKonsumenAddress" rows="3"></textarea>
                             </div>
                         </div>
+                        <div class="form-actions form-actions-split">
+                            <p class="text-muted text-sm profile-edit-status" id="profileKonsumenEditStatus">Profil terkunci untuk mencegah perubahan tidak sengaja.</p>
+                            <div class="btn-action-group">
+                                <button type="button" class="btn btn-outline btn-sm" id="btnEditKonsumenProfile" onclick="startKonsumenProfileEdit()">Edit Profil</button>
+                                <button type="button" class="btn btn-outline btn-sm" id="btnCancelKonsumenProfileEdit" onclick="cancelKonsumenProfileEdit()" hidden>Cancel</button>
+                                <button type="button" class="btn btn-primary btn-sm" id="btnSaveKonsumenProfile" onclick="saveProfile('konsumen')" hidden>Save</button>
+                            </div>
+                        </div>
                     </form>
                     <div class="profile-details">
                         <div class="detail-row"><span class="detail-label">Lokasi GPS</span><span class="detail-value" id="profileKonsumenLocation">Belum dibagikan</span></div>
@@ -898,11 +906,15 @@
             <section class="view" id="viewKonsumenUnit" style="display:none;">
                 <div class="page-header">
                     <h2>Upload Foto Unit AC</h2>
-                    <p>Kelola foto dan metadata unit AC Anda agar teknisi mengenali perangkat dengan lebih akurat</p>
+                    <p>Kelola foto dan metadata unit AC Anda dengan mode draft agar perubahan baru tersimpan saat Anda menekan Save.</p>
                 </div>
                 <div class="card form-card">
                     <div class="upload-section">
-                        <h4>Pilih Metode Upload</h4>
+                        <div class="upload-section-header-actions">
+                            <h4>Draft Unit AC</h4>
+                            <button type="button" class="btn btn-outline btn-sm" id="btnNewKonUnitDraft" onclick="startNewKonsumenUnitDraft()">Tambah Unit Baru</button>
+                        </div>
+                        <p class="text-muted text-sm">Pilih foto lalu lengkapi metadata. Perubahan baru tersimpan ke Supabase setelah password dikonfirmasi.</p>
                         <div class="upload-options">
                             <div class="upload-option">
                                 <label class="upload-option-btn" for="konUnitCamera">
@@ -919,11 +931,46 @@
                                 </label>
                             </div>
                         </div>
+                        <div class="upload-preview-grid" id="konUnitPreviewGrid"></div>
+                        <div class="unit-spec-grid">
+                            <div class="form-group">
+                                <label for="konUnitBrand">Merk AC</label>
+                                <select id="konUnitBrand" onchange="handleAcOptionSelectChange('konUnitBrand', 'konUnitBrandOtherWrap')"></select>
+                                <div class="conditional-input" id="konUnitBrandOtherWrap" style="display:none;">
+                                    <input type="text" id="konUnitBrandOther" placeholder="Tulis merk AC lainnya">
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label for="konUnitType">Jenis AC</label>
+                                <select id="konUnitType" onchange="handleAcOptionSelectChange('konUnitType', 'konUnitTypeOtherWrap')"></select>
+                                <div class="conditional-input" id="konUnitTypeOtherWrap" style="display:none;">
+                                    <input type="text" id="konUnitTypeOther" placeholder="Tulis jenis AC lainnya">
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label for="konUnitRefrigerant">Refrigerant</label>
+                                <select id="konUnitRefrigerant" onchange="handleAcOptionSelectChange('konUnitRefrigerant', 'konUnitRefrigerantOtherWrap')"></select>
+                                <div class="conditional-input" id="konUnitRefrigerantOtherWrap" style="display:none;">
+                                    <input type="text" id="konUnitRefrigerantOther" placeholder="Tulis refrigerant lainnya">
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label for="konUnitCapacity">Kapasitas AC</label>
+                                <select id="konUnitCapacity" onchange="handleAcOptionSelectChange('konUnitCapacity', 'konUnitCapacityOtherWrap')"></select>
+                                <div class="conditional-input" id="konUnitCapacityOtherWrap" style="display:none;">
+                                    <input type="text" id="konUnitCapacityOther" placeholder="Tulis kapasitas AC lainnya">
+                                </div>
+                            </div>
+                        </div>
+                        <div class="btn-action-group unit-entry-actions">
+                            <button type="button" class="btn btn-primary btn-sm" id="btnSaveKonUnitDraft" onclick="saveKonsumenUnitDraft()">Save</button>
+                            <button type="button" class="btn btn-outline btn-sm" id="btnCancelKonUnitDraft" onclick="cancelKonsumenUnitDraft()">Cancel</button>
+                        </div>
+                        <p class="text-muted text-sm" id="konUnitDraftStatus">Belum ada draft unit AC yang aktif.</p>
                         <p class="text-muted text-sm upload-helper-note">Data unit yang disimpan saat register juga otomatis muncul di bawah panel ini, termasuk merk AC, jenis AC, refrigerant, dan kapasitas AC.</p>
                     </div>
-                    <div class="upload-preview-grid" id="konUnitPreviewGrid"></div>
                     <div class="unit-gallery" id="konUnitGallery"></div>
-                    <p class="text-muted text-sm" id="konUnitUploadStatus">Foto unit yang diunggah akan tersimpan ke Supabase Storage.</p>
+                    <p class="text-muted text-sm" id="konUnitUploadStatus">Draft unit yang di-save akan tersimpan ke Supabase Storage dan profile ac_units.</p>
                 </div>
             </section>
 
@@ -1924,6 +1971,33 @@
                 <div class="modal-footer">
                     <button type="button" class="btn btn-outline" onclick="closeChangePasswordModal()">Batal</button>
                     <button type="submit" class="btn btn-primary" id="btnSubmitChangePassword">Perbarui Sandi</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="modalPasswordConfirm" style="display:none;">
+        <div class="modal">
+            <div class="modal-header">
+                <h3 id="passwordConfirmTitle">Konfirmasi Password</h3>
+                <button type="button" class="modal-close" onclick="closePasswordConfirmModal()">&times;</button>
+            </div>
+            <form id="formPasswordConfirm" onsubmit="return handlePasswordConfirmSubmit(event)">
+                <div class="modal-body">
+                    <p class="text-muted" id="passwordConfirmIntro">Masukkan password akun aktif untuk melanjutkan perubahan sensitif ini.</p>
+                    <div class="form-group">
+                        <label for="passwordConfirmAccount">Akun aktif</label>
+                        <input type="text" id="passwordConfirmAccount" readonly>
+                    </div>
+                    <div class="form-group">
+                        <label for="passwordConfirmInput">Password saat ini <span class="required">*</span></label>
+                        <input type="password" id="passwordConfirmInput" autocomplete="current-password" required placeholder="Masukkan password akun Anda">
+                    </div>
+                    <p class="text-muted text-sm" id="passwordConfirmStatus">Perubahan hanya akan diproses setelah password berhasil diverifikasi.</p>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline" onclick="closePasswordConfirmModal()">Batal</button>
+                    <button type="submit" class="btn btn-primary" id="btnSubmitPasswordConfirm">Verifikasi &amp; Lanjutkan</button>
                 </div>
             </form>
         </div>

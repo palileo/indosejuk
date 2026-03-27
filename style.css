@@ -1234,6 +1234,17 @@ body {
     gap: 0.75rem;
 }
 
+.form-actions-split {
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.profile-edit-status {
+    margin: 0;
+    max-width: 520px;
+}
+
 /* =========================================
    FILTER BAR
    ========================================= */
@@ -2054,6 +2065,21 @@ body {
     color: white;
 }
 
+.register-form-card .form-group select {
+    appearance: none;
+    -webkit-appearance: none;
+    background-image:
+        linear-gradient(45deg, transparent 50%, rgba(255,255,255,0.75) 50%),
+        linear-gradient(135deg, rgba(255,255,255,0.75) 50%, transparent 50%);
+    background-position:
+        calc(100% - 18px) calc(50% - 3px),
+        calc(100% - 12px) calc(50% - 3px);
+    background-size: 6px 6px;
+    background-repeat: no-repeat;
+    padding-right: 2.75rem;
+    line-height: 1.35;
+}
+
 .register-form-card .form-group input::placeholder,
 .register-form-card .form-group textarea::placeholder {
     color: var(--gray-500);
@@ -2067,9 +2093,10 @@ body {
     background: rgba(255,255,255,0.12);
 }
 
-.register-form-card .form-group select option {
-    background: var(--navy-900);
-    color: white;
+.register-form-card .form-group select option,
+.register-form-card .form-group select optgroup {
+    background: #ffffff;
+    color: var(--navy-950);
 }
 
 .login-register-link {
@@ -2298,6 +2325,10 @@ body {
 
 .unit-card-header h4 {
     margin: 0;
+}
+
+.unit-card-actions {
+    margin-top: 0.85rem;
 }
 
 .unit-spec-list {
@@ -3624,6 +3655,30 @@ th,
     .mobile-nav .nav-item {
         padding: 0.5rem 0.25rem;
         border-radius: 12px;
+    }
+
+    .login-page {
+        overflow-y: auto;
+        overflow-x: hidden;
+    }
+
+    .register-form-card .form-group select {
+        min-height: 48px;
+        padding-top: 0.8rem;
+        padding-bottom: 0.8rem;
+        background-color: rgba(15, 23, 42, 0.96);
+        color: white;
+        -webkit-text-fill-color: white;
+        position: relative;
+        z-index: 2;
+        appearance: auto;
+        -webkit-appearance: menulist;
+    }
+
+    .register-form-card .form-group select option,
+    .register-form-card .form-group select optgroup {
+        color: var(--gray-900);
+        background: #ffffff;
     }
 
     .btn-action-group {
