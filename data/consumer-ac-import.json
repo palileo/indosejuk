@@ -1,0 +1,425 @@
+﻿{
+    "metadata":  {
+                     "source_workbook":  "C:\\Users\\justdoit\\Documents\\SEJUK\\Sejuk Data\\database konsumen\\Database_Konsumen_AC.xlsx",
+                     "generated_at":  "2026-03-28T17:54:00",
+                     "worksheet_row_count":  11,
+                     "consumer_count":  10,
+                     "duplicate_rows_merged":  1,
+                     "duplicate_phone_groups":  1,
+                     "consumers_without_phone":  2,
+                     "auth_email_domain":  "auth.indosejuk.local",
+                     "password_rule":  "slug_nama_tanpa_spasi + 123"
+                 },
+    "column_mapping":  {
+                           "Nama Konsumen":  "name",
+                           "Alamat":  "address",
+                           "Maps":  "location_text",
+                           "Nomor WA":  "phone",
+                           "Marketing":  "referral",
+                           "Merk AC":  "ac_units[].brand",
+                           "Jenis AC":  "ac_units[].type",
+                           "Refrigerant":  "ac_units[].refrigerant",
+                           "Kapasitas AC":  "ac_units[].capacity",
+                           "Tanggal Pemasangan":  "ac_units[].notes + created_at",
+                           "Tanggal Pemeliharaan":  "ac_units[].notes + updated_at",
+                           "Tanggal Perbaikan":  "ac_units[].notes + updated_at",
+                           "Pengingat Pemeliharaan":  "ac_units[].notes",
+                           "Teknisi":  "ac_units[].notes",
+                           "Pekerjaan":  "ac_units[].notes",
+                           "Image1..Image8":  "ac_units[].image_path + unit_image_paths[]"
+                       },
+    "consumers":  [
+                      {
+                          "role":  "konsumen",
+                          "status":  "Aktif",
+                          "verified_at":  "2026-03-28T17:54:00",
+                          "name":  "sri hartati",
+                          "username":  "sri-hartati",
+                          "password":  "srihartati123",
+                          "email":  null,
+                          "auth_email":  "konsumen.sri-hartati@auth.indosejuk.local",
+                          "phone":  "081947039350",
+                          "address":  "karangklesem kab banyumas",
+                          "district":  null,
+                          "location_text":  "https://maps.app.goo.gl/G8mWwUQ4Pjms9DC7A",
+                          "referral":  "topik",
+                          "ac_units":  [
+                                           {
+                                               "key":  "legacy-sri-hartati-1",
+                                               "brand":  "Samsung",
+                                               "type":  "Split Standard",
+                                               "refrigerant":  "R410A",
+                                               "capacity":  "0.5 PK",
+                                               "created_at":  "2026-03-17",
+                                               "updated_at":  "2026-03-17",
+                                               "source":  "excel-import",
+                                               "notes":  "Pemeliharaan: 2026-03-17 | Pengingat: 4 Bulan | Teknisi: topik,dodo | Pekerjaan: cuci unit"
+                                           }
+                                       ],
+                          "unit_image_paths":  [
+
+                                               ],
+                          "unit_image_urls":  [
+
+                                              ],
+                          "source_row_numbers":  [
+                                                     9
+                                                 ]
+                      },
+                      {
+                          "role":  "konsumen",
+                          "status":  "Aktif",
+                          "verified_at":  "2026-03-28T17:54:00",
+                          "name":  "Muh.Elbadrun",
+                          "username":  "muh-elbadrun",
+                          "password":  "muhelbadrun123",
+                          "email":  null,
+                          "auth_email":  "konsumen.muh-elbadrun@auth.indosejuk.local",
+                          "phone":  "085310645000",
+                          "address":  "somagede banyumas",
+                          "district":  null,
+                          "location_text":  "https://maps.app.goo.gl/aQyYRmV5qq4cUt8h6",
+                          "referral":  "anang",
+                          "ac_units":  [
+                                           {
+                                               "key":  "legacy-muh-elbadrun-1",
+                                               "brand":  "Midea",
+                                               "type":  "Split Standard",
+                                               "refrigerant":  "R22",
+                                               "capacity":  "0.5 PK",
+                                               "image_path":  "C:\\Users\\justdoit\\Documents\\SEJUK\\Sejuk Data\\database konsumen\\dokumentasi\\muh eldabrun somagede 2026-03-15 at 21.24.54.jpeg",
+                                               "created_at":  "2026-03-16",
+                                               "updated_at":  "2026-03-16",
+                                               "source":  "excel-import",
+                                               "notes":  "Pemeliharaan: 2026-03-16 | Pengingat: 5 Bulan | Teknisi: anang,deby | Pekerjaan: cuci indoor outdoor"
+                                           },
+                                           {
+                                               "key":  "legacy-muh-elbadrun-2",
+                                               "brand":  "LG",
+                                               "type":  "Split Standard",
+                                               "refrigerant":  "R22",
+                                               "capacity":  "0.5 PK",
+                                               "image_path":  "C:\\Users\\justdoit\\Documents\\SEJUK\\Sejuk Data\\database konsumen\\dokumentasi\\muh eldabrun somagede 2026-03-15 at 21.24.54.jpeg",
+                                               "created_at":  "2026-03-15",
+                                               "updated_at":  "2026-03-15",
+                                               "source":  "excel-import",
+                                               "notes":  "Pemeliharaan: 2026-03-15 | Pengingat: 5 Bulan | Teknisi: anang,deby | Pekerjaan: cuci unit"
+                                           }
+                                       ],
+                          "unit_image_paths":  [
+                                                   "C:\\Users\\justdoit\\Documents\\SEJUK\\Sejuk Data\\database konsumen\\dokumentasi\\muh eldabrun somagede 2026-03-15 at 21.24.54.jpeg"
+                                               ],
+                          "unit_image_urls":  [
+
+                                              ],
+                          "source_row_numbers":  [
+                                                     7,
+                                                     8
+                                                 ]
+                      },
+                      {
+                          "role":  "konsumen",
+                          "status":  "Aktif",
+                          "verified_at":  "2026-03-28T17:54:00",
+                          "name":  "Sutjpto",
+                          "username":  "sutjpto",
+                          "password":  "sutjpto123",
+                          "email":  null,
+                          "auth_email":  "konsumen.sutjpto@auth.indosejuk.local",
+                          "phone":  "087825704227",
+                          "address":  "pucung kidul",
+                          "district":  null,
+                          "location_text":  "https://maps.app.goo.gl/CQjGVfx8BooGpGaDA",
+                          "referral":  "supriyo",
+                          "ac_units":  [
+                                           {
+                                               "key":  "legacy-sutjpto-1",
+                                               "brand":  "Changhong",
+                                               "type":  "Split Standard",
+                                               "refrigerant":  "R22",
+                                               "capacity":  "0.5 PK",
+                                               "image_path":  "C:\\Users\\justdoit\\Documents\\SEJUK\\Sejuk Data\\database konsumen\\dokumentasi\\cipto pucung 2026-03-22 at 12.48.28.jpeg",
+                                               "created_at":  "2026-03-22",
+                                               "updated_at":  "2026-03-22",
+                                               "source":  "excel-import",
+                                               "notes":  "Perbaikan: 2026-03-22 | Pengingat: 5 Bulan | Teknisi: wawan | Pekerjaan: tambah freon"
+                                           }
+                                       ],
+                          "unit_image_paths":  [
+                                                   "C:\\Users\\justdoit\\Documents\\SEJUK\\Sejuk Data\\database konsumen\\dokumentasi\\cipto pucung 2026-03-22 at 12.48.28.jpeg",
+                                                   "C:\\Users\\justdoit\\Documents\\SEJUK\\Sejuk Data\\database konsumen\\dokumentasi\\WhatsApp Image 2026-03-22 at 13.39.51.jpeg",
+                                                   "C:\\Users\\justdoit\\Documents\\SEJUK\\Sejuk Data\\database konsumen\\dokumentasi\\WhatsApp Image 2026-03-22 at 13.39.58.jpeg"
+                                               ],
+                          "unit_image_urls":  [
+
+                                              ],
+                          "source_row_numbers":  [
+                                                     10
+                                                 ]
+                      },
+                      {
+                          "role":  "konsumen",
+                          "status":  "Aktif",
+                          "verified_at":  "2026-03-28T17:54:00",
+                          "name":  "Pak Kusnendar",
+                          "username":  "pak-kusnendar",
+                          "password":  "pakkusnendar123",
+                          "email":  null,
+                          "auth_email":  "konsumen.pak-kusnendar@auth.indosejuk.local",
+                          "phone":  "081327682012",
+                          "address":  "banyumas",
+                          "district":  null,
+                          "location_text":  null,
+                          "referral":  "anang",
+                          "ac_units":  [
+                                           {
+                                               "key":  "legacy-pak-kusnendar-1",
+                                               "created_at":  "2026-03-27",
+                                               "updated_at":  "2026-03-27",
+                                               "source":  "excel-import",
+                                               "notes":  "Pemeliharaan: 2026-03-27 | Teknisi: sholeh"
+                                           }
+                                       ],
+                          "unit_image_paths":  [
+
+                                               ],
+                          "unit_image_urls":  [
+
+                                              ],
+                          "source_row_numbers":  [
+                                                     12
+                                                 ]
+                      },
+                      {
+                          "role":  "konsumen",
+                          "status":  "Aktif",
+                          "verified_at":  "2026-03-28T17:54:00",
+                          "name":  "sintels kroya",
+                          "username":  "sintels-kroya",
+                          "password":  "sintelskroya123",
+                          "email":  null,
+                          "auth_email":  "konsumen.sintels-kroya@auth.indosejuk.local",
+                          "phone":  "0987654321",
+                          "address":  "Jl. Stasiun, Cilacap, 53282, ID",
+                          "district":  null,
+                          "location_text":  "https://maps.app.goo.gl/5Dx8eriE6xPMyAzJ7",
+                          "referral":  "wawan",
+                          "ac_units":  [
+                                           {
+                                               "key":  "legacy-sintels-kroya-1",
+                                               "brand":  "Panasonic",
+                                               "type":  "Split Standard",
+                                               "refrigerant":  "R22",
+                                               "capacity":  "1 PK",
+                                               "image_path":  "C:\\Users\\justdoit\\Documents\\SEJUK\\Sejuk Data\\database konsumen\\dokumentasi\\sintels kroya 2026-03-25 at 15.42.30.jpeg",
+                                               "created_at":  "2026-03-25",
+                                               "updated_at":  "2026-03-25",
+                                               "source":  "excel-import",
+                                               "notes":  "Pemeliharaan: 2026-03-25 | Pengingat: 5 Bulan | Teknisi: wawan | Pekerjaan: cuci indoor outdoor"
+                                           }
+                                       ],
+                          "unit_image_paths":  [
+                                                   "C:\\Users\\justdoit\\Documents\\SEJUK\\Sejuk Data\\database konsumen\\dokumentasi\\sintels kroya 2026-03-25 at 15.42.30.jpeg",
+                                                   "C:\\Users\\justdoit\\Documents\\SEJUK\\Sejuk Data\\database konsumen\\dokumentasi\\sintels kroya 2026-03-25 at 15.42.31.jpeg",
+                                                   "C:\\Users\\justdoit\\Documents\\SEJUK\\Sejuk Data\\database konsumen\\dokumentasi\\sintels kroya 2026-03-25 at 15.42.33.jpeg"
+                                               ],
+                          "unit_image_urls":  [
+
+                                              ],
+                          "source_row_numbers":  [
+                                                     11
+                                                 ]
+                      },
+                      {
+                          "role":  "konsumen",
+                          "status":  "Aktif",
+                          "verified_at":  "2026-03-28T17:54:00",
+                          "name":  "dwi puji astuti",
+                          "username":  "dwi-puji-astuti",
+                          "password":  "dwipujiastuti123",
+                          "email":  null,
+                          "auth_email":  "konsumen.dwi-puji-astuti@auth.indosejuk.local",
+                          "phone":  "08971389050",
+                          "address":  "karangklesem kab banyumas",
+                          "district":  null,
+                          "location_text":  "https://maps.app.goo.gl/Gdw8XMJkNX3p3Wzd8",
+                          "referral":  "topik",
+                          "ac_units":  [
+                                           {
+                                               "key":  "legacy-dwi-puji-astuti-1",
+                                               "brand":  "Sharp",
+                                               "type":  "Split Standard",
+                                               "refrigerant":  "R32",
+                                               "capacity":  "0.5 PK",
+                                               "image_path":  "C:\\Users\\justdoit\\Documents\\SEJUK\\Sejuk Data\\database konsumen\\dokumentasi\\dwi puji astuti 2026-03-16 at 18.25.00.jpeg",
+                                               "created_at":  "2026-03-17",
+                                               "updated_at":  "2026-03-17",
+                                               "source":  "excel-import",
+                                               "notes":  "Pemeliharaan: 2026-03-17 | Pengingat: 4 Bulan | Teknisi: topik,dodo | Pekerjaan: cuci unit"
+                                           }
+                                       ],
+                          "unit_image_paths":  [
+                                                   "C:\\Users\\justdoit\\Documents\\SEJUK\\Sejuk Data\\database konsumen\\dokumentasi\\dwi puji astuti 2026-03-16 at 18.25.00.jpeg"
+                                               ],
+                          "unit_image_urls":  [
+
+                                              ],
+                          "source_row_numbers":  [
+                                                     3
+                                                 ]
+                      },
+                      {
+                          "role":  "konsumen",
+                          "status":  "Aktif",
+                          "verified_at":  "2026-03-28T17:54:00",
+                          "name":  "Bu Arsita",
+                          "username":  "bu-arsita",
+                          "password":  "buarsita123",
+                          "email":  null,
+                          "auth_email":  "konsumen.bu-arsita@auth.indosejuk.local",
+                          "phone":  "08882688464",
+                          "address":  "kalisube banyumas",
+                          "district":  null,
+                          "location_text":  "https://maps.app.goo.gl/pCQojsoE6T4WdstV9",
+                          "referral":  "anang",
+                          "ac_units":  [
+                                           {
+                                               "key":  "legacy-bu-arsita-1",
+                                               "brand":  "Sharp",
+                                               "type":  "Split Standard",
+                                               "refrigerant":  "R32",
+                                               "capacity":  "0.5 PK",
+                                               "image_path":  "C:\\Users\\justdoit\\Documents\\SEJUK\\Sejuk Data\\database konsumen\\dokumentasi\\bu arsita kalisube 2026-03-15 at 21.24.54.jpeg",
+                                               "created_at":  "2026-03-15",
+                                               "updated_at":  "2026-03-15",
+                                               "source":  "excel-import",
+                                               "notes":  "Pemeliharaan: 2026-03-15 | Pengingat: 5 Bulan | Teknisi: anang,deby | Pekerjaan: cuci unit"
+                                           }
+                                       ],
+                          "unit_image_paths":  [
+                                                   "C:\\Users\\justdoit\\Documents\\SEJUK\\Sejuk Data\\database konsumen\\dokumentasi\\bu arsita kalisube 2026-03-15 at 21.24.54.jpeg"
+                                               ],
+                          "unit_image_urls":  [
+
+                                              ],
+                          "source_row_numbers":  [
+                                                     2
+                                                 ]
+                      },
+                      {
+                          "role":  "konsumen",
+                          "status":  "Aktif",
+                          "verified_at":  "2026-03-28T17:54:00",
+                          "name":  "febri",
+                          "username":  "febri",
+                          "password":  "febri123",
+                          "email":  null,
+                          "auth_email":  "konsumen.febri@auth.indosejuk.local",
+                          "phone":  null,
+                          "address":  "sirau",
+                          "district":  null,
+                          "location_text":  null,
+                          "referral":  "toro",
+                          "ac_units":  [
+                                           {
+                                               "key":  "legacy-febri-1",
+                                               "brand":  "AUX",
+                                               "type":  "Split Standard",
+                                               "refrigerant":  "R22",
+                                               "capacity":  "1 PK",
+                                               "image_path":  "C:\\Users\\justdoit\\Documents\\SEJUK\\Sejuk Data\\database konsumen\\dokumentasi\\febri sirau 2026-03-19 at 14.33.08.jpeg",
+                                               "created_at":  "2026-03-19",
+                                               "updated_at":  "2026-03-19",
+                                               "source":  "excel-import",
+                                               "notes":  "Pemasangan: 2026-03-19 | Perbaikan: 2026-03-19 | Pengingat: 4 Bulan | Teknisi: topik,wawan | Pekerjaan: ganti overload, ganti kapasitor 30mf, tambah freon, perbaikan naple"
+                                           }
+                                       ],
+                          "unit_image_paths":  [
+                                                   "C:\\Users\\justdoit\\Documents\\SEJUK\\Sejuk Data\\database konsumen\\dokumentasi\\febri sirau 2026-03-19 at 14.33.08.jpeg"
+                                               ],
+                          "unit_image_urls":  [
+
+                                              ],
+                          "source_row_numbers":  [
+                                                     4
+                                                 ]
+                      },
+                      {
+                          "role":  "konsumen",
+                          "status":  "Aktif",
+                          "verified_at":  "2026-03-28T17:54:00",
+                          "name":  "luigi danendra mahanipuna",
+                          "username":  "luigi-danendra-mahanipuna",
+                          "password":  "luigidanendramahanipuna123",
+                          "email":  null,
+                          "auth_email":  "konsumen.luigi-danendra-mahanipuna@auth.indosejuk.local",
+                          "phone":  "082136083713",
+                          "address":  "Plana ( Bantardau ) RT 03/04. Dari masjid Al Hikmah, lurus nanti belok kanan. Rumah kiri jalan cat cokelat.",
+                          "district":  null,
+                          "location_text":  "https://maps.app.goo.gl/3aCazi6s6j3HWC5r6",
+                          "referral":  "slamet",
+                          "ac_units":  [
+                                           {
+                                               "key":  "legacy-luigi-danendra-mahanipuna-1",
+                                               "brand":  "Midea",
+                                               "type":  "Split Standard",
+                                               "refrigerant":  "R32",
+                                               "capacity":  "0.5 PK",
+                                               "image_path":  "C:\\Users\\justdoit\\Documents\\SEJUK\\Sejuk Data\\database konsumen\\dokumentasi\\luigi plana 2026-03-19 at 18.16.49.jpeg",
+                                               "created_at":  "2026-03-18",
+                                               "updated_at":  "2026-03-18",
+                                               "source":  "excel-import",
+                                               "notes":  "Pemasangan: 2026-03-18 | Pengingat: 4 Bulan | Teknisi: wawan,deby | Pekerjaan: pemasangan unit material dan jasa"
+                                           }
+                                       ],
+                          "unit_image_paths":  [
+                                                   "C:\\Users\\justdoit\\Documents\\SEJUK\\Sejuk Data\\database konsumen\\dokumentasi\\luigi plana 2026-03-19 at 18.16.49.jpeg",
+                                                   "C:\\Users\\justdoit\\Documents\\SEJUK\\Sejuk Data\\database konsumen\\dokumentasi\\luigi plana-2026-03-19 at 18.16.48.jpeg"
+                                               ],
+                          "unit_image_urls":  [
+
+                                              ],
+                          "source_row_numbers":  [
+                                                     6
+                                                 ]
+                      },
+                      {
+                          "role":  "konsumen",
+                          "status":  "Aktif",
+                          "verified_at":  "2026-03-28T17:54:00",
+                          "name":  "klimantoro",
+                          "username":  "klimantoro",
+                          "password":  "klimantoro123",
+                          "email":  null,
+                          "auth_email":  "konsumen.klimantoro@auth.indosejuk.local",
+                          "phone":  null,
+                          "address":  "belakang puri mujur kroya cilacap",
+                          "district":  null,
+                          "location_text":  null,
+                          "referral":  null,
+                          "ac_units":  [
+                                           {
+                                               "key":  "legacy-klimantoro-1",
+                                               "brand":  "Sharp",
+                                               "type":  "Split Standard",
+                                               "refrigerant":  "R22",
+                                               "capacity":  "0.5 PK",
+                                               "image_path":  "C:\\Users\\justdoit\\Documents\\SEJUK\\Sejuk Data\\database konsumen\\dokumentasi\\toro 2026-03-15 at 21.58.08.jpeg",
+                                               "created_at":  "2026-03-17",
+                                               "updated_at":  "2026-03-17",
+                                               "source":  "excel-import",
+                                               "notes":  "Perbaikan: 2026-03-17 | Pengingat: 4 Bulan | Teknisi: wawan,topik | Pekerjaan: jog freon"
+                                           }
+                                       ],
+                          "unit_image_paths":  [
+                                                   "C:\\Users\\justdoit\\Documents\\SEJUK\\Sejuk Data\\database konsumen\\dokumentasi\\toro 2026-03-15 at 21.58.08.jpeg"
+                                               ],
+                          "unit_image_urls":  [
+
+                                              ],
+                          "source_row_numbers":  [
+                                                     5
+                                                 ]
+                      }
+                  ]
+}
