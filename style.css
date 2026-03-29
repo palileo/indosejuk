@@ -1643,6 +1643,7 @@ body {
     justify-content: center;
     z-index: 1000;
     padding: 1rem;
+    overflow-y: auto;
     animation: fadeIn 0.2s ease;
 }
 
@@ -1656,12 +1657,21 @@ body {
     border-radius: var(--border-radius-lg);
     width: 100%;
     max-width: 460px;
+    max-height: calc(100vh - 2rem);
     box-shadow: var(--shadow-xl);
     animation: slideUp 0.3s ease;
 }
 
 .modal-lg {
     max-width: 640px;
+}
+
+.modal-xl {
+    max-width: 880px;
+}
+
+.modal-assign {
+    max-width: 760px;
 }
 
 .modal-scrollable {
@@ -1715,6 +1725,13 @@ body {
     padding: 1.5rem;
 }
 
+.modal-scrollable .modal-header {
+    position: sticky;
+    top: 0;
+    background: white;
+    z-index: 1;
+}
+
 .modal-scrollable .modal-body {
     overflow-y: auto;
     overscroll-behavior: contain;
@@ -1733,6 +1750,74 @@ body {
     bottom: 0;
     background: white;
     z-index: 1;
+}
+
+.modal-assign-body,
+.modal-detail-body {
+    display: grid;
+    gap: 1rem;
+}
+
+.assign-header-block,
+.assign-preview-note {
+    display: grid;
+    gap: 0.35rem;
+}
+
+.assign-header-block p,
+.assign-preview-note h4,
+.assign-preview-note p,
+.assign-order-card h4,
+.detail-section-card h4,
+.order-detail-message {
+    margin: 0;
+}
+
+.assign-order-meta {
+    font-size: 0.95rem;
+    color: var(--gray-700);
+}
+
+.assign-order-card,
+.detail-section-card {
+    border: 1px solid var(--gray-200);
+    border-radius: 16px;
+    padding: 1rem 1.1rem;
+    background: linear-gradient(180deg, rgba(248, 250, 252, 0.92), #ffffff);
+}
+
+.assign-order-card h4,
+.detail-section-card h4,
+.assign-preview-note h4 {
+    font-size: 0.95rem;
+    color: var(--navy-900);
+    margin-bottom: 0.75rem;
+}
+
+.assign-summary-grid,
+.order-overview-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0 1rem;
+}
+
+.assign-summary-grid .detail-row,
+.order-overview-grid .detail-row {
+    align-items: flex-start;
+    gap: 1rem;
+}
+
+.assign-summary-grid .detail-label,
+.order-overview-grid .detail-label {
+    flex: 0 0 42%;
+}
+
+.assign-summary-grid .detail-value,
+.order-overview-grid .detail-value {
+    margin-left: auto;
+    text-align: right;
+    max-width: 58%;
+    overflow-wrap: anywhere;
 }
 
 /* Modal Detail */
@@ -2924,6 +3009,64 @@ body {
     margin-top: 1rem;
 }
 
+.order-detail-layout {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1rem;
+}
+
+.detail-section-card--full {
+    grid-column: 1 / -1;
+}
+
+.order-detail-list {
+    display: grid;
+    grid-template-columns: 140px minmax(0, 1fr);
+    gap: 0.6rem 0.9rem;
+    margin: 0;
+}
+
+.order-detail-list dt {
+    color: var(--gray-500);
+    font-weight: 600;
+}
+
+.order-detail-list dd {
+    margin: 0;
+    color: var(--gray-800);
+    overflow-wrap: anywhere;
+}
+
+.order-detail-message {
+    white-space: pre-line;
+    color: var(--gray-700);
+    line-height: 1.6;
+}
+
+.order-map-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    color: var(--primary-700);
+    font-weight: 600;
+    text-decoration: none;
+}
+
+.order-map-link:hover {
+    text-decoration: underline;
+}
+
+.detail-proof {
+    margin-top: 0;
+}
+
+.detail-proof .image-card img {
+    min-height: 220px;
+    max-height: 420px;
+    object-fit: contain;
+    background: var(--gray-50);
+}
+
 @media (max-width: 900px) {
     .page-header-with-actions {
         flex-direction: column;
@@ -2936,6 +3079,11 @@ body {
     .verification-help-actions {
         width: 100%;
         min-width: 0;
+    }
+
+    .assign-summary-grid,
+    .order-detail-layout {
+        grid-template-columns: 1fr;
     }
 }
 
@@ -3584,7 +3732,8 @@ th,
 
     .unit-spec-grid,
     .order-unit-selection-preview__content,
-    .saved-unit-card-grid {
+    .saved-unit-card-grid,
+    .order-overview-grid {
         grid-template-columns: 1fr;
     }
 
@@ -3609,6 +3758,36 @@ th,
     .hero-overlay,
     .admin-hero-overlay {
         padding: 1.25rem;
+    }
+
+    .modal-overlay {
+        padding: 0.75rem;
+        align-items: flex-start;
+    }
+
+    .modal {
+        max-height: calc(100vh - 1.5rem);
+    }
+
+    .assign-summary-grid .detail-row,
+    .order-overview-grid .detail-row {
+        flex-direction: column;
+        gap: 0.35rem;
+    }
+
+    .assign-summary-grid .detail-label,
+    .order-overview-grid .detail-label,
+    .assign-summary-grid .detail-value,
+    .order-overview-grid .detail-value {
+        flex: none;
+        max-width: 100%;
+        text-align: left;
+        margin-left: 0;
+    }
+
+    .order-detail-list {
+        grid-template-columns: 1fr;
+        gap: 0.35rem;
     }
 }
 

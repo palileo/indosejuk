@@ -769,6 +769,26 @@ function getMapsLink(lat, lng) {
     return `https://www.google.com/maps?q=${encodeURIComponent(`${lat},${lng}`)}`;
 }
 
+function getMapsSearchLink(query) {
+    const normalizedQuery = String(query || '').trim();
+    if (!normalizedQuery) return '';
+    return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(normalizedQuery)}`;
+}
+
+function resolveOrderCustomerMapsLink(order = {}) {
+    const customerProfile = findKnownProfileById(order.konsumenId || order.konsumen_id || '');
+    if (customerProfile?.lat && customerProfile?.lng) {
+        return getMapsLink(customerProfile.lat, customerProfile.lng);
+    }
+
+    const locationText = String(customerProfile?.locationText || customerProfile?.location_text || '').trim();
+    if (/^https?:\/\/\S+$/i.test(locationText)) {
+        return locationText;
+    }
+
+    return getMapsSearchLink(order.address || customerProfile?.address || '');
+}
+
 function formatLocationSummary(record = {}) {
     const segments = [];
     if (record.locationText) segments.push(record.locationText);
@@ -1070,8 +1090,22 @@ function buildAdminOrderConfirmationMessage(order, teknisi, customMessage = '') 
         `Layanan: ${order.serviceName || '-'}`,
         `Tanggal preferensi: ${formatDate(order.preferredDate || order.createdAt)}`,
         `Teknisi penugasan: ${teknisi?.name || '-'}`,
-        `Kontak teknisi: ${formatDisplayPhone(teknisi?.phone)}`,
         'Tim kami akan menghubungi Anda kembali bila ada penyesuaian jadwal. Terima kasih.'
+    ]);
+}
+
+function buildTechnicianAssignmentWhatsAppMessage(order = {}, teknisi = {}) {
+    const mapsLink = resolveOrderCustomerMapsLink(order);
+    return buildMessageLines([
+        `Halo ${teknisi?.name || 'Teknisi Indo Sejuk AC'}, ada penugasan baru dari admin Indo Sejuk AC.`,
+        '',
+        `No. Pesanan: ${getOrderLabel(order)}`,
+        `Konsumen: ${order.konsumenName || '-'}`,
+        `Pekerjaan: ${order.serviceName || '-'}`,
+        `Tanggal preferensi: ${formatDate(order.preferredDate || order.createdAt)}`,
+        `Alamat: ${order.address || '-'}`,
+        mapsLink ? `Google Maps: ${mapsLink}` : '',
+        'Silakan lanjutkan koordinasi jadwal dan update progres pekerjaan di aplikasi.'
     ]);
 }
 
@@ -4322,6 +4356,8 @@ async function openAssignModal(orderId) {
     document.getElementById('assignOrderSummary').innerHTML = order ? `
         <div class="detail-row"><span class="detail-label">Konsumen</span><span class="detail-value">${escapeHtml(order.konsumenName)}</span></div>
         <div class="detail-row"><span class="detail-label">Layanan</span><span class="detail-value">${escapeHtml(order.serviceName)}</span></div>
+        <div class="detail-row"><span class="detail-label">Tanggal Preferensi</span><span class="detail-value">${escapeHtml(formatDate(order.preferredDate || order.createdAt))}</span></div>
+        <div class="detail-row"><span class="detail-label">Status</span><span class="detail-value">${escapeHtml(order.status || '-')}</span></div>
         <div class="detail-row"><span class="detail-label">Telepon</span><span class="detail-value">${escapeHtml(formatDisplayPhone(order.phone))}</span></div>
         <div class="detail-row"><span class="detail-label">Alamat</span><span class="detail-value">${escapeHtml(order.address || '-')}</span></div>
     ` : '';
@@ -4335,16 +4371,18 @@ async function assignTeknisi() {
     const customMessage = document.getElementById('assignConfirmMessage').value.trim();
     const teknisi = remoteState.adminProfiles.teknisi.find((item) => item.id === teknisiId);
     const order = remoteState.adminOrders.find((item) => item.id === orderId);
-    const waPopup = prepareWhatsAppPopup();
 
     if (!orderId || !teknisi || !order) {
-        closePreparedPopup(waPopup);
         showToast('Pilih teknisi terlebih dahulu.', 'error');
         return;
     }
 
+    const customerWaPopup = order.phone ? prepareWhatsAppPopup() : null;
+    const technicianWaPopup = teknisi.phone ? prepareWhatsAppPopup() : null;
+
     try {
         const confirmationMessage = buildAdminOrderConfirmationMessage(order, teknisi, customMessage);
+        const technicianMessage = buildTechnicianAssignmentWhatsAppMessage(order, teknisi);
         await updateOrderByAdmin(orderId, {
             teknisi_id: teknisi.id,
             teknisi_name: teknisi.name,
@@ -4359,13 +4397,19 @@ async function assignTeknisi() {
         await renderAdminOrders();
         await renderAdminHome();
         if (order.phone) {
-            openWhatsAppChat(order.phone, confirmationMessage, waPopup);
+            openWhatsAppChat(order.phone, confirmationMessage, customerWaPopup);
         } else {
-            closePreparedPopup(waPopup);
+            closePreparedPopup(customerWaPopup);
+        }
+        if (teknisi.phone) {
+            openWhatsAppChat(teknisi.phone, technicianMessage, technicianWaPopup);
+        } else {
+            closePreparedPopup(technicianWaPopup);
         }
         showToast(`Pesanan ${orderId} ditugaskan ke ${teknisi.name}.`, 'success');
     } catch (error) {
-        closePreparedPopup(waPopup);
+        closePreparedPopup(customerWaPopup);
+        closePreparedPopup(technicianWaPopup);
         console.error('Gagal assign teknisi:', error);
         showToast(toUserFacingError(error, 'Gagal menugaskan teknisi.'), 'error');
     }
@@ -4383,6 +4427,7 @@ async function openOrderDetail(orderId) {
     }
 
     const proofUrl = order.proofImageUrl || order.proofImage || await resolveStorageImageUrl(getPublicUploadBucket(), order.proofImagePath);
+    const mapsLink = resolveOrderCustomerMapsLink(order);
     const canRemoveProof = remoteState.profile?.role === 'teknisi' && remoteState.profile?.id === order.teknisiId && proofUrl;
     const proof = proofUrl
         ? `
@@ -4398,24 +4443,61 @@ async function openOrderDetail(orderId) {
         : '<p class="text-muted">Belum ada bukti pekerjaan.</p>';
 
     document.getElementById('modalDetailBody').innerHTML = `
-        <dl class="detail-list">
-            <dt>No. Pesanan</dt><dd>${escapeHtml(getOrderLabel(order))}</dd>
-            <dt>Layanan</dt><dd>${escapeHtml(order.serviceName)}</dd>
-            <dt>Konsumen</dt><dd>${escapeHtml(order.konsumenName)}</dd>
-            <dt>Telepon</dt><dd>${escapeHtml(formatDisplayPhone(order.phone))}</dd>
-            <dt>Teknisi</dt><dd>${escapeHtml(order.teknisiName || 'Belum ditugaskan')}</dd>
-            <dt>Tanggal</dt><dd>${escapeHtml(formatDate(order.preferredDate))}</dd>
-            <dt>Alamat</dt><dd>${escapeHtml(order.address || '-')}</dd>
-            <dt>Merk AC</dt><dd>${escapeHtml(order.brand || '-')}</dd>
-            <dt>Jenis AC</dt><dd>${escapeHtml(order.acType || '-')}</dd>
-            <dt>Kapasitas AC</dt><dd>${escapeHtml(order.pk || '-')}</dd>
-            <dt>Refrigerant</dt><dd>${escapeHtml(order.refrigerant || '-')}</dd>
-            <dt>Status</dt><dd>${escapeHtml(order.status)}</dd>
-            <dt>Verifikasi Admin</dt><dd>${escapeHtml(formatVerificationInfo(order))}</dd>
-            <dt>Konfirmasi Admin</dt><dd>${escapeHtml(order.adminConfirmationText || '-')}</dd>
-            <dt>Catatan</dt><dd>${escapeHtml(order.notes || '-')}</dd>
-        </dl>
-        <div class="detail-proof">${proof}</div>
+        <div class="order-detail-layout">
+            <section class="detail-section-card">
+                <h4>Ringkasan Pesanan</h4>
+                <div class="profile-details order-overview-grid">
+                    <div class="detail-row"><span class="detail-label">No. Pesanan</span><span class="detail-value">${escapeHtml(getOrderLabel(order))}</span></div>
+                    <div class="detail-row"><span class="detail-label">Status</span><span class="detail-value">${escapeHtml(order.status || '-')}</span></div>
+                    <div class="detail-row"><span class="detail-label">Konsumen</span><span class="detail-value">${escapeHtml(order.konsumenName)}</span></div>
+                    <div class="detail-row"><span class="detail-label">Teknisi</span><span class="detail-value">${escapeHtml(order.teknisiName || 'Belum ditugaskan')}</span></div>
+                    <div class="detail-row"><span class="detail-label">Layanan</span><span class="detail-value">${escapeHtml(order.serviceName)}</span></div>
+                    <div class="detail-row"><span class="detail-label">Telepon</span><span class="detail-value">${escapeHtml(formatDisplayPhone(order.phone))}</span></div>
+                </div>
+            </section>
+
+            <section class="detail-section-card">
+                <h4>Spesifikasi AC</h4>
+                <dl class="order-detail-list">
+                    <dt>Merk AC</dt><dd>${escapeHtml(order.brand || '-')}</dd>
+                    <dt>Jenis AC</dt><dd>${escapeHtml(order.acType || '-')}</dd>
+                    <dt>Kapasitas AC</dt><dd>${escapeHtml(order.pk || '-')}</dd>
+                    <dt>Refrigerant</dt><dd>${escapeHtml(order.refrigerant || '-')}</dd>
+                </dl>
+            </section>
+
+            <section class="detail-section-card">
+                <h4>Lokasi & Jadwal</h4>
+                <dl class="order-detail-list">
+                    <dt>Tanggal Preferensi</dt><dd>${escapeHtml(formatDate(order.preferredDate || order.createdAt))}</dd>
+                    <dt>Alamat</dt><dd>${escapeHtml(order.address || '-')}</dd>
+                    <dt>Google Maps</dt><dd>${mapsLink ? `<a class="order-map-link" href="${escapeHtml(mapsLink)}" target="_blank" rel="noopener noreferrer">Buka lokasi</a>` : '-'}</dd>
+                </dl>
+            </section>
+
+            <section class="detail-section-card">
+                <h4>Operasional</h4>
+                <dl class="order-detail-list">
+                    <dt>Verifikasi Admin</dt><dd>${escapeHtml(formatVerificationInfo(order))}</dd>
+                    <dt>Dibuat</dt><dd>${escapeHtml(formatDateTime(order.createdAt))}</dd>
+                </dl>
+            </section>
+
+            <section class="detail-section-card detail-section-card--full">
+                <h4>Konfirmasi Admin</h4>
+                <p class="order-detail-message">${escapeHtml(order.adminConfirmationText || 'Belum ada konfirmasi admin.')}</p>
+            </section>
+
+            <section class="detail-section-card detail-section-card--full">
+                <h4>Catatan Konsumen</h4>
+                <p class="order-detail-message">${escapeHtml(order.notes || 'Tidak ada catatan tambahan.')}</p>
+            </section>
+
+            <section class="detail-section-card detail-section-card--full">
+                <h4>Bukti Pekerjaan</h4>
+                <div class="detail-proof">${proof}</div>
+            </section>
+        </div>
     `;
     document.getElementById('modalDetail').style.display = 'flex';
 }

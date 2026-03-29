@@ -1561,14 +1561,20 @@
 
     <!-- MODAL: Assign Teknisi -->
     <div class="modal-overlay" id="modalAssign" style="display:none;">
-        <div class="modal">
+        <div class="modal modal-assign modal-scrollable">
             <div class="modal-header">
                 <h3>Tugaskan Teknisi</h3>
                 <button type="button" class="modal-close" onclick="closeModal('modalAssign')">&times;</button>
             </div>
-            <div class="modal-body">
-                <p>Pesanan: <strong id="assignOrderId"></strong></p>
-                <div class="profile-details" id="assignOrderSummary" style="margin-bottom:1rem;"></div>
+            <div class="modal-body modal-assign-body">
+                <div class="assign-header-block">
+                    <p class="assign-order-meta">Pesanan <strong id="assignOrderId"></strong></p>
+                    <p class="text-muted text-sm">Pilih teknisi, cek ringkasan pesanan, lalu kirim konfirmasi otomatis ke konsumen dan teknisi via WhatsApp.</p>
+                </div>
+                <section class="assign-order-card">
+                    <h4>Ringkasan Pesanan</h4>
+                    <div class="profile-details assign-summary-grid" id="assignOrderSummary"></div>
+                </section>
                 <div class="form-group">
                     <label for="assignTeknisi">Pilih Teknisi</label>
                     <select id="assignTeknisi">
@@ -1579,22 +1585,26 @@
                     <label for="assignConfirmMessage">Teks Konfirmasi ke Konsumen</label>
                     <textarea id="assignConfirmMessage" rows="4" placeholder="Kosongkan untuk memakai teks konfirmasi otomatis dari admin"></textarea>
                 </div>
+                <div class="card-subtle assign-preview-note">
+                    <h4>WA Penugasan ke Teknisi</h4>
+                    <p class="text-muted text-sm">Pesan ke teknisi dikirim otomatis berisi nama konsumen, alamat, link Maps, dan pekerjaan yang ditugaskan.</p>
+                </div>
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-outline" onclick="closeModal('modalAssign')">Batal</button>
-                <button type="button" class="btn btn-primary" onclick="assignTeknisi()">Verifikasi & Tugaskan</button>
+                <button type="button" class="btn btn-primary" onclick="assignTeknisi()">Verifikasi, Tugaskan & Kirim WA</button>
             </div>
         </div>
     </div>
 
     <!-- MODAL: Order Detail -->
     <div class="modal-overlay" id="modalDetail" style="display:none;">
-        <div class="modal modal-lg">
+        <div class="modal modal-xl modal-scrollable modal-order-detail">
             <div class="modal-header">
                 <h3>Detail Pesanan</h3>
                 <button type="button" class="modal-close" onclick="closeModal('modalDetail')">&times;</button>
             </div>
-            <div class="modal-body" id="modalDetailBody">
+            <div class="modal-body modal-detail-body" id="modalDetailBody">
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-outline" onclick="closeModal('modalDetail')">Tutup</button>
