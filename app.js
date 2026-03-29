@@ -777,6 +777,166 @@ function formatLocationSummary(record = {}) {
     return segments.join(' | ') || '-';
 }
 
+function normalizeLocationToken(value) {
+    return String(value || '')
+        .replace(/https?:\/\/\S+/gi, ' ')
+        .replace(/\s+/g, ' ')
+        .replace(/^[,.;:/\-\s]+|[,.;:/\-\s]+$/g, '')
+        .trim();
+}
+
+function cleanCityToken(value) {
+    return normalizeLocationToken(value)
+        .replace(/\bprovinsi\s+/i, '')
+        .replace(/\b(kab\.?|kabupaten|kota)\s+/i, '')
+        .replace(/\b(kec\.?|kecamatan)\s+/i, '')
+        .replace(/\bindonesia\b/i, '')
+        .replace(/\b\d{5,}\b/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function isBroadRegionToken(value) {
+    return /^(aceh|sumatera(?:\s+\w+)?|kepulauan\s+\w+|riau|jambi|bengkulu|lampung|bangka belitung|banten|jawa(?:\s+\w+)?|dki jakarta|jakarta raya|yogyakarta|daerah istimewa yogyakarta|bali|nusa tenggara(?:\s+\w+)?|kalimantan(?:\s+\w+)?|sulawesi(?:\s+\w+)?|gorontalo|sulawesi tenggara|maluku(?:\s+\w+)?|papua(?:\s+\w+)?)$/i.test(cleanCityToken(value));
+}
+
+function pickCityTokenFromText(value) {
+    const candidates = String(value || '')
+        .split(/[\n,;|]+/)
+        .map(cleanCityToken)
+        .filter((token) => token && /[A-Za-z]/.test(token));
+
+    if (!candidates.length) return '';
+    const narrowed = candidates.filter((token, index) => !(index === candidates.length - 1 && candidates.length > 1 && isBroadRegionToken(token)));
+    return narrowed[narrowed.length - 1] || candidates[candidates.length - 1];
+}
+
+function extractProfileCityName(profile = {}) {
+    const districtCity = pickCityTokenFromText(profile.district || profile.kecamatan || '');
+    if (districtCity) return districtCity;
+
+    const addressCity = pickCityTokenFromText(profile.address || '');
+    if (addressCity) return addressCity;
+
+    return pickCityTokenFromText(profile.locationText || profile.location_text || '') || '-';
+}
+
+function getKnownProfilesByRole(role) {
+    const merged = new Map();
+    const sources = [
+        getData().users?.[role] || [],
+        remoteState.adminProfiles?.[role] || [],
+        remoteState.profile?.role === role ? [remoteState.profile] : []
+    ];
+
+    sources.forEach((profiles) => {
+        profiles.forEach((profile, index) => {
+            if (!profile) return;
+            const normalized = sanitizeProfileRecord({
+                ...profile,
+                role: profile.role || role
+            }) || {
+                ...profile,
+                role
+            };
+            const key = String(normalized.id || profile.id || `${role}-${index}`).trim();
+            if (!key) return;
+            const existing = merged.get(key) || {};
+            const nextProfile = sanitizeProfileRecord(mergeProfileDraft(existing, normalized, { role })) || mergeProfileDraft(existing, normalized, { role });
+            merged.set(key, nextProfile);
+        });
+    });
+
+    return Array.from(merged.values())
+        .filter((profile) => String(profile?.role || role).trim().toLowerCase() === role)
+        .sort((left, right) => String(left.username || left.name || '').localeCompare(String(right.username || right.name || ''), 'id', { sensitivity: 'base' }));
+}
+
+function getTechnicianDocumentState(profile = {}) {
+    const cachedDocs = profile?.id ? getTeknisiDocsForUser(profile.id) : {};
+    return {
+        hasKtpPhoto: Boolean(String(
+            profile.ktpPhotoUrl
+            || profile.ktp_photo_url
+            || profile.ktpPhotoPath
+            || profile.ktp_photo_path
+            || profile.ktpPhoto
+            || cachedDocs?.ktpPhotoPath
+            || cachedDocs?.ktpPhoto
+            || ''
+        ).trim()),
+        hasSelfiePhoto: Boolean(String(
+            profile.selfiePhotoUrl
+            || profile.selfie_photo_url
+            || profile.selfiePhotoPath
+            || profile.selfie_photo_path
+            || profile.selfiePhoto
+            || cachedDocs?.selfiePhotoPath
+            || cachedDocs?.selfiePhoto
+            || ''
+        ).trim())
+    };
+}
+
+function getTechnicianVerificationState(profile = {}) {
+    const documentState = getTechnicianDocumentState(profile);
+    const hasNik = Boolean(String(profile.nik || '').trim());
+    const approved = isProfileApproved(profile);
+    return {
+        approved,
+        hasNik,
+        hasKtpPhoto: documentState.hasKtpPhoto,
+        hasSelfiePhoto: documentState.hasSelfiePhoto,
+        verified: approved && hasNik && documentState.hasKtpPhoto && documentState.hasSelfiePhoto
+    };
+}
+
+function isTechnicianVerified(profile = {}) {
+    return getTechnicianVerificationState(profile).verified;
+}
+
+function renderTechnicianVerificationBadge(profile = {}, options = {}) {
+    if (!isTechnicianVerified(profile)) return '';
+    const className = options.className ? ` ${options.className}` : '';
+    return `<span class="verification-badge${className}"><span class="verification-badge-dot"></span>Terverifikasi</span>`;
+}
+
+function getConsumerDirectoryProfiles() {
+    return getKnownProfilesByRole('konsumen');
+}
+
+function getTechnicianDirectoryProfiles() {
+    const profiles = getKnownProfilesByRole('teknisi').filter((profile) => !isProfileDisabled(profile));
+    const approvedProfiles = profiles.filter((profile) => isProfileApproved(profile));
+    return approvedProfiles.length ? approvedProfiles : profiles.filter((profile) => !isProfileRejected(profile));
+}
+
+function renderDirectoryList(containerId, profiles = [], options = {}) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+
+    if (!profiles.length) {
+        container.innerHTML = `
+            <div class="empty-state-box directory-empty-state">
+                <p>${escapeHtml(options.emptyText || 'Belum ada data yang bisa ditampilkan.')}</p>
+            </div>
+        `;
+        return;
+    }
+
+    container.innerHTML = profiles.map((profile) => `
+        <article class="directory-item">
+            <div class="directory-item-main">
+                <div class="directory-item-title-row">
+                    <h4>${escapeHtml(profile.username || profile.name || '-')}</h4>
+                    ${options.showVerification ? renderTechnicianVerificationBadge(profile) : ''}
+                </div>
+            </div>
+            <span class="directory-item-city">${escapeHtml(extractProfileCityName(profile))}</span>
+        </article>
+    `).join('');
+}
+
 function formatVerificationInfo(record = {}) {
     if (!record.verifiedAt) return 'Belum diverifikasi';
     const adminList = Array.isArray(remoteState.adminProfiles?.admin) ? remoteState.adminProfiles.admin : [];
@@ -2122,7 +2282,9 @@ function normalizeService(service, index = 0) {
         price: Number(service?.price ?? fallback.price ?? 0),
         description: service?.description || fallback.description || '',
         imageCatalogId: service?.imageCatalogId || fallback.imageCatalogId || '',
-        image: resolveImageSource(service?.image || fallback.image),
+        image: hasMeaningfulProfileValue(service?.image)
+            ? resolveImageSource(service.image)
+            : (service?.imageCatalogId ? '' : resolveImageSource(fallback.image)),
         active: service?.active !== false
     };
 }
@@ -2150,6 +2312,7 @@ function normalizeUser(user, role, index = 0) {
     if (role === 'konsumen') {
         normalized.unitImages = Array.isArray(user?.unitImages) ? user.unitImages : [];
         normalized.district = user?.district || user?.kecamatan || '';
+        normalized.locationText = user?.locationText || user?.location_text || '';
         normalized.lat = user?.lat || '';
         normalized.lng = user?.lng || '';
     }
@@ -2160,6 +2323,12 @@ function normalizeUser(user, role, index = 0) {
         normalized.experience = Number(user?.experience ?? user?.pengalaman ?? 0);
         normalized.ktpPhoto = user?.ktpPhoto || '';
         normalized.selfiePhoto = user?.selfiePhoto || '';
+        normalized.district = user?.district || user?.kecamatan || '';
+        normalized.locationText = user?.locationText || user?.location_text || '';
+        normalized.ktpPhotoUrl = user?.ktpPhotoUrl || user?.ktp_photo_url || '';
+        normalized.ktpPhotoPath = user?.ktpPhotoPath || user?.ktp_photo_path || '';
+        normalized.selfiePhotoUrl = user?.selfiePhotoUrl || user?.selfie_photo_url || '';
+        normalized.selfiePhotoPath = user?.selfiePhotoPath || user?.selfie_photo_path || '';
         normalized.lat = user?.lat || '';
         normalized.lng = user?.lng || '';
         normalized.completedJobs = Number(user?.completedJobs || 0);
@@ -2405,7 +2574,7 @@ function getImageCatalogItem(imageCatalogId) {
 }
 
 function serviceImage(service) {
-    return service.image || getImageCatalogItem(service.imageCatalogId)?.src || FALLBACK_IMAGE;
+    return getImageCatalogItem(service?.imageCatalogId)?.src || service?.image || FALLBACK_IMAGE;
 }
 
 function summarizeImageSource(src) {
@@ -4016,7 +4185,7 @@ function openEditServiceModal(serviceId) {
     document.getElementById('serviceFormActive').value = String(service.active !== false);
     document.getElementById('serviceFormImage').value = service.image || '';
     populateServiceImageCatalogSelect(service.imageCatalogId || '');
-    updateServiceImagePreview(service.image || serviceImage(service));
+    updateServiceImagePreview(serviceImage(service));
     document.getElementById('modalServiceForm').style.display = 'flex';
 }
 
@@ -4041,11 +4210,11 @@ function updateServiceImagePreview(image) {
 function handleServiceCatalogSelection() {
     const selected = document.getElementById('serviceFormImageCatalogId').value;
     const image = getImageCatalogItem(selected)?.src || '';
-    document.getElementById('serviceFormImage').value = image;
-    updateServiceImagePreview(image);
+    updateServiceImagePreview(image || document.getElementById('serviceFormImage').value || '');
 }
 
 function clearServiceImage() {
+    document.getElementById('serviceFormImageCatalogId').value = '';
     document.getElementById('serviceFormImage').value = '';
     document.getElementById('serviceFormImageFile').value = '';
     updateServiceImagePreview('');
@@ -4055,6 +4224,7 @@ async function handleServiceImageUpload(event) {
     const file = event.target.files?.[0];
     if (!file) return;
     const dataUrl = await readFileAsDataUrl(file);
+    document.getElementById('serviceFormImageCatalogId').value = '';
     document.getElementById('serviceFormImage').value = dataUrl;
     updateServiceImagePreview(dataUrl);
 }
@@ -4063,14 +4233,17 @@ function saveService() {
     if (!requireAdminAccess()) return;
     const data = getData();
     const serviceId = document.getElementById('serviceFormId').value;
+    const existingService = data.services.find((item) => item.id === serviceId) || null;
+    const imageCatalogId = document.getElementById('serviceFormImageCatalogId').value;
+    const manualImage = document.getElementById('serviceFormImage').value;
     const serviceData = {
         id: serviceId || nextId(data.services, 'SRV'),
         name: document.getElementById('serviceFormName').value.trim(),
         price: Number(document.getElementById('serviceFormPrice').value || 0),
         description: document.getElementById('serviceFormDescription').value.trim(),
         active: document.getElementById('serviceFormActive').value === 'true',
-        imageCatalogId: document.getElementById('serviceFormImageCatalogId').value,
-        image: document.getElementById('serviceFormImage').value || getImageCatalogItem(document.getElementById('serviceFormImageCatalogId').value)?.src || FALLBACK_IMAGE
+        imageCatalogId,
+        image: imageCatalogId ? '' : (manualImage || existingService?.image || FALLBACK_IMAGE)
     };
     if (!serviceData.name) {
         showToast('Nama layanan wajib diisi.', 'error');
@@ -5403,7 +5576,7 @@ function clearImagePreviewState(target, options = {}) {
         if (regKtpPreview) regKtpPreview.innerHTML = '';
         clearInputFileValue('regTekIDCamera');
         clearInputFileValue('regTekIDDevice');
-        setElementText('ocrStatus', 'OCR siap digunakan setelah foto KTP diunggah.');
+        setElementText('ocrStatus', 'OCR siap digunakan setelah foto KTP diunggah. Form tetap bisa dikirim tanpa upload KTP.');
         setElementText('ocrProgress', '');
         if (ocrPreviewCard) ocrPreviewCard.style.display = 'none';
         break;
@@ -7060,14 +7233,9 @@ async function handleRegisterTeknisi(event) {
         return false;
     }
     const waPopup = prepareWhatsAppPopup();
-    if (!form.name || !form.username || !form.password || !form.phone || !form.nik || !form.birthDate || !form.specialization || !form.address) {
+    if (!form.name || !form.username || !form.password || !form.phone || !form.birthDate || !form.specialization || !form.address) {
         closePreparedPopup(waPopup);
         showToast('Lengkapi data wajib teknisi.', 'error');
-        return false;
-    }
-    if (!draftUploads.regTekKtpPhoto || !draftUploads.regTekSelfiePhoto) {
-        closePreparedPopup(waPopup);
-        showToast('Foto KTP dan foto diri teknisi wajib diunggah.', 'error');
         return false;
     }
 
@@ -7158,6 +7326,11 @@ async function renderKonsumenHome() {
             ${tableCell('Status', renderStatusBadge(order.status))}
         </tr>
     `).join('') : '<tr><td colspan="4" class="empty-state">Belum ada pesanan</td></tr>';
+
+    renderDirectoryList('konsumenTeknisiDirectory', getTechnicianDirectoryProfiles(), {
+        emptyText: 'Belum ada data teknisi yang bisa ditampilkan.',
+        showVerification: true
+    });
 
     const container = document.getElementById('serviceCardsContainer');
     const services = getServices(false);
@@ -7366,6 +7539,11 @@ async function renderTeknisiHome() {
     setMetricValue('teknisiActiveJobs', orders.filter((order) => order.status === 'Ditugaskan' || order.status === 'Dikerjakan').length);
     setMetricValue('teknisiCompletedJobs', orders.filter((order) => order.status === 'Selesai').length);
 
+    const badgeContainer = document.getElementById('teknisiVerificationBadge');
+    if (badgeContainer) {
+        badgeContainer.innerHTML = renderTechnicianVerificationBadge(profile, { className: 'verification-badge--headline' });
+    }
+
     const list = document.getElementById('teknisiJobsList');
     const activeOrders = orders.filter((order) => order.status !== 'Selesai');
     list.innerHTML = activeOrders.length ? activeOrders.map((order) => `
@@ -7413,6 +7591,10 @@ async function renderTeknisiJobs() {
             `)}
         </tr>
     `).join('') : '<tr><td colspan="7" class="empty-state">Belum ada pekerjaan</td></tr>';
+
+    renderDirectoryList('teknisiKonsumenDirectory', getConsumerDirectoryProfiles(), {
+        emptyText: 'Belum ada data konsumen yang bisa ditampilkan.'
+    });
 }
 
 function renderTeknisiProfile() {
@@ -7708,7 +7890,12 @@ function renderAdminTeknisiTable(users = []) {
     body.innerHTML = sortedUsers.length ? sortedUsers.map((user) => `
         <tr>
             ${tableCell('Nama', escapeHtml(user.name))}
-            ${tableCell('Username', escapeHtml(user.username || '-'))}
+            ${tableCell('Username', `
+                <div class="directory-table-user">
+                    <span>${escapeHtml(user.username || '-')}</span>
+                    ${renderTechnicianVerificationBadge(user)}
+                </div>
+            `)}
             ${tableCell('Email', escapeHtml(user.email || '-'))}
             ${tableCell('Telepon', escapeHtml(user.phone || '-'))}
             ${tableCell('NIK', escapeHtml(user.nik || '-'))}

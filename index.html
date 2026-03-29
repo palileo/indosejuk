@@ -499,8 +499,9 @@
                             <input type="tel" id="regTekPhone" required placeholder="08xx-xxxx-xxxx">
                         </div>
                         <div class="form-group">
-                            <label for="regTekNIK">NIK (No. KTP) <span class="required">*</span></label>
-                            <input type="text" id="regTekNIK" required placeholder="16 digit NIK" maxlength="16" pattern="[0-9]{16}">
+                            <label for="regTekNIK">NIK (No. KTP)</label>
+                            <input type="text" id="regTekNIK" placeholder="16 digit NIK" maxlength="16" pattern="[0-9]{16}">
+                            <p class="text-muted text-sm">Opsional saat daftar. NIK bisa dilengkapi nanti untuk proses verifikasi teknisi.</p>
                         </div>
                         <div class="form-group">
                             <label for="regTekBirthDate">Tanggal Lahir <span class="required">*</span></label>
@@ -554,8 +555,8 @@
 
                     <!-- Upload KTP -->
                     <div class="upload-section">
-                        <h4>Upload Foto KTP <span class="required">*</span></h4>
-                        <p class="text-muted text-sm">Foto KTP yang jelas untuk verifikasi identitas dan OCR.</p>
+                        <h4>Upload Foto KTP</h4>
+                        <p class="text-muted text-sm">Opsional saat daftar. Foto KTP yang jelas akan membantu verifikasi identitas dan OCR, tetapi bisa dilengkapi nanti.</p>
                         <div class="upload-section-header-actions">
                             <button type="button" class="btn btn-outline btn-sm" id="btnScanKtp" onclick="runTechnicianKtpOcr()">Scan KTP / OCR</button>
                         </div>
@@ -578,9 +579,9 @@
                         <div class="upload-preview-grid" id="regTekIDPreview" role="list"></div>
                         <p class="text-muted text-sm upload-helper-note">Dokumen sensitif dikirim aman ke Supabase Storage selama proses pendaftaran, lalu akun akan menunggu verifikasi manual admin sebelum bisa dipakai login aktif.</p>
                         <div class="ocr-panel" id="ocrPanel" data-ocr-panel="true">
-                            <div class="ocr-status" id="ocrStatus" aria-live="polite">OCR siap digunakan setelah foto KTP diunggah.</div>
+                            <div class="ocr-status" id="ocrStatus" aria-live="polite">OCR siap digunakan setelah foto KTP diunggah. Form tetap bisa dikirim tanpa upload KTP.</div>
                             <div class="ocr-progress" id="ocrProgress" aria-live="polite"></div>
-                            <p class="text-muted text-sm ocr-helper-text">Mesin OCR baru dimuat saat Anda benar-benar masuk ke alur scan KTP. Hasilnya hanya mengisi field yang masih kosong dan tetap bisa diedit manual kapan saja.</p>
+                            <p class="text-muted text-sm ocr-helper-text">Mesin OCR baru dimuat saat Anda benar-benar masuk ke alur scan KTP. Hasilnya hanya mengisi field yang masih kosong, tetap bisa diedit manual kapan saja, dan tidak memblokir submit bila dokumen belum diunggah.</p>
                             <div class="ocr-preview-card" id="ocrPreviewCard" style="display:none;">
                                 <h5>Preview Ekstraksi OCR</h5>
                                 <div class="ocr-result-list" id="ocrResultList"></div>
@@ -594,8 +595,8 @@
 
                     <!-- Upload Foto Diri -->
                     <div class="upload-section">
-                        <h4>Upload Foto Diri <span class="required">*</span></h4>
-                        <p class="text-muted text-sm">Foto setengah badan yang jelas untuk profil teknisi (untuk kepercayaan konsumen)</p>
+                        <h4>Upload Foto Diri</h4>
+                        <p class="text-muted text-sm">Opsional saat daftar. Foto setengah badan yang jelas bisa diunggah nanti untuk melengkapi profil teknisi.</p>
                         <div class="upload-options">
                             <div class="upload-option">
                                 <label class="upload-option-btn" for="regTekSelfieCamera">
@@ -718,6 +719,20 @@
                                 <tr><td colspan="4" class="empty-state">Belum ada pesanan</td></tr>
                             </tbody>
                         </table>
+                    </div>
+                </div>
+
+                <div class="card directory-card">
+                    <div class="card-header card-header-stack">
+                        <div>
+                            <h3>Daftar Teknisi</h3>
+                            <p class="card-header-caption">Username dan kota teknisi yang layak ditampilkan untuk konsumen.</p>
+                        </div>
+                    </div>
+                    <div class="directory-list" id="konsumenTeknisiDirectory">
+                        <div class="empty-state-box directory-empty-state">
+                            <p>Belum ada data teknisi yang bisa ditampilkan.</p>
+                        </div>
                     </div>
                 </div>
 
@@ -980,7 +995,10 @@
             <section class="view" id="viewTeknisiHome" style="display:none;">
                 <div class="page-header page-header-with-actions">
                     <div>
-                        <h2>Dashboard Teknisi</h2>
+                        <div class="page-title-with-badge">
+                            <h2>Dashboard Teknisi</h2>
+                            <div id="teknisiVerificationBadge"></div>
+                        </div>
                         <p>Kelola pekerjaan dan data akun teknisi yang sedang login.</p>
                     </div>
                     <button type="button" class="btn btn-outline btn-sm" onclick="goToLanding()">Kembali ke Beranda Utama</button>
@@ -1054,6 +1072,19 @@
                                 <tr><td colspan="7" class="empty-state">Belum ada pekerjaan</td></tr>
                             </tbody>
                         </table>
+                    </div>
+                </div>
+                <div class="card directory-card">
+                    <div class="card-header card-header-stack">
+                        <div>
+                            <h3>Daftar Konsumen</h3>
+                            <p class="card-header-caption">Ringkasan konsumen yang tersedia di data aplikasi saat ini.</p>
+                        </div>
+                    </div>
+                    <div class="directory-list" id="teknisiKonsumenDirectory">
+                        <div class="empty-state-box directory-empty-state">
+                            <p>Belum ada data konsumen yang bisa ditampilkan.</p>
+                        </div>
                     </div>
                 </div>
             </section>
