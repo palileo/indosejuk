@@ -12,10 +12,11 @@ const supabaseClient = window.supabase?.createClient
 const STORAGE_KEY = 'indoSejukACData';
 const LEGACY_STORAGE_KEY = 'sejukac_data';
 const SCHEMA_VERSION = 2;
-const APP_BUILD_VERSION = '20260328-1';
+const APP_BUILD_VERSION = '20260329-3';
 const FALLBACK_IMAGE = 'image/logo.png';
 const OCR_CDN_URL = 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js';
-const SERVICE_WORKER_URL = './sw.js';
+const SERVICE_WORKER_URL = `./sw.js?v=${APP_BUILD_VERSION}`;
+const SERVICE_WORKER_UPDATE_INTERVAL_MS = 5 * 60 * 1000;
 const DEFAULT_ADMIN_WHATSAPP = '08970788800';
 const PROFILE_STATUS_PENDING = 'Menunggu Verifikasi';
 const PROFILE_STATUS_ACTIVE = 'Aktif';
@@ -280,6 +281,10 @@ const runtimeState = {
     ocrLibraryPromise: null,
     deferredInstallPrompt: null,
     serviceWorkerRegistrationPromise: null,
+    serviceWorkerHadController: Boolean(navigator.serviceWorker?.controller),
+    serviceWorkerLifecycleBound: false,
+    serviceWorkerReloadPending: false,
+    serviceWorkerUpdateIntervalId: null,
     connectionBannerTimer: null,
     activeViewRenderToken: 0,
     signedImageUrlCache: {},
@@ -318,6 +323,11 @@ const runtimeState = {
         functions: {},
         settings: null,
         publicNoticeMessage: ''
+    },
+    adminEditor: {
+        konsumenMode: 'edit',
+        teknisiMode: 'edit',
+        orderMode: 'create'
     }
 };
 
@@ -634,12 +644,78 @@ function scheduleOcrWarmup() {
     }, 1800);
 }
 
+function queueAppRefreshForServiceWorkerUpdate() {
+    if (runtimeState.serviceWorkerReloadPending) return;
+    runtimeState.serviceWorkerReloadPending = true;
+    showToast('Versi aplikasi terbaru ditemukan. Aplikasi diperbarui otomatis...', 'info');
+    window.setTimeout(() => {
+        window.location.reload();
+    }, 900);
+}
+
+function bindServiceWorkerLifecycle(registration) {
+    if (!registration || runtimeState.serviceWorkerLifecycleBound) return;
+
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (!runtimeState.serviceWorkerHadController) {
+            runtimeState.serviceWorkerHadController = true;
+            return;
+        }
+        queueAppRefreshForServiceWorkerUpdate();
+    });
+
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible' && typeof registration.update === 'function') {
+            registration.update().catch(() => {
+                /* no-op */
+            });
+        }
+    });
+
+    runtimeState.serviceWorkerLifecycleBound = true;
+}
+
+function watchInstallingServiceWorker(worker) {
+    if (!worker) return;
+    worker.addEventListener('statechange', () => {
+        if (worker.state === 'installed' && navigator.serviceWorker.controller) {
+            worker.postMessage({ type: 'SKIP_WAITING' });
+        }
+    });
+}
+
+function startServiceWorkerAutoUpdate(registration) {
+    if (!registration) return;
+    bindServiceWorkerLifecycle(registration);
+
+    if (registration.waiting && navigator.serviceWorker.controller) {
+        registration.waiting.postMessage({ type: 'SKIP_WAITING' });
+    }
+
+    if (registration.installing) {
+        watchInstallingServiceWorker(registration.installing);
+    }
+
+    registration.addEventListener('updatefound', () => {
+        watchInstallingServiceWorker(registration.installing);
+    });
+
+    if (!runtimeState.serviceWorkerUpdateIntervalId && typeof registration.update === 'function') {
+        runtimeState.serviceWorkerUpdateIntervalId = window.setInterval(() => {
+            registration.update().catch(() => {
+                /* no-op */
+            });
+        }, SERVICE_WORKER_UPDATE_INTERVAL_MS);
+    }
+}
+
 function registerServiceWorkerSafe() {
     if (!canRegisterServiceWorker()) return Promise.resolve(null);
     if (runtimeState.serviceWorkerRegistrationPromise) return runtimeState.serviceWorkerRegistrationPromise;
 
     runtimeState.serviceWorkerRegistrationPromise = navigator.serviceWorker.register(SERVICE_WORKER_URL)
         .then((registration) => {
+            startServiceWorkerAutoUpdate(registration);
             if (typeof registration.update === 'function') {
                 scheduleIdleTask(() => {
                     registration.update().catch(() => {
@@ -1097,15 +1173,12 @@ function buildAdminOrderConfirmationMessage(order, teknisi, customMessage = '') 
 function buildTechnicianAssignmentWhatsAppMessage(order = {}, teknisi = {}) {
     const mapsLink = resolveOrderCustomerMapsLink(order);
     return buildMessageLines([
-        `Halo ${teknisi?.name || 'Teknisi Indo Sejuk AC'}, ada penugasan baru dari admin Indo Sejuk AC.`,
-        '',
-        `No. Pesanan: ${getOrderLabel(order)}`,
+        `Nama: ${teknisi?.name || '-'}`,
         `Konsumen: ${order.konsumenName || '-'}`,
-        `Pekerjaan: ${order.serviceName || '-'}`,
-        `Tanggal preferensi: ${formatDate(order.preferredDate || order.createdAt)}`,
         `Alamat: ${order.address || '-'}`,
-        mapsLink ? `Google Maps: ${mapsLink}` : '',
-        'Silakan lanjutkan koordinasi jadwal dan update progres pekerjaan di aplikasi.'
+        `Maps: ${mapsLink || '-'}`,
+        `Waktu Pekerjaan: ${formatDate(order.preferredDate || order.createdAt)}`,
+        `Jenis Pekerjaan: ${order.serviceName || '-'}`
     ]);
 }
 
@@ -4030,127 +4103,360 @@ function getShareLocation(prefix) {
     }, () => showToast('Gagal mengambil lokasi.', 'error'));
 }
 
-function openEditKonsumen(userId) {
-    if (!requireAdminAccess()) return;
-    const user = remoteState.adminProfiles.konsumen.find((item) => item.id === userId)
-        || getData().users.konsumen.find((item) => item.id === userId);
-    if (!user) return;
-    document.getElementById('editKonsumenId').value = user.id;
+async function fetchProfileByIdForAdmin(userId) {
+    if (!requireAdminAccess()) return null;
+    const { data } = await withProfileColumnFallback(
+        ({ selectClause }) => supabaseClient
+            .from('profiles')
+            .select(selectClause)
+            .eq('id', userId)
+            .maybeSingle(),
+        { context: `fetchProfileByIdForAdmin:${userId}` }
+    );
+    return sanitizeProfileRecord(data);
+}
+
+async function waitForProfileByIdForAdmin(userId, options = {}) {
+    const timeoutMs = options.timeoutMs || 7000;
+    const intervalMs = options.intervalMs || 350;
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+        const profile = await fetchProfileByIdForAdmin(userId).catch(() => null);
+        if (profile) return profile;
+        await new Promise((resolve) => window.setTimeout(resolve, intervalMs));
+    }
+    throw new Error('Profil user baru belum muncul di Supabase. Coba refresh beberapa detik lagi.');
+}
+
+function findAdminManagedUser(role, userId) {
+    return remoteState.adminProfiles?.[role]?.find((item) => item.id === userId)
+        || getData().users?.[role]?.find((item) => item.id === userId)
+        || null;
+}
+
+function configureManagedUserModal(role, mode) {
+    const isKonsumen = role === 'konsumen';
+    const prefix = isKonsumen ? 'Konsumen' : 'Teknisi';
+    const isCreate = mode === 'create';
+    const title = document.getElementById(`edit${prefix}ModalTitle`);
+    const intro = document.getElementById(`edit${prefix}ModalIntro`);
+    const passwordInput = document.getElementById(`edit${prefix}Password`);
+    const emailInput = document.getElementById(`edit${prefix}Email`);
+    const saveButton = document.getElementById(`btnSave${prefix}Modal`);
+
+    if (title) title.textContent = `${isCreate ? 'Tambah' : 'Edit'} Data ${prefix}`;
+    if (intro) {
+        intro.textContent = isCreate
+            ? `Admin dapat menambahkan akun ${role} manual langsung dari dashboard ini.`
+            : `Admin dapat memperbarui data ${role} yang sudah ada tanpa masuk ke dashboard user tersebut.`;
+    }
+    if (passwordInput) {
+        passwordInput.readOnly = !isCreate;
+        passwordInput.type = isCreate ? 'password' : 'text';
+        passwordInput.placeholder = isCreate ? 'Minimal 8 karakter' : 'Dikelola di Supabase Auth';
+        if (!isCreate) passwordInput.value = 'Dikelola di Supabase Auth';
+    }
+    if (emailInput) {
+        emailInput.readOnly = !isCreate;
+        emailInput.placeholder = isCreate ? 'Opsional. Kosongkan bila tidak dipakai' : '';
+    }
+    if (saveButton) saveButton.textContent = isCreate ? `Tambah ${prefix}` : 'Simpan';
+}
+
+function fillAdminKonsumenModal(user = {}) {
+    document.getElementById('editKonsumenId').value = user.id || '';
     document.getElementById('editKonsumenName').value = user.name || '';
     document.getElementById('editKonsumenUsername').value = user.username || '';
-    document.getElementById('editKonsumenPassword').value = 'Dikelola di Supabase Auth';
-    document.getElementById('editKonsumenEmail').value = user.email || '';
+    document.getElementById('editKonsumenPassword').value = user.id ? 'Dikelola di Supabase Auth' : '';
+    document.getElementById('editKonsumenEmail').value = user.id ? (user.authEmail || user.email || '') : (user.email || '');
     document.getElementById('editKonsumenPhone').value = user.phone || '';
     document.getElementById('editKonsumenBirthDate').value = user.birthDate || '';
     document.getElementById('editKonsumenAge').value = user.age || '';
     document.getElementById('editKonsumenReferral').value = user.referral || '';
+    document.getElementById('editKonsumenDistrict').value = user.district || '';
     document.getElementById('editKonsumenStatus').value = user.status || PROFILE_STATUS_PENDING;
     document.getElementById('editKonsumenAddress').value = user.address || '';
+    document.getElementById('editKonsumenLocationText').value = user.locationText || '';
+}
+
+function collectAdminKonsumenForm() {
+    return {
+        id: document.getElementById('editKonsumenId').value,
+        name: document.getElementById('editKonsumenName').value.trim(),
+        username: document.getElementById('editKonsumenUsername').value.trim(),
+        password: document.getElementById('editKonsumenPassword').value,
+        email: normalizeEmail(document.getElementById('editKonsumenEmail').value),
+        phone: normalizePhone(document.getElementById('editKonsumenPhone').value),
+        birthDate: document.getElementById('editKonsumenBirthDate').value,
+        age: document.getElementById('editKonsumenAge').value,
+        referral: document.getElementById('editKonsumenReferral').value.trim(),
+        district: document.getElementById('editKonsumenDistrict').value.trim(),
+        status: normalizeProfileStatus(document.getElementById('editKonsumenStatus').value),
+        address: document.getElementById('editKonsumenAddress').value.trim(),
+        locationText: document.getElementById('editKonsumenLocationText').value.trim()
+    };
+}
+
+function openAddKonsumenModal() {
+    if (!requireAdminAccess()) return;
+    runtimeState.adminEditor.konsumenMode = 'create';
+    configureManagedUserModal('konsumen', 'create');
+    fillAdminKonsumenModal({ status: PROFILE_STATUS_PENDING });
     document.getElementById('modalEditKonsumen').style.display = 'flex';
+}
+
+function openEditKonsumen(userId) {
+    if (!requireAdminAccess()) return;
+    const user = findAdminManagedUser('konsumen', userId);
+    if (!user) return;
+    runtimeState.adminEditor.konsumenMode = 'edit';
+    configureManagedUserModal('konsumen', 'edit');
+    fillAdminKonsumenModal(user);
+    document.getElementById('modalEditKonsumen').style.display = 'flex';
+}
+
+async function createPublicAccountByAdmin(role, formValues) {
+    if (!requireAdminAccess()) return null;
+    const registerFunctionStatus = await probeEdgeFunctionAvailability('register-public-account');
+    if (!registerFunctionStatus.ok) {
+        throw new Error('Backend register publik untuk input manual admin belum aktif. Deploy Edge Function `register-public-account` terlebih dahulu.');
+    }
+
+    const authResult = await invokeEdgeFunction('register-public-account', {
+        role,
+        username: formValues.username,
+        name: formValues.name,
+        password: formValues.password,
+        email: formValues.email,
+        phone: formValues.phone,
+        address: formValues.address,
+        age: formValues.age,
+        birth_date: formValues.birthDate,
+        district: formValues.district || '',
+        referral: formValues.referral || '',
+        ac_units: [],
+        location_text: formValues.locationText || '',
+        lat: '',
+        lng: '',
+        nik: formValues.nik || '',
+        specialization: formValues.specialization || '',
+        experience: formValues.experience ?? '',
+        status: PROFILE_STATUS_PENDING
+    }, {
+        fallbackMessage: 'Tambah akun publik manual gagal diproses oleh backend register.'
+    });
+    const userId = authResult?.user?.id;
+    const authEmail = normalizeEmail(authResult?.auth_email || authResult?.user?.email);
+    if (!userId) throw new Error('Auth user baru tidak mengembalikan ID yang valid.');
+
+    const createdProfile = await waitForProfileByIdForAdmin(userId);
+    return updateProfileByAdmin(userId, validateProfilePayloadForRole(role, {
+        ...createdProfile,
+        id: userId,
+        role,
+        username: formValues.username,
+        name: formValues.name,
+        email: formValues.email,
+        auth_email: authEmail,
+        phone: formValues.phone,
+        birth_date: formValues.birthDate,
+        age: formValues.age,
+        referral: formValues.referral || '',
+        district: formValues.district || '',
+        address: formValues.address || '',
+        location_text: formValues.locationText || '',
+        status: formValues.status || PROFILE_STATUS_PENDING,
+        verified_at: formValues.status === PROFILE_STATUS_ACTIVE ? new Date().toISOString() : '',
+        verified_by: formValues.status === PROFILE_STATUS_ACTIVE ? (remoteState.profile?.id || '') : '',
+        ac_units: [],
+        nik: formValues.nik || '',
+        specialization: formValues.specialization || '',
+        experience: formValues.experience ?? '',
+        ktp_photo_path: createdProfile.ktpPhotoPath,
+        ktp_photo_url: createdProfile.ktpPhotoUrl,
+        selfie_photo_path: createdProfile.selfiePhotoPath,
+        selfie_photo_url: createdProfile.selfiePhotoUrl
+    }));
 }
 
 async function saveEditKonsumen() {
     if (!requireAdminAccess()) return;
-    const userId = document.getElementById('editKonsumenId').value;
-    const user = remoteState.adminProfiles.konsumen.find((item) => item.id === userId) || getData().users.konsumen.find((item) => item.id === userId);
-    if (!user) return;
-    const username = document.getElementById('editKonsumenUsername').value.trim();
-    if (await isUsernameTakenRemote(username, user.id)) {
+    const form = collectAdminKonsumenForm();
+    const isCreate = runtimeState.adminEditor.konsumenMode === 'create' || !form.id;
+    if (!form.name || !form.username || !form.phone || !form.address) {
+        showToast('Lengkapi data wajib konsumen terlebih dahulu.', 'error');
+        return;
+    }
+    if (isCreate && !String(form.password || '').trim()) {
+        showToast('Password wajib diisi saat menambah konsumen baru.', 'error');
+        return;
+    }
+
+    const existingUser = isCreate ? null : findAdminManagedUser('konsumen', form.id);
+    if (await isUsernameTakenRemote(form.username, existingUser?.id || '')) {
         showToast('Username konsumen sudah dipakai.', 'error');
         return;
     }
+
     try {
-        const nextStatus = normalizeProfileStatus(document.getElementById('editKonsumenStatus').value);
-        await updateProfileByAdmin(user.id, validateProfilePayloadForRole('konsumen', {
-            id: user.id,
-            role: 'konsumen',
-            username,
-            name: document.getElementById('editKonsumenName').value.trim(),
-            email: user.email,
-            phone: normalizePhone(document.getElementById('editKonsumenPhone').value),
-            birth_date: document.getElementById('editKonsumenBirthDate').value,
-            age: document.getElementById('editKonsumenAge').value,
-            referral: document.getElementById('editKonsumenReferral').value.trim(),
-            address: document.getElementById('editKonsumenAddress').value.trim(),
-            district: user.district,
-            location_text: user.locationText,
-            lat: user.lat,
-            lng: user.lng,
-            status: nextStatus,
-            ac_units: getProfileAcUnits(user),
-            verified_at: nextStatus === PROFILE_STATUS_ACTIVE ? (user.verifiedAt || new Date().toISOString()) : user.verifiedAt,
-            verified_by: nextStatus === PROFILE_STATUS_ACTIVE ? (user.verifiedBy || remoteState.profile?.id || '') : user.verifiedBy
-        }));
+        if (isCreate) {
+            await createPublicAccountByAdmin('konsumen', form);
+        } else if (existingUser) {
+            await updateProfileByAdmin(existingUser.id, validateProfilePayloadForRole('konsumen', {
+                id: existingUser.id,
+                role: 'konsumen',
+                username: form.username,
+                name: form.name,
+                email: existingUser.email,
+                auth_email: existingUser.authEmail || existingUser.email,
+                phone: form.phone,
+                birth_date: form.birthDate,
+                age: form.age,
+                referral: form.referral,
+                address: form.address,
+                district: form.district,
+                location_text: form.locationText,
+                lat: existingUser.lat,
+                lng: existingUser.lng,
+                status: form.status,
+                ac_units: getProfileAcUnits(existingUser),
+                verified_at: form.status === PROFILE_STATUS_ACTIVE ? (existingUser.verifiedAt || new Date().toISOString()) : existingUser.verifiedAt,
+                verified_by: form.status === PROFILE_STATUS_ACTIVE ? (existingUser.verifiedBy || remoteState.profile?.id || '') : existingUser.verifiedBy
+            }));
+        }
+
         await loadAdminMasterData();
         closeModal('modalEditKonsumen');
         await renderAdminUsers();
-        showToast('Data konsumen diperbarui di Supabase.', 'success');
+        await renderAdminHome();
+        showToast(isCreate ? 'Konsumen baru berhasil dibuat.' : 'Data konsumen diperbarui di Supabase.', 'success');
     } catch (error) {
-        console.error('Gagal memperbarui konsumen dari admin:', error);
-        showToast(toUserFacingError(error, 'Update konsumen gagal.'), 'error');
+        if (isEdgeFunctionDependencyError(error, 'register-public-account')) {
+            void refreshPublicAuthBackendNotice({ force: true });
+        }
+        console.error('Gagal menyimpan konsumen dari admin:', error);
+        showToast(toUserFacingError(error, isCreate ? 'Tambah konsumen gagal.' : 'Update konsumen gagal.'), 'error');
     }
 }
 
-function openEditTeknisi(userId) {
-    if (!requireAdminAccess()) return;
-    const user = remoteState.adminProfiles.teknisi.find((item) => item.id === userId)
-        || getData().users.teknisi.find((item) => item.id === userId);
-    if (!user) return;
-    populateSpecializationOptions('editTeknisiSpecialization', user.specialization);
-    document.getElementById('editTeknisiId').value = user.id;
+function fillAdminTeknisiModal(user = {}) {
+    populateSpecializationOptions('editTeknisiSpecialization', user.specialization || 'Semua Layanan');
+    document.getElementById('editTeknisiId').value = user.id || '';
     document.getElementById('editTeknisiName').value = user.name || '';
     document.getElementById('editTeknisiUsername').value = user.username || '';
-    document.getElementById('editTeknisiPassword').value = 'Dikelola di Supabase Auth';
-    document.getElementById('editTeknisiEmail').value = user.email || '';
+    document.getElementById('editTeknisiPassword').value = user.id ? 'Dikelola di Supabase Auth' : '';
+    document.getElementById('editTeknisiEmail').value = user.id ? (user.authEmail || user.email || '') : (user.email || '');
     document.getElementById('editTeknisiPhone').value = user.phone || '';
     document.getElementById('editTeknisiNIK').value = user.nik || '';
     document.getElementById('editTeknisiBirthDate').value = user.birthDate || '';
     document.getElementById('editTeknisiAge').value = user.age || '';
     document.getElementById('editTeknisiExperience').value = user.experience || 0;
     document.getElementById('editTeknisiStatus').value = user.status || PROFILE_STATUS_PENDING;
+    document.getElementById('editTeknisiDistrict').value = user.district || '';
     document.getElementById('editTeknisiAddress').value = user.address || '';
+    document.getElementById('editTeknisiLocationText').value = user.locationText || '';
+}
+
+function collectAdminTeknisiForm() {
+    return {
+        id: document.getElementById('editTeknisiId').value,
+        name: document.getElementById('editTeknisiName').value.trim(),
+        username: document.getElementById('editTeknisiUsername').value.trim(),
+        password: document.getElementById('editTeknisiPassword').value,
+        email: normalizeEmail(document.getElementById('editTeknisiEmail').value),
+        phone: normalizePhone(document.getElementById('editTeknisiPhone').value),
+        nik: document.getElementById('editTeknisiNIK').value.trim(),
+        birthDate: document.getElementById('editTeknisiBirthDate').value,
+        age: document.getElementById('editTeknisiAge').value,
+        specialization: document.getElementById('editTeknisiSpecialization').value,
+        experience: Number(document.getElementById('editTeknisiExperience').value || 0),
+        district: document.getElementById('editTeknisiDistrict').value.trim(),
+        status: normalizeProfileStatus(document.getElementById('editTeknisiStatus').value),
+        address: document.getElementById('editTeknisiAddress').value.trim(),
+        locationText: document.getElementById('editTeknisiLocationText').value.trim()
+    };
+}
+
+function openAddTeknisiModal() {
+    if (!requireAdminAccess()) return;
+    runtimeState.adminEditor.teknisiMode = 'create';
+    configureManagedUserModal('teknisi', 'create');
+    fillAdminTeknisiModal({ status: PROFILE_STATUS_PENDING, specialization: 'Semua Layanan' });
+    document.getElementById('modalEditTeknisi').style.display = 'flex';
+}
+
+function openEditTeknisi(userId) {
+    if (!requireAdminAccess()) return;
+    const user = findAdminManagedUser('teknisi', userId);
+    if (!user) return;
+    runtimeState.adminEditor.teknisiMode = 'edit';
+    configureManagedUserModal('teknisi', 'edit');
+    fillAdminTeknisiModal(user);
     document.getElementById('modalEditTeknisi').style.display = 'flex';
 }
 
 async function saveEditTeknisi() {
     if (!requireAdminAccess()) return;
-    const userId = document.getElementById('editTeknisiId').value;
-    const user = remoteState.adminProfiles.teknisi.find((item) => item.id === userId) || getData().users.teknisi.find((item) => item.id === userId);
-    if (!user) return;
-    const username = document.getElementById('editTeknisiUsername').value.trim();
-    if (await isUsernameTakenRemote(username, user.id)) {
+    const form = collectAdminTeknisiForm();
+    const isCreate = runtimeState.adminEditor.teknisiMode === 'create' || !form.id;
+    if (!form.name || !form.username || !form.phone || !form.birthDate || !form.specialization || !form.address) {
+        showToast('Lengkapi data wajib teknisi terlebih dahulu.', 'error');
+        return;
+    }
+    if (isCreate && !String(form.password || '').trim()) {
+        showToast('Password wajib diisi saat menambah teknisi baru.', 'error');
+        return;
+    }
+
+    const existingUser = isCreate ? null : findAdminManagedUser('teknisi', form.id);
+    if (await isUsernameTakenRemote(form.username, existingUser?.id || '')) {
         showToast('Username teknisi sudah dipakai.', 'error');
         return;
     }
+
     try {
-        const nextStatus = normalizeProfileStatus(document.getElementById('editTeknisiStatus').value);
-        await updateProfileByAdmin(user.id, validateProfilePayloadForRole('teknisi', {
-            id: user.id,
-            role: 'teknisi',
-            username,
-            name: document.getElementById('editTeknisiName').value.trim(),
-            email: user.email,
-            phone: normalizePhone(document.getElementById('editTeknisiPhone').value),
-            nik: document.getElementById('editTeknisiNIK').value.trim(),
-            birth_date: document.getElementById('editTeknisiBirthDate').value,
-            age: document.getElementById('editTeknisiAge').value,
-            specialization: document.getElementById('editTeknisiSpecialization').value,
-            experience: Number(document.getElementById('editTeknisiExperience').value || 0),
-            address: document.getElementById('editTeknisiAddress').value.trim(),
-            location_text: user.locationText,
-            lat: user.lat,
-            lng: user.lng,
-            status: nextStatus,
-            verified_at: nextStatus === PROFILE_STATUS_ACTIVE ? (user.verifiedAt || new Date().toISOString()) : user.verifiedAt,
-            verified_by: nextStatus === PROFILE_STATUS_ACTIVE ? (user.verifiedBy || remoteState.profile?.id || '') : user.verifiedBy
-        }));
+        if (isCreate) {
+            await createPublicAccountByAdmin('teknisi', form);
+        } else if (existingUser) {
+            await updateProfileByAdmin(existingUser.id, validateProfilePayloadForRole('teknisi', {
+                id: existingUser.id,
+                role: 'teknisi',
+                username: form.username,
+                name: form.name,
+                email: existingUser.email,
+                auth_email: existingUser.authEmail || existingUser.email,
+                phone: form.phone,
+                nik: form.nik,
+                birth_date: form.birthDate,
+                age: form.age,
+                specialization: form.specialization,
+                experience: form.experience,
+                district: form.district,
+                address: form.address,
+                location_text: form.locationText,
+                lat: existingUser.lat,
+                lng: existingUser.lng,
+                status: form.status,
+                verified_at: form.status === PROFILE_STATUS_ACTIVE ? (existingUser.verifiedAt || new Date().toISOString()) : existingUser.verifiedAt,
+                verified_by: form.status === PROFILE_STATUS_ACTIVE ? (existingUser.verifiedBy || remoteState.profile?.id || '') : existingUser.verifiedBy,
+                ktp_photo_path: existingUser.ktpPhotoPath,
+                ktp_photo_url: existingUser.ktpPhotoUrl,
+                selfie_photo_path: existingUser.selfiePhotoPath,
+                selfie_photo_url: existingUser.selfiePhotoUrl
+            }));
+        }
+
         await loadAdminMasterData();
         closeModal('modalEditTeknisi');
         await renderAdminUsers();
-        showToast('Data teknisi diperbarui di Supabase.', 'success');
+        await renderAdminHome();
+        showToast(isCreate ? 'Teknisi baru berhasil dibuat.' : 'Data teknisi diperbarui di Supabase.', 'success');
     } catch (error) {
-        console.error('Gagal memperbarui teknisi dari admin:', error);
-        showToast(toUserFacingError(error, 'Update teknisi gagal.'), 'error');
+        if (isEdgeFunctionDependencyError(error, 'register-public-account')) {
+            void refreshPublicAuthBackendNotice({ force: true });
+        }
+        console.error('Gagal menyimpan teknisi dari admin:', error);
+        showToast(toUserFacingError(error, isCreate ? 'Tambah teknisi gagal.' : 'Update teknisi gagal.'), 'error');
     }
 }
 
@@ -4186,11 +4492,279 @@ function saveEditAdmin() {
     showToast('Admin dan password auth harus dikelola langsung di Supabase Auth/SQL, bukan disimpan lokal di frontend.', 'warning');
 }
 
-function deleteUser(role, userId) {
+async function deletePublicAccountByAdmin(role, userId) {
+    return invokeEdgeFunction('admin-manage-account', {
+        action: 'delete_public_account',
+        role,
+        userId
+    }, {
+        fallbackMessage: 'Penghapusan akun publik gagal diproses oleh backend admin.'
+    });
+}
+
+async function deleteUser(role, userId) {
     if (!requireAdminAccess()) return;
-    const user = remoteState.adminProfiles?.[role]?.find((item) => item.id === userId) || getData().users?.[role]?.find((item) => item.id === userId);
+    const user = findAdminManagedUser(role, userId);
     if (!user) return;
-    showToast(`Penghapusan ${ROLE_LABELS[role]} ${user.name} harus lewat backend aman atau Supabase Dashboard agar auth dan profiles tetap konsisten.`, 'warning');
+    const warningText = role === 'konsumen'
+        ? `Hapus akun ${user.name}? Akun auth akan dihapus permanen dan pesanan milik konsumen ini juga akan dibersihkan.`
+        : `Hapus akun ${user.name}? Akun auth akan dihapus permanen dan pesanan aktif teknisi ini akan dilepas dari penugasan.`;
+    if (!window.confirm(warningText)) return;
+
+    try {
+        await deletePublicAccountByAdmin(role, userId);
+        await loadAdminMasterData();
+        await renderAdminUsers();
+        await renderAdminOrders();
+        await renderAdminHome();
+        showToast(`Akun ${ROLE_LABELS[role] || role} berhasil dihapus permanen.`, 'success');
+    } catch (error) {
+        if (isEdgeFunctionDependencyError(error, 'admin-manage-account')) {
+            showToast('Backend hapus akun publik admin belum aktif. Deploy Edge Function `admin-manage-account` terlebih dahulu.', 'error');
+            return;
+        }
+        console.error('Gagal menghapus akun publik:', error);
+        showToast(toUserFacingError(error, 'Hapus akun publik gagal.'), 'error');
+    }
+}
+
+function populateAdminOrderFormOptions(selected = {}) {
+    const customerSelect = document.getElementById('adminOrderKonsumen');
+    const serviceSelect = document.getElementById('adminOrderService');
+    const technicianSelect = document.getElementById('adminOrderTeknisi');
+    if (!customerSelect || !serviceSelect || !technicianSelect) return;
+
+    customerSelect.innerHTML = '<option value="">Pilih Konsumen</option>' + remoteState.adminProfiles.konsumen
+        .map((user) => `<option value="${escapeHtml(user.id)}">${escapeHtml(user.name)} - ${escapeHtml(user.username || '-')}</option>`)
+        .join('');
+    serviceSelect.innerHTML = '<option value="">Pilih Layanan</option>' + getServices(false)
+        .map((service) => `<option value="${escapeHtml(service.id)}">${escapeHtml(service.name)}</option>`)
+        .join('');
+    technicianSelect.innerHTML = '<option value="">Belum Ditugaskan</option>' + remoteState.adminProfiles.teknisi
+        .filter((user) => !isProfileDisabled(user))
+        .map((user) => `<option value="${escapeHtml(user.id)}">${escapeHtml(user.name)} - ${escapeHtml(user.specialization || 'Semua Layanan')}</option>`)
+        .join('');
+
+    customerSelect.value = selected.konsumenId || '';
+    serviceSelect.value = selected.serviceId || '';
+    technicianSelect.value = selected.teknisiId || '';
+
+    populateAcSpecOptions('adminOrderBrand', 'brand');
+    populateAcSpecOptions('adminOrderType', 'type');
+    populateAcSpecOptions('adminOrderRefrigerant', 'refrigerant');
+    populateAcSpecOptions('adminOrderCapacity', 'capacity');
+}
+
+function handleAdminOrderKonsumenChange(options = {}) {
+    const userId = document.getElementById('adminOrderKonsumen')?.value || '';
+    const user = findAdminManagedUser('konsumen', userId);
+    if (!user) return;
+    const phoneInput = document.getElementById('adminOrderPhone');
+    const addressInput = document.getElementById('adminOrderAddress');
+    if (phoneInput && (options.force || !phoneInput.value.trim())) {
+        phoneInput.value = user.phone || '';
+    }
+    if (addressInput && (options.force || !addressInput.value.trim())) {
+        addressInput.value = user.address || '';
+    }
+}
+
+function handleAdminOrderServiceChange() {
+    return true;
+}
+
+async function openAddOrderModal() {
+    if (!requireAdminAccess()) return;
+    await loadAdminMasterData();
+    runtimeState.adminEditor.orderMode = 'create';
+    document.getElementById('adminOrderModalTitle').textContent = 'Input Pesanan Manual';
+    document.getElementById('adminOrderModalIntro').textContent = 'Admin dapat membuat pesanan manual untuk konsumen yang sudah terdaftar.';
+    document.getElementById('btnSaveAdminOrderModal').textContent = 'Simpan Pesanan';
+    document.getElementById('adminOrderId').value = '';
+    populateAdminOrderFormOptions();
+    document.getElementById('adminOrderStatus').value = 'Menunggu';
+    document.getElementById('adminOrderDate').value = '';
+    document.getElementById('adminOrderPhone').value = '';
+    document.getElementById('adminOrderAddress').value = '';
+    document.getElementById('adminOrderNotes').value = '';
+    document.getElementById('adminOrderConfirmationText').value = '';
+    setAcSpecFieldValue('adminOrderBrand', 'brand', '');
+    setAcSpecFieldValue('adminOrderType', 'type', '');
+    setAcSpecFieldValue('adminOrderRefrigerant', 'refrigerant', '');
+    setAcSpecFieldValue('adminOrderCapacity', 'capacity', '');
+    document.getElementById('modalOrderForm').style.display = 'flex';
+}
+
+async function openEditOrderModal(orderId) {
+    if (!requireAdminAccess()) return;
+    await loadAdminMasterData();
+    const order = remoteState.adminOrders.find((item) => item.id === orderId);
+    if (!order) return;
+
+    runtimeState.adminEditor.orderMode = 'edit';
+    document.getElementById('adminOrderModalTitle').textContent = `Edit Pesanan ${getOrderLabel(order)}`;
+    document.getElementById('adminOrderModalIntro').textContent = 'Perbarui data pesanan, status pengerjaan, dan penugasan teknisi langsung dari dashboard admin.';
+    document.getElementById('btnSaveAdminOrderModal').textContent = 'Simpan Perubahan';
+    document.getElementById('adminOrderId').value = order.id;
+    populateAdminOrderFormOptions(order);
+    document.getElementById('adminOrderStatus').value = order.status || 'Menunggu';
+    document.getElementById('adminOrderDate').value = order.preferredDate || '';
+    document.getElementById('adminOrderPhone').value = order.phone || '';
+    document.getElementById('adminOrderAddress').value = order.address || '';
+    document.getElementById('adminOrderNotes').value = order.notes || '';
+    document.getElementById('adminOrderConfirmationText').value = order.adminConfirmationText || '';
+    setAcSpecFieldValue('adminOrderBrand', 'brand', order.brand || '');
+    setAcSpecFieldValue('adminOrderType', 'type', order.acType || '');
+    setAcSpecFieldValue('adminOrderRefrigerant', 'refrigerant', order.refrigerant || '');
+    setAcSpecFieldValue('adminOrderCapacity', 'capacity', order.pk || '');
+    document.getElementById('modalOrderForm').style.display = 'flex';
+}
+
+function collectAdminOrderFormValues() {
+    return {
+        id: document.getElementById('adminOrderId').value.trim(),
+        konsumenId: document.getElementById('adminOrderKonsumen').value,
+        serviceId: document.getElementById('adminOrderService').value,
+        teknisiId: document.getElementById('adminOrderTeknisi').value,
+        status: document.getElementById('adminOrderStatus').value,
+        preferredDate: document.getElementById('adminOrderDate').value,
+        phone: normalizePhone(document.getElementById('adminOrderPhone').value),
+        address: document.getElementById('adminOrderAddress').value.trim(),
+        notes: document.getElementById('adminOrderNotes').value.trim(),
+        confirmationText: document.getElementById('adminOrderConfirmationText').value.trim(),
+        brand: getAcSpecFieldValue('adminOrderBrand', 'brand'),
+        acType: getAcSpecFieldValue('adminOrderType', 'type'),
+        refrigerant: getAcSpecFieldValue('adminOrderRefrigerant', 'refrigerant'),
+        capacity: getAcSpecFieldValue('adminOrderCapacity', 'capacity')
+    };
+}
+
+function buildAdminOrderMutationPayload(formValues = {}, existingOrder = null) {
+    const konsumen = findAdminManagedUser('konsumen', formValues.konsumenId);
+    const service = getServices(false).find((item) => item.id === formValues.serviceId);
+    const status = String(formValues.status || 'Menunggu').trim();
+    const teknisi = status === 'Menunggu'
+        ? null
+        : (formValues.teknisiId ? findAdminManagedUser('teknisi', formValues.teknisiId) : null);
+
+    if (!konsumen) throw new Error('Pilih konsumen terlebih dahulu.');
+    if (!service) throw new Error('Pilih layanan terlebih dahulu.');
+    if (status !== 'Menunggu' && !teknisi) {
+        throw new Error('Status selain Menunggu membutuhkan teknisi yang dipilih.');
+    }
+
+    const snapshotOrder = {
+        ...(existingOrder || {}),
+        konsumenName: konsumen.name,
+        serviceName: service.name,
+        preferredDate: formValues.preferredDate || existingOrder?.preferredDate || '',
+        createdAt: existingOrder?.createdAt || new Date().toISOString()
+    };
+
+    return {
+        konsumen_id: konsumen.id,
+        konsumen_name: konsumen.name,
+        service_id: service.id,
+        service_name: service.name,
+        price: Number(service.price || 0),
+        teknisi_id: teknisi?.id || null,
+        teknisi_name: teknisi?.name || null,
+        brand: toNullableText(formValues.brand),
+        ac_type: toNullableText(formValues.acType),
+        pk: toNullableText(formValues.capacity),
+        refrigerant: toNullableText(formValues.refrigerant),
+        preferred_date: toNullableText(formValues.preferredDate),
+        address: toNullableText(formValues.address || konsumen.address),
+        notes: toNullableText(formValues.notes),
+        phone: toNullableText(formValues.phone || konsumen.phone),
+        status,
+        admin_confirmation_text: toNullableText(
+            formValues.confirmationText
+            || (status === 'Ditugaskan' && teknisi ? buildAdminOrderConfirmationMessage(snapshotOrder, teknisi, '') : existingOrder?.adminConfirmationText || '')
+        ),
+        verified_at: status === 'Ditugaskan'
+            ? (existingOrder?.verifiedAt || new Date().toISOString())
+            : toNullableText(existingOrder?.verifiedAt),
+        verified_by: status === 'Ditugaskan'
+            ? (existingOrder?.verifiedBy || remoteState.profile?.id || null)
+            : toNullableText(existingOrder?.verifiedBy)
+    };
+}
+
+async function createOrderByAdmin(payload = {}) {
+    const { data } = await withOrderColumnFallback(
+        ({ selectClause, payload: safePayload }) => supabaseClient
+            .from('orders')
+            .insert(safePayload)
+            .select(selectClause)
+            .single(),
+        {
+            context: 'createOrderByAdmin',
+            payload
+        }
+    );
+    return mapOrderRecord(data, { fallbackSnapshot: payload });
+}
+
+async function saveAdminOrder() {
+    if (!requireAdminAccess()) return;
+    const formValues = collectAdminOrderFormValues();
+    const isCreate = runtimeState.adminEditor.orderMode === 'create' || !formValues.id;
+    const existingOrder = isCreate ? null : remoteState.adminOrders.find((item) => item.id === formValues.id);
+
+    if (!formValues.konsumenId || !formValues.serviceId || !formValues.preferredDate || !formValues.phone || !formValues.address) {
+        showToast('Lengkapi konsumen, layanan, tanggal, telepon, dan alamat pesanan terlebih dahulu.', 'error');
+        return;
+    }
+
+    try {
+        const payload = buildAdminOrderMutationPayload(formValues, existingOrder);
+        if (isCreate) {
+            await createOrderByAdmin(payload);
+        } else if (existingOrder) {
+            await updateOrderByAdmin(existingOrder.id, payload);
+        }
+
+        closeModal('modalOrderForm');
+        await loadAdminMasterData();
+        await renderAdminOrders();
+        await renderAdminHome();
+        showToast(isCreate ? 'Pesanan manual berhasil dibuat.' : 'Pesanan berhasil diperbarui.', 'success');
+    } catch (error) {
+        console.error('Gagal menyimpan pesanan admin:', error);
+        showToast(toUserFacingError(error, isCreate ? 'Tambah pesanan manual gagal.' : 'Update pesanan gagal.'), 'error');
+    }
+}
+
+async function deleteOrderByAdmin(orderId) {
+    if (!requireAdminAccess()) return;
+    const order = remoteState.adminOrders.find((item) => item.id === orderId);
+    if (!order) return;
+    if (!window.confirm(`Hapus pesanan ${getOrderLabel(order)} secara permanen?`)) return;
+
+    try {
+        const { error } = await supabaseClient
+            .from('orders')
+            .delete()
+            .eq('id', orderId);
+        if (error) throw error;
+
+        if (order.proofImagePath) {
+            await deleteImageFromSupabaseStorage({
+                bucket: getPublicUploadBucket(),
+                path: order.proofImagePath,
+                url: order.proofImageUrl
+            }).catch(() => {});
+        }
+
+        await loadAdminMasterData();
+        await renderAdminOrders();
+        await renderAdminHome();
+        showToast(`Pesanan ${getOrderLabel(order)} berhasil dihapus.`, 'success');
+    } catch (error) {
+        console.error('Gagal menghapus pesanan:', error);
+        showToast(toUserFacingError(error, 'Hapus pesanan gagal.'), 'error');
+    }
 }
 
 function openAddServiceModal() {
@@ -7837,7 +8411,9 @@ async function renderAdminOrders() {
             ${tableCell('Aksi', `
                 <div class="btn-action-group">
                     <button class="btn btn-outline btn-xs" onclick="openOrderDetail('${order.id}')">Detail</button>
+                    <button class="btn btn-outline btn-xs" onclick="openEditOrderModal('${order.id}')">Edit</button>
                     <button class="btn btn-primary btn-xs" onclick="openAssignModal('${order.id}')">Assign</button>
+                    <button class="btn btn-danger btn-xs" onclick="deleteOrderByAdmin('${order.id}')">Hapus</button>
                 </div>
             `)}
         </tr>
@@ -7919,11 +8495,12 @@ function renderAdminUserActions(user, role) {
     const approveButton = `<button class="btn btn-primary btn-xs" onclick="verifyPublicUser('${role}', '${user.id}')">Approve</button>`;
     const rejectButton = `<button class="btn btn-outline btn-xs" onclick="setPublicUserStatus('${role}', '${user.id}', '${PROFILE_STATUS_REJECTED}')">Tolak</button>`;
     const disableButton = `<button class="btn btn-outline btn-xs" onclick="setPublicUserStatus('${role}', '${user.id}', '${PROFILE_STATUS_DISABLED}')">Nonaktifkan</button>`;
-    const editButton = `<button class="btn btn-outline btn-xs" onclick="${editTarget}('${user.id}')">Detail</button>`;
+    const editButton = `<button class="btn btn-outline btn-xs" onclick="${editTarget}('${user.id}')">Edit</button>`;
+    const deleteButton = `<button class="btn btn-danger btn-xs" onclick="deleteUser('${role}', '${user.id}')">Hapus</button>`;
 
-    if (isProfilePending(user)) return `${approveButton} ${rejectButton} ${editButton}`;
-    if (isProfileApproved(user)) return `${disableButton} ${editButton}`;
-    return `${approveButton} ${editButton}`;
+    if (isProfilePending(user)) return `${approveButton} ${rejectButton} ${editButton} ${deleteButton}`;
+    if (isProfileApproved(user)) return `${disableButton} ${editButton} ${deleteButton}`;
+    return `${approveButton} ${editButton} ${deleteButton}`;
 }
 
 function renderAdminKonsumenTable(users = []) {

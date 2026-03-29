@@ -52,6 +52,7 @@ Frontend statis Indo Sejuk AC dengan source of truth utama di Supabase untuk:
 - `supabase/functions/register-public-account`
 - `supabase/functions/profile-password-login`
 - `supabase/functions/request-password-reset`
+- `supabase/functions/admin-manage-account`
 - `supabase/functions/sync-user-to-github`
 - `supabase/functions/sync-storage-to-github`
 
@@ -102,12 +103,14 @@ Setelah update ini, deploy ulang:
 - Edge Function `register-public-account`
 - Edge Function `profile-password-login`
 - Edge Function `request-password-reset`
+- Edge Function `admin-manage-account`
 
 Contoh CLI:
 
 - `supabase functions deploy register-public-account --project-ref zqjretruylhumkehtcli`
 - `supabase functions deploy profile-password-login --project-ref zqjretruylhumkehtcli`
 - `supabase functions deploy request-password-reset --project-ref zqjretruylhumkehtcli`
+- `supabase functions deploy admin-manage-account --project-ref zqjretruylhumkehtcli`
 
 Jika browser menampilkan error seperti `Requested function was not found` atau `Failed to send a request to the Edge Function`, itu berarti frontend sudah berjalan tetapi function live di project Supabase belum tersedia / belum bisa dijangkau.
 

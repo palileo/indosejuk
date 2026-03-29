@@ -1,12 +1,13 @@
-const CACHE_VERSION = 'indo-sejuk-shell-v20260328-1';
+const ASSET_VERSION = '20260329-3';
+const CACHE_VERSION = `indo-sejuk-shell-v${ASSET_VERSION}`;
 const SHELL_CACHE = `${CACHE_VERSION}-html`;
 const STATIC_CACHE = `${CACHE_VERSION}-static`;
 const OFFLINE_URL = './offline.html';
 const APP_SHELL = [
     './',
     './index.html',
-    './style.css',
-    './app.js?v=20260328-1',
+    `./style.css?v=${ASSET_VERSION}`,
+    `./app.js?v=${ASSET_VERSION}`,
     './manifest.webmanifest',
     OFFLINE_URL,
     './logo.png',

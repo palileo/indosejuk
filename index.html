@@ -16,7 +16,7 @@
     <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
     <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
     <link rel="dns-prefetch" href="//cdn.jsdelivr.net">
-    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="style.css?v=20260329-3">
 </head>
 <body>
     <div class="connection-status" id="connectionStatusBanner" hidden role="status" aria-live="polite"></div>
@@ -1332,9 +1332,12 @@
 
             <!-- Admin: All Orders -->
             <section class="view" id="viewAdminOrders" style="display:none;">
-                <div class="page-header">
-                    <h2>Manajemen Pesanan</h2>
-                    <p>Verifikasi pesanan masuk, tugaskan teknisi, lalu kirim konfirmasi ke konsumen</p>
+                <div class="page-header page-header-with-actions">
+                    <div>
+                        <h2>Manajemen Pesanan</h2>
+                        <p>Verifikasi pesanan masuk, tugaskan teknisi, dan kelola input pesanan manual dari admin.</p>
+                    </div>
+                    <button type="button" class="btn btn-primary btn-sm" onclick="openAddOrderModal()">Input Pesanan Manual</button>
                 </div>
 
                 <div class="filter-bar">
@@ -1388,7 +1391,10 @@
                 </div>
 
                 <div class="card" id="adminUserKonsumenCard">
-                    <div class="card-header"><h3>Daftar Konsumen</h3></div>
+                    <div class="card-header card-header-space-between">
+                        <h3>Daftar Konsumen</h3>
+                        <button type="button" class="btn btn-primary btn-sm" onclick="openAddKonsumenModal()">Tambah Konsumen</button>
+                    </div>
                     <p class="text-muted text-sm">Akun baru default berstatus Menunggu Verifikasi sampai admin approve.</p>
                     <div class="table-responsive">
                         <table class="data-table">
@@ -1414,7 +1420,10 @@
                 </div>
 
                 <div class="card" id="adminUserTeknisiCard" style="display:none;">
-                    <div class="card-header"><h3>Daftar Teknisi</h3></div>
+                    <div class="card-header card-header-space-between">
+                        <h3>Daftar Teknisi</h3>
+                        <button type="button" class="btn btn-primary btn-sm" onclick="openAddTeknisiModal()">Tambah Teknisi</button>
+                    </div>
                     <p class="text-muted text-sm">Admin dapat approve, tolak, atau nonaktifkan teknisi tanpa bergantung pada verifikasi email register.</p>
                     <div class="table-responsive">
                         <table class="data-table">
@@ -1615,11 +1624,12 @@
     <div class="modal-overlay" id="modalEditKonsumen" style="display:none;">
         <div class="modal">
             <div class="modal-header">
-                <h3>Edit Data Konsumen</h3>
+                <h3 id="editKonsumenModalTitle">Edit Data Konsumen</h3>
                 <button type="button" class="modal-close" onclick="closeModal('modalEditKonsumen')">&times;</button>
             </div>
                 <div class="modal-body">
                     <input type="hidden" id="editKonsumenId">
+                    <p class="text-muted text-sm" id="editKonsumenModalIntro">Admin dapat membuat akun konsumen manual atau memperbarui data profil yang sudah ada.</p>
                     <div class="form-grid modal-form-grid">
                         <div class="form-group">
                             <label for="editKonsumenName">Nama Lengkap</label>
@@ -1631,11 +1641,11 @@
                         </div>
                         <div class="form-group">
                             <label for="editKonsumenPassword">Password Auth</label>
-                            <input type="text" id="editKonsumenPassword" readonly placeholder="Dikelola di Supabase Auth">
+                            <input type="password" id="editKonsumenPassword" placeholder="Isi saat tambah akun baru">
                         </div>
                         <div class="form-group">
                             <label for="editKonsumenEmail">Email Auth</label>
-                            <input type="email" id="editKonsumenEmail" readonly>
+                            <input type="email" id="editKonsumenEmail" placeholder="Opsional. Kosongkan bila tidak dipakai">
                         </div>
                         <div class="form-group">
                             <label for="editKonsumenPhone">Telepon</label>
@@ -1654,6 +1664,10 @@
                             <input type="text" id="editKonsumenReferral">
                         </div>
                         <div class="form-group">
+                            <label for="editKonsumenDistrict">Kecamatan / Area</label>
+                            <input type="text" id="editKonsumenDistrict" placeholder="Contoh: Purwokerto Selatan, Banyumas">
+                        </div>
+                        <div class="form-group">
                             <label for="editKonsumenStatus">Status</label>
                             <select id="editKonsumenStatus">
                                 <option value="Menunggu Verifikasi">Menunggu Verifikasi</option>
@@ -1666,11 +1680,15 @@
                             <label for="editKonsumenAddress">Alamat</label>
                             <textarea id="editKonsumenAddress" rows="3"></textarea>
                         </div>
+                        <div class="form-group full-width">
+                            <label for="editKonsumenLocationText">Teks Lokasi / Maps</label>
+                            <textarea id="editKonsumenLocationText" rows="2" placeholder="Tempel link Maps atau teks share lokasi"></textarea>
+                        </div>
                 </div>
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-outline" onclick="closeModal('modalEditKonsumen')">Batal</button>
-                <button type="button" class="btn btn-primary" onclick="saveEditKonsumen()">Simpan</button>
+                <button type="button" class="btn btn-primary" id="btnSaveKonsumenModal" onclick="saveEditKonsumen()">Simpan</button>
             </div>
         </div>
     </div>
@@ -1678,11 +1696,12 @@
     <div class="modal-overlay" id="modalEditTeknisi" style="display:none;">
         <div class="modal">
             <div class="modal-header">
-                <h3>Edit Data Teknisi</h3>
+                <h3 id="editTeknisiModalTitle">Edit Data Teknisi</h3>
                 <button type="button" class="modal-close" onclick="closeModal('modalEditTeknisi')">&times;</button>
             </div>
                 <div class="modal-body">
                     <input type="hidden" id="editTeknisiId">
+                    <p class="text-muted text-sm" id="editTeknisiModalIntro">Admin dapat membuat akun teknisi manual atau memperbarui data teknisi yang sudah ada.</p>
                     <div class="form-grid modal-form-grid">
                         <div class="form-group">
                             <label for="editTeknisiName">Nama Lengkap</label>
@@ -1694,11 +1713,11 @@
                         </div>
                         <div class="form-group">
                             <label for="editTeknisiPassword">Password Auth</label>
-                            <input type="text" id="editTeknisiPassword" readonly placeholder="Dikelola di Supabase Auth">
+                            <input type="password" id="editTeknisiPassword" placeholder="Isi saat tambah akun baru">
                         </div>
                         <div class="form-group">
                             <label for="editTeknisiEmail">Email Auth</label>
-                            <input type="email" id="editTeknisiEmail" readonly>
+                            <input type="email" id="editTeknisiEmail" placeholder="Opsional. Kosongkan bila tidak dipakai">
                         </div>
                         <div class="form-group">
                             <label for="editTeknisiPhone">Telepon</label>
@@ -1736,15 +1755,111 @@
                                 <option value="Nonaktif">Nonaktif</option>
                             </select>
                         </div>
+                        <div class="form-group">
+                            <label for="editTeknisiDistrict">Kecamatan / Area</label>
+                            <input type="text" id="editTeknisiDistrict" placeholder="Contoh: Purwokerto Timur, Banyumas">
+                        </div>
                         <div class="form-group full-width">
                             <label for="editTeknisiAddress">Alamat Domisili</label>
                             <textarea id="editTeknisiAddress" rows="3"></textarea>
+                        </div>
+                        <div class="form-group full-width">
+                            <label for="editTeknisiLocationText">Teks Lokasi / Maps</label>
+                            <textarea id="editTeknisiLocationText" rows="2" placeholder="Tempel link Maps atau teks share lokasi"></textarea>
                         </div>
                     </div>
                 </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-outline" onclick="closeModal('modalEditTeknisi')">Batal</button>
-                <button type="button" class="btn btn-primary" onclick="saveEditTeknisi()">Simpan</button>
+                <button type="button" class="btn btn-primary" id="btnSaveTeknisiModal" onclick="saveEditTeknisi()">Simpan</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="modalOrderForm" style="display:none;">
+        <div class="modal modal-xl modal-scrollable">
+            <div class="modal-header">
+                <h3 id="adminOrderModalTitle">Input Pesanan Manual</h3>
+                <button type="button" class="modal-close" onclick="closeModal('modalOrderForm')">&times;</button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" id="adminOrderId">
+                <p class="text-muted text-sm" id="adminOrderModalIntro">Admin dapat membuat pesanan manual, mengubah data pesanan, serta mengatur status dan penugasan teknisi secara langsung.</p>
+                <div class="form-grid modal-form-grid">
+                    <div class="form-group">
+                        <label for="adminOrderKonsumen">Konsumen</label>
+                        <select id="adminOrderKonsumen" onchange="handleAdminOrderKonsumenChange()"></select>
+                    </div>
+                    <div class="form-group">
+                        <label for="adminOrderService">Layanan</label>
+                        <select id="adminOrderService" onchange="handleAdminOrderServiceChange()"></select>
+                    </div>
+                    <div class="form-group">
+                        <label for="adminOrderTeknisi">Teknisi</label>
+                        <select id="adminOrderTeknisi"></select>
+                    </div>
+                    <div class="form-group">
+                        <label for="adminOrderStatus">Status</label>
+                        <select id="adminOrderStatus">
+                            <option value="Menunggu">Menunggu</option>
+                            <option value="Ditugaskan">Ditugaskan</option>
+                            <option value="Dikerjakan">Dikerjakan</option>
+                            <option value="Selesai">Selesai</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="adminOrderDate">Tanggal Preferensi</label>
+                        <input type="date" id="adminOrderDate">
+                    </div>
+                    <div class="form-group">
+                        <label for="adminOrderPhone">No. Telepon</label>
+                        <input type="tel" id="adminOrderPhone" placeholder="08xx-xxxx-xxxx">
+                    </div>
+                    <div class="form-group">
+                        <label for="adminOrderBrand">Merk AC</label>
+                        <select id="adminOrderBrand" onchange="handleAcOptionSelectChange('adminOrderBrand', 'adminOrderBrandOtherWrap')"></select>
+                        <div class="conditional-input" id="adminOrderBrandOtherWrap" hidden>
+                            <input type="text" id="adminOrderBrandOther" placeholder="Tulis merk AC lainnya">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="adminOrderType">Jenis AC</label>
+                        <select id="adminOrderType" onchange="handleAcOptionSelectChange('adminOrderType', 'adminOrderTypeOtherWrap')"></select>
+                        <div class="conditional-input" id="adminOrderTypeOtherWrap" hidden>
+                            <input type="text" id="adminOrderTypeOther" placeholder="Tulis jenis AC lainnya">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="adminOrderCapacity">Kapasitas AC</label>
+                        <select id="adminOrderCapacity" onchange="handleAcOptionSelectChange('adminOrderCapacity', 'adminOrderCapacityOtherWrap')"></select>
+                        <div class="conditional-input" id="adminOrderCapacityOtherWrap" hidden>
+                            <input type="text" id="adminOrderCapacityOther" placeholder="Tulis kapasitas AC lainnya">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="adminOrderRefrigerant">Refrigerant</label>
+                        <select id="adminOrderRefrigerant" onchange="handleAcOptionSelectChange('adminOrderRefrigerant', 'adminOrderRefrigerantOtherWrap')"></select>
+                        <div class="conditional-input" id="adminOrderRefrigerantOtherWrap" hidden>
+                            <input type="text" id="adminOrderRefrigerantOther" placeholder="Tulis refrigerant lainnya">
+                        </div>
+                    </div>
+                    <div class="form-group full-width">
+                        <label for="adminOrderAddress">Alamat Lengkap</label>
+                        <textarea id="adminOrderAddress" rows="3" placeholder="Alamat lengkap lokasi pekerjaan"></textarea>
+                    </div>
+                    <div class="form-group full-width">
+                        <label for="adminOrderNotes">Catatan Tambahan</label>
+                        <textarea id="adminOrderNotes" rows="2" placeholder="Catatan tambahan untuk pesanan ini"></textarea>
+                    </div>
+                    <div class="form-group full-width">
+                        <label for="adminOrderConfirmationText">Teks Konfirmasi Admin</label>
+                        <textarea id="adminOrderConfirmationText" rows="3" placeholder="Opsional. Kosongkan untuk memakai teks standar saat assign."></textarea>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline" onclick="closeModal('modalOrderForm')">Batal</button>
+                <button type="button" class="btn btn-primary" id="btnSaveAdminOrderModal" onclick="saveAdminOrder()">Simpan Pesanan</button>
             </div>
         </div>
     </div>
@@ -2059,7 +2174,7 @@
         }, window.INDOSEJUK_RUNTIME_CONFIG || {});
     </script>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2" defer></script>
-    <script src="app.js?v=20260328-1" defer></script>
+    <script src="app.js?v=20260329-3" defer></script>
 </body>
 </html>
 
