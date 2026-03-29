@@ -16,7 +16,7 @@
     <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
     <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
     <link rel="dns-prefetch" href="//cdn.jsdelivr.net">
-    <link rel="stylesheet" href="style.css?v=20260329-4">
+    <link rel="stylesheet" href="style.css?v=20260329-5">
 </head>
 <body>
     <div class="connection-status" id="connectionStatusBanner" hidden role="status" aria-live="polite"></div>
@@ -29,8 +29,8 @@
                     <img src="image/logo.png" alt="Logo Indo Sejuk AC" width="40" height="40" decoding="async">
                 </div>
                 <div class="brand-text">
-                    <h1>Indo Sejuk AC</h1>
-                    <span class="brand-tagline">Solusi AC Sejuk & Terpercaya di Banyumas</span>
+                    <h1 id="appBrandTitle">Indo Sejuk AC</h1>
+                    <span class="brand-tagline" id="appBrandTagline">Solusi AC Sejuk & Terpercaya di Banyumas</span>
                 </div>
             </div>
             <div class="header-right">
@@ -1251,7 +1251,7 @@
                 <div class="page-header page-header-with-actions">
                     <div>
                         <h2>Dashboard Admin</h2>
-                        <p>Pantau seluruh operasional Indo Sejuk AC di Banyumas.</p>
+                        <p>Indo Sejuk AC Admin untuk memantau seluruh operasional website dan aplikasi di Banyumas.</p>
                     </div>
                     <button type="button" class="btn btn-outline btn-sm" onclick="goToLanding()">Kembali ke Beranda Utama</button>
                 </div>
@@ -1299,8 +1299,8 @@
                 <div class="admin-hero-banner">
                     <img src="image/technician-1.png" alt="AC Technician at Work" loading="lazy" decoding="async" width="1280" height="720">
                     <div class="admin-hero-overlay">
-                        <h3>Indo Sejuk AC - Banyumas</h3>
-                        <p>Pusat kendali operasional layanan service AC profesional</p>
+                        <h3>Indo Sejuk AC Admin</h3>
+                        <p>Pusat kendali operasional website dan aplikasi layanan service AC profesional</p>
                     </div>
                 </div>
 
@@ -2203,7 +2203,7 @@
         }, window.INDOSEJUK_RUNTIME_CONFIG || {});
     </script>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2" defer></script>
-    <script src="app.js?v=20260329-4" defer></script>
+    <script src="app.js?v=20260329-5" defer></script>
 </body>
 </html>
 

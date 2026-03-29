@@ -1,4 +1,4 @@
-const ASSET_VERSION = '20260329-4';
+const ASSET_VERSION = '20260329-5';
 const CACHE_VERSION = `indo-sejuk-shell-v${ASSET_VERSION}`;
 const SHELL_CACHE = `${CACHE_VERSION}-html`;
 const STATIC_CACHE = `${CACHE_VERSION}-static`;

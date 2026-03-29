@@ -12,11 +12,12 @@ const supabaseClient = window.supabase?.createClient
 const STORAGE_KEY = 'indoSejukACData';
 const LEGACY_STORAGE_KEY = 'sejukac_data';
 const SCHEMA_VERSION = 2;
-const APP_BUILD_VERSION = '20260329-4';
+const APP_BUILD_VERSION = '20260329-5';
 const FALLBACK_IMAGE = 'image/logo.png';
 const OCR_CDN_URL = 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js';
 const SERVICE_WORKER_URL = `./sw.js?v=${APP_BUILD_VERSION}`;
 const SERVICE_WORKER_UPDATE_INTERVAL_MS = 5 * 60 * 1000;
+const LIVE_DATA_SYNC_INTERVAL_MS = 15 * 1000;
 const DEFAULT_ADMIN_WHATSAPP = '08970788800';
 const PROFILE_STATUS_PENDING = 'Menunggu Verifikasi';
 const PROFILE_STATUS_ACTIVE = 'Aktif';
@@ -285,6 +286,10 @@ const runtimeState = {
     serviceWorkerLifecycleBound: false,
     serviceWorkerReloadPending: false,
     serviceWorkerUpdateIntervalId: null,
+    liveDataSyncBound: false,
+    liveDataSyncIntervalId: null,
+    liveDataSyncInFlight: false,
+    liveDataSyncSignature: '',
     connectionBannerTimer: null,
     activeViewRenderToken: 0,
     signedImageUrlCache: {},
@@ -2619,6 +2624,7 @@ function showLanding() {
     setBodyAppMode('public');
     syncAdminAccessUI();
     switchLoginRole(document.getElementById('loginRole')?.value || 'konsumen');
+    syncAppBranding(null);
     syncInstallPromptUI();
     syncConnectionStatusBanner();
     renderDefaultAccountList();
@@ -6811,6 +6817,139 @@ function applySupabaseSession(profile) {
     return remoteState.profile;
 }
 
+function syncAppBranding(profile = remoteState.profile) {
+    const isAdmin = isAdminProfile(profile);
+    const titleEl = document.getElementById('appBrandTitle');
+    const taglineEl = document.getElementById('appBrandTagline');
+    const pageTitle = isAdmin
+        ? 'Indo Sejuk AC Admin - Dashboard Operasional'
+        : 'Indo Sejuk AC - Solusi AC Sejuk & Terpercaya di Banyumas';
+    const brandTitle = isAdmin ? 'Indo Sejuk AC Admin' : 'Indo Sejuk AC';
+    const brandTagline = isAdmin
+        ? 'Pusat kendali website dan aplikasi Indo Sejuk AC'
+        : 'Solusi AC Sejuk & Terpercaya di Banyumas';
+
+    if (titleEl) titleEl.textContent = brandTitle;
+    if (taglineEl) taglineEl.textContent = brandTagline;
+    document.title = pageTitle;
+
+    const appleTitleMeta = document.querySelector('meta[name="apple-mobile-web-app-title"]');
+    if (appleTitleMeta) appleTitleMeta.setAttribute('content', brandTitle);
+}
+
+function buildProfileSyncSignature(profile = {}) {
+    return [
+        profile.id || '',
+        profile.role || '',
+        profile.status || '',
+        profile.name || '',
+        profile.username || '',
+        profile.phone || '',
+        profile.address || '',
+        profile.updatedAt || '',
+        profile.verifiedAt || ''
+    ].join('|');
+}
+
+function buildOrderSyncSignature(orders = []) {
+    return orders.map((order) => [
+        order.id || '',
+        order.status || '',
+        order.konsumenId || '',
+        order.teknisiId || '',
+        order.serviceId || '',
+        order.preferredDate || '',
+        order.updatedAt || order.createdAt || '',
+        order.adminConfirmationText || ''
+    ].join('|')).join('||');
+}
+
+function buildManagedProfileSyncSignature(profiles = []) {
+    return profiles.map((profile) => [
+        profile.id || '',
+        profile.role || '',
+        profile.status || '',
+        profile.name || '',
+        profile.username || '',
+        profile.updatedAt || profile.joinedAt || '',
+        profile.verifiedAt || ''
+    ].join('|')).join('||');
+}
+
+function getCurrentLiveDataSyncSignature() {
+    const profile = remoteState.profile || {};
+    if (isAdminProfile(profile)) {
+        return [
+            buildProfileSyncSignature(profile),
+            buildOrderSyncSignature(remoteState.adminOrders),
+            buildManagedProfileSyncSignature(remoteState.adminProfiles.konsumen),
+            buildManagedProfileSyncSignature(remoteState.adminProfiles.teknisi),
+            buildManagedProfileSyncSignature(remoteState.adminProfiles.admin)
+        ].join('###');
+    }
+
+    return [
+        buildProfileSyncSignature(profile),
+        buildOrderSyncSignature(remoteState.currentOrders)
+    ].join('###');
+}
+
+function hasOpenModalOverlay() {
+    return Array.from(document.querySelectorAll('.modal-overlay')).some((element) => element instanceof HTMLElement && element.style.display === 'flex');
+}
+
+function shouldDeferLiveDataRender() {
+    return hasOpenModalOverlay()
+        || Boolean(runtimeState.profileEditor.konsumen?.isEditing)
+        || Boolean(runtimeState.konsumenUnitDraft?.active);
+}
+
+async function syncLiveRoleData(options = {}) {
+    if (!remoteState.profile || !canUseSupabase()) return false;
+    if (runtimeState.liveDataSyncInFlight) return false;
+
+    runtimeState.liveDataSyncInFlight = true;
+    const previousSignature = runtimeState.liveDataSyncSignature || getCurrentLiveDataSyncSignature();
+
+    try {
+        await loadAccessibleProfileFromSession({ silent: true });
+        syncAppBranding(remoteState.profile);
+        const nextSignature = getCurrentLiveDataSyncSignature();
+        const changed = nextSignature !== previousSignature;
+        runtimeState.liveDataSyncSignature = nextSignature;
+
+        if (!currentView) return changed;
+        if (!options.forceRender && !changed) return changed;
+        if (shouldDeferLiveDataRender()) return changed;
+
+        renderAppShell();
+        await renderCurrentView('', { skipRemoteLoad: true });
+        return changed;
+    } catch (error) {
+        console.error('Sinkronisasi data live gagal:', error);
+        return false;
+    } finally {
+        runtimeState.liveDataSyncInFlight = false;
+    }
+}
+
+function startLiveDataSync() {
+    if (runtimeState.liveDataSyncBound) return;
+
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible' && remoteState.profile) {
+            void syncLiveRoleData({ forceRender: true });
+        }
+    });
+
+    runtimeState.liveDataSyncIntervalId = window.setInterval(() => {
+        if (document.visibilityState !== 'visible' || !remoteState.profile) return;
+        void syncLiveRoleData();
+    }, LIVE_DATA_SYNC_INTERVAL_MS);
+
+    runtimeState.liveDataSyncBound = true;
+}
+
 function switchLoginRole(role, element) {
     const safeRole = ['konsumen', 'teknisi', 'admin'].includes(role) ? role : 'konsumen';
 
@@ -7322,9 +7461,12 @@ function renderAppShell() {
     if (!user) return;
     currentRole = user.role;
     setBodyAppMode('app');
+    syncAppBranding(user);
     document.getElementById('headerAvatar').textContent = (user.name || 'U').charAt(0).toUpperCase();
     document.getElementById('headerUserName').textContent = user.name || 'User';
-    document.getElementById('headerUserRole').textContent = ROLE_LABELS[user.role] || user.role;
+    document.getElementById('headerUserRole').textContent = user.role === 'admin'
+        ? 'Indo Sejuk AC Admin'
+        : (ROLE_LABELS[user.role] || user.role);
 
     const navHtml = renderNavMarkup(user.role);
     document.getElementById('sidebarNav').innerHTML = navHtml;
@@ -7549,6 +7691,7 @@ async function logoutUser(showMessage = true) {
     }
 
     resetToPublicLanding(showMessage ? 'Anda berhasil logout.' : '');
+    syncAppBranding(null);
 }
 
 async function applyResolvedAuthSession(session) {
@@ -8351,7 +8494,7 @@ async function renderTeknisiUpload() {
     ` : '';
 }
 
-async function renderCurrentView(prefill = '') {
+async function renderCurrentView(prefill = '', options = {}) {
     if (currentView === 'konsumen-home') await renderKonsumenHome();
     if (currentView === 'konsumen-order') renderKonsumenOrder(prefill);
     if (currentView === 'konsumen-history') await renderKonsumenHistory();
@@ -8362,17 +8505,17 @@ async function renderCurrentView(prefill = '') {
     if (currentView === 'teknisi-profile') renderTeknisiProfile();
     if (currentView === 'teknisi-docs') await renderTeknisiDocs();
     if (currentView === 'teknisi-upload') await renderTeknisiUpload();
-    if (currentView === 'admin-home') await renderAdminHome();
-    if (currentView === 'admin-orders') await renderAdminOrders();
-    if (currentView === 'admin-history') await renderAdminHistory();
-    if (currentView === 'admin-users') await renderAdminUsers();
+    if (currentView === 'admin-home') await renderAdminHome(options);
+    if (currentView === 'admin-orders') await renderAdminOrders(options);
+    if (currentView === 'admin-history') await renderAdminHistory(options);
+    if (currentView === 'admin-users') await renderAdminUsers(options);
 }
 
-async function renderAdminHome() {
+async function renderAdminHome(options = {}) {
     if (!requireAdminAccess()) return;
     setMetricLoading(['adminTotalOrders', 'adminTotalRevenue', 'adminTotalTeknisi', 'adminPendingOrders']);
     renderTableLoading('adminRecentOrdersBody', 6, 4);
-    await loadAdminMasterData();
+    if (!options.skipRemoteLoad) await loadAdminMasterData();
     const orders = remoteState.adminOrders;
     const teknisi = remoteState.adminProfiles.teknisi;
 
@@ -8394,10 +8537,10 @@ async function renderAdminHome() {
     `).join('') : '<tr><td colspan="6" class="empty-state">Belum ada pesanan</td></tr>';
 }
 
-async function renderAdminOrders() {
+async function renderAdminOrders(options = {}) {
     if (!requireAdminAccess()) return;
     renderTableLoading('adminAllOrdersBody', 9, 4);
-    await loadAdminMasterData();
+    if (!options.skipRemoteLoad) await loadAdminMasterData();
     const filter = document.getElementById('adminFilterStatus').value;
     const orders = remoteState.adminOrders.filter((order) => filter === 'all' || order.status === filter);
     const body = document.getElementById('adminAllOrdersBody');
@@ -8424,10 +8567,10 @@ async function renderAdminOrders() {
     `).join('') : '<tr><td colspan="9" class="empty-state">Belum ada pesanan</td></tr>';
 }
 
-async function renderAdminHistory() {
+async function renderAdminHistory(options = {}) {
     if (!requireAdminAccess()) return;
     renderTableLoading('adminHistoryOrdersBody', 8, 4);
-    await loadAdminMasterData();
+    if (!options.skipRemoteLoad) await loadAdminMasterData();
     const body = document.getElementById('adminHistoryOrdersBody');
     if (!body) return;
 
@@ -8455,7 +8598,7 @@ async function renderAdminHistory() {
     `).join('') : '<tr><td colspan="8" class="empty-state">Belum ada riwayat pesanan selesai</td></tr>';
 }
 
-async function renderAdminUsers() {
+async function renderAdminUsers(options = {}) {
     if (!requireAdminAccess()) return;
     renderAdminServicesTable();
     renderAdminImageCatalogTable();
@@ -8465,7 +8608,7 @@ async function renderAdminUsers() {
     renderTableLoading('adminAdminListBody', 5, 3);
 
     try {
-        await loadAdminMasterData();
+        if (!options.skipRemoteLoad) await loadAdminMasterData();
         renderAdminKonsumenTable(remoteState.adminProfiles.konsumen);
         renderAdminTeknisiTable(remoteState.adminProfiles.teknisi);
         await renderAdminFotoUnitTable(remoteState.adminProfiles.konsumen);
@@ -8961,6 +9104,7 @@ async function initApp() {
     syncAdminAccessUI();
     syncLoginRoleCopy('konsumen');
     initDomEvents();
+    startLiveDataSync();
     syncConnectionStatusBanner();
     syncInstallPromptUI();
     void refreshPublicAuthBackendNotice();
