@@ -12,7 +12,7 @@ const supabaseClient = window.supabase?.createClient
 const STORAGE_KEY = 'indoSejukACData';
 const LEGACY_STORAGE_KEY = 'sejukac_data';
 const SCHEMA_VERSION = 2;
-const APP_BUILD_VERSION = '20260329-3';
+const APP_BUILD_VERSION = '20260329-4';
 const FALLBACK_IMAGE = 'image/logo.png';
 const OCR_CDN_URL = 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js';
 const SERVICE_WORKER_URL = `./sw.js?v=${APP_BUILD_VERSION}`;
@@ -2591,6 +2591,7 @@ function getNavItems(role) {
     return [
         sharedHome,
         { id: 'admin-orders', label: 'Pesanan', icon: navIcon('grid') },
+        { id: 'admin-history', label: 'Riwayat', icon: navIcon('clock') },
         { id: 'admin-users', label: 'Data Master', icon: navIcon('users') }
     ];
 }
@@ -4728,6 +4729,7 @@ async function saveAdminOrder() {
         closeModal('modalOrderForm');
         await loadAdminMasterData();
         await renderAdminOrders();
+        await renderAdminHistory();
         await renderAdminHome();
         showToast(isCreate ? 'Pesanan manual berhasil dibuat.' : 'Pesanan berhasil diperbarui.', 'success');
     } catch (error) {
@@ -4759,6 +4761,7 @@ async function deleteOrderByAdmin(orderId) {
 
         await loadAdminMasterData();
         await renderAdminOrders();
+        await renderAdminHistory();
         await renderAdminHome();
         showToast(`Pesanan ${getOrderLabel(order)} berhasil dihapus.`, 'success');
     } catch (error) {
@@ -8361,6 +8364,7 @@ async function renderCurrentView(prefill = '') {
     if (currentView === 'teknisi-upload') await renderTeknisiUpload();
     if (currentView === 'admin-home') await renderAdminHome();
     if (currentView === 'admin-orders') await renderAdminOrders();
+    if (currentView === 'admin-history') await renderAdminHistory();
     if (currentView === 'admin-users') await renderAdminUsers();
 }
 
@@ -8418,6 +8422,37 @@ async function renderAdminOrders() {
             `)}
         </tr>
     `).join('') : '<tr><td colspan="9" class="empty-state">Belum ada pesanan</td></tr>';
+}
+
+async function renderAdminHistory() {
+    if (!requireAdminAccess()) return;
+    renderTableLoading('adminHistoryOrdersBody', 8, 4);
+    await loadAdminMasterData();
+    const body = document.getElementById('adminHistoryOrdersBody');
+    if (!body) return;
+
+    const orders = remoteState.adminOrders
+        .filter((order) => order.status === 'Selesai')
+        .sort((left, right) => String(right.preferredDate || right.createdAt || '').localeCompare(String(left.preferredDate || left.createdAt || '')));
+
+    body.innerHTML = orders.length ? orders.map((order) => `
+        <tr>
+            ${tableCell('No. Pesanan', escapeHtml(getOrderLabel(order)))}
+            ${tableCell('Konsumen', escapeHtml(order.konsumenName))}
+            ${tableCell('Layanan', escapeHtml(order.serviceName))}
+            ${tableCell('Tanggal', escapeHtml(formatDate(order.preferredDate || order.createdAt)))}
+            ${tableCell('Alamat', escapeHtml(order.address || '-'))}
+            ${tableCell('Teknisi', escapeHtml(order.teknisiName || '-'))}
+            ${tableCell('Status', renderStatusBadge(order.status))}
+            ${tableCell('Aksi', `
+                <div class="btn-action-group">
+                    <button class="btn btn-outline btn-xs" onclick="openOrderDetail('${order.id}')">Detail</button>
+                    <button class="btn btn-outline btn-xs" onclick="openEditOrderModal('${order.id}')">Edit</button>
+                    <button class="btn btn-danger btn-xs" onclick="deleteOrderByAdmin('${order.id}')">Hapus</button>
+                </div>
+            `)}
+        </tr>
+    `).join('') : '<tr><td colspan="8" class="empty-state">Belum ada riwayat pesanan selesai</td></tr>';
 }
 
 async function renderAdminUsers() {

@@ -16,7 +16,7 @@
     <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
     <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
     <link rel="dns-prefetch" href="//cdn.jsdelivr.net">
-    <link rel="stylesheet" href="style.css?v=20260329-3">
+    <link rel="stylesheet" href="style.css?v=20260329-4">
 </head>
 <body>
     <div class="connection-status" id="connectionStatusBanner" hidden role="status" aria-live="polite"></div>
@@ -1374,6 +1374,35 @@
                 </div>
             </section>
 
+            <section class="view" id="viewAdminHistory" style="display:none;">
+                <div class="page-header">
+                    <h2>Riwayat Pesanan</h2>
+                    <p>Admin dapat meninjau, mengedit, dan menghapus riwayat pesanan selesai secara manual.</p>
+                </div>
+
+                <div class="card">
+                    <div class="table-responsive">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>No. Pesanan</th>
+                                    <th>Konsumen</th>
+                                    <th>Layanan</th>
+                                    <th>Tanggal</th>
+                                    <th>Alamat</th>
+                                    <th>Teknisi</th>
+                                    <th>Status</th>
+                                    <th>Aksi</th>
+                                </tr>
+                            </thead>
+                            <tbody id="adminHistoryOrdersBody">
+                                <tr><td colspan="8" class="empty-state">Belum ada riwayat pesanan selesai</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+
             <!-- Admin: Users -->
             <section class="view" id="viewAdminUsers" style="display:none;">
                 <div class="page-header">
@@ -2174,7 +2203,7 @@
         }, window.INDOSEJUK_RUNTIME_CONFIG || {});
     </script>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2" defer></script>
-    <script src="app.js?v=20260329-3" defer></script>
+    <script src="app.js?v=20260329-4" defer></script>
 </body>
 </html>
 
