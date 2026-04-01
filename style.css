@@ -2716,6 +2716,18 @@ body {
     margin-top: 1rem;
 }
 
+.profile-photo-section {
+    margin-bottom: 1.25rem;
+}
+
+.profile-photo-preview .image-card {
+    width: min(220px, 100%);
+}
+
+.profile-photo-preview .image-card img {
+    aspect-ratio: 1 / 1;
+}
+
 .upload-preview-item {
     position: relative;
     width: 120px;

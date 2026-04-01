@@ -407,7 +407,8 @@ function createDefaultData() {
         currentSession: null,
         uiCache: {
             unitImagesByUser: {},
-            teknisiDocsByUser: {}
+            teknisiDocsByUser: {},
+            profilePhotosByUser: {}
         },
         imageCatalog: DEFAULT_IMAGE_CATALOG,
         appSettings: {
@@ -2155,6 +2156,7 @@ function validateImageFile(file, options = {}) {
 function getStorageTargetConfig(target) {
     const targetMap = {
         'konsumen-unit': { bucket: getPublicUploadBucket(), isPrivate: false, folder: 'units' },
+        'profile-photo': { bucket: getPublicUploadBucket(), isPrivate: false, folder: 'profile' },
         'teknisi-ktp': { bucket: getPrivateDocumentBucket(), isPrivate: true, folder: 'ktp' },
         'teknisi-selfie': { bucket: getPrivateDocumentBucket(), isPrivate: true, folder: 'selfie' },
         'order-proof': { bucket: getPublicUploadBucket(), isPrivate: false, folder: 'proofs' }
@@ -2171,6 +2173,9 @@ function buildStoragePath(options = {}) {
 
     if (target === 'konsumen-unit') {
         return `users/${userId}/units/${uniqueSuffix}-${fileName}`;
+    }
+    if (target === 'profile-photo') {
+        return `users/${userId}/profile/${uniqueSuffix}-${fileName}`;
     }
     if (target === 'teknisi-ktp') {
         return `users/${userId}/ktp/${uniqueSuffix}-${fileName}`;
@@ -2500,8 +2505,10 @@ function sanitizeData(input) {
     data.currentSession = data.currentSession || null;
     data.uiCache = data.uiCache || {
         unitImagesByUser: {},
-        teknisiDocsByUser: {}
+        teknisiDocsByUser: {},
+        profilePhotosByUser: {}
     };
+    data.uiCache.profilePhotosByUser = data.uiCache.profilePhotosByUser || {};
     data.appSettings = {
         appName: 'Indo Sejuk AC',
         storageMode: 'supabase-auth-supabase-data',
@@ -3989,6 +3996,64 @@ async function handleTekDocUpload(event, type) {
     }
 }
 
+async function handleProfilePhotoUpload(event, role) {
+    event?.stopPropagation?.();
+    const file = event.target.files?.[0];
+    const profile = getCurrentUser();
+    if (!file || !profile || profile.role !== role) return;
+    const lockKey = `upload:profile-photo:${profile.id}`;
+    if (runtimeState.uploadLocks[lockKey]) return;
+    runtimeState.uploadLocks[lockKey] = true;
+
+    const statusId = role === 'konsumen' ? 'profileKonsumenPhotoStatus' : 'profileTeknisiPhotoStatus';
+    const previousPhoto = getProfilePhotoForUser(profile.id);
+    setElementText(statusId, 'Mengunggah foto profil ke Supabase Storage...');
+
+    try {
+        const uploaded = await uploadImageToSupabaseStorage({
+            file,
+            target: 'profile-photo',
+            userId: profile.id,
+            label: 'Foto profil'
+        });
+        await persistUploadedImageReference({
+            target: 'profile-photo',
+            path: uploaded.path,
+            url: uploaded.url
+        });
+        await syncUploadedAssetToRemote({
+            target: 'profile-photo',
+            profileId: profile.id,
+            bucket: uploaded.bucket,
+            path: uploaded.path
+        });
+        clearInputFileValue(event.target.id);
+        await renderProfilePhotoSection(role);
+        setElementText(statusId, 'Foto profil berhasil tersimpan.');
+        showToast('Foto profil berhasil diunggah.', 'success');
+
+        if (previousPhoto.path && previousPhoto.path !== uploaded.path) {
+            await deleteImageFromSupabaseStorage({
+                bucket: getPublicUploadBucket(),
+                path: previousPhoto.path,
+                url: previousPhoto.url
+            }).catch(() => {});
+            await syncDeletionToRemote({
+                target: 'profile-photo',
+                profileId: profile.id,
+                path: previousPhoto.path,
+                bucket: getPublicUploadBucket()
+            }).catch(() => {});
+        }
+    } catch (error) {
+        console.error('Gagal upload foto profil:', error);
+        setElementText(statusId, toUserFacingError(error, 'Upload foto profil gagal.'));
+        showToast(toUserFacingError(error, 'Upload foto profil gagal.'), 'error');
+    } finally {
+        runtimeState.uploadLocks[lockKey] = false;
+    }
+}
+
 async function finalizeSignupUploadsAfterSession(role) {
     const profile = runtimeState.registrationSessionActive
         ? (remoteState.profile || await fetchCurrentProfileStrict().catch(() => null))
@@ -5124,6 +5189,23 @@ async function confirmRemoveTeknisiDocument(type) {
     }
 }
 
+async function confirmRemoveProfilePhoto(role) {
+    const profile = getCurrentUser();
+    if (!profile || profile.role !== role) return;
+    if (!window.confirm('Hapus foto profil ini dari Storage dan cache perangkat?')) return;
+    try {
+        await removeUploadedImage({ target: 'profile-photo' });
+        clearInputFileValue(role === 'konsumen' ? 'profileKonsumenPhotoCamera' : 'profileTeknisiPhotoCamera');
+        clearInputFileValue(role === 'konsumen' ? 'profileKonsumenPhotoDevice' : 'profileTeknisiPhotoDevice');
+        await renderProfilePhotoSection(role);
+        setElementText(role === 'konsumen' ? 'profileKonsumenPhotoStatus' : 'profileTeknisiPhotoStatus', 'Foto profil berhasil dihapus.');
+        showToast('Foto profil berhasil dihapus.', 'success');
+    } catch (error) {
+        console.error('Gagal menghapus foto profil:', error);
+        showToast(toUserFacingError(error, 'Gagal menghapus foto profil.'), 'error');
+    }
+}
+
 async function confirmRemoveOrderProof(orderId) {
     if (!window.confirm('Hapus bukti pekerjaan ini? Status pesanan akan dikembalikan ke dikerjakan agar tidak menipu seolah sudah selesai.')) return;
     try {
@@ -6203,13 +6285,15 @@ function activatePasswordRecoveryMode() {
 
 function getLocalUiCache() {
     const data = getData();
-    data.uiCache = data.uiCache || { unitImagesByUser: {}, teknisiDocsByUser: {} };
+    data.uiCache = data.uiCache || { unitImagesByUser: {}, teknisiDocsByUser: {}, profilePhotosByUser: {} };
+    data.uiCache.profilePhotosByUser = data.uiCache.profilePhotosByUser || {};
     return data.uiCache;
 }
 
 function updateLocalUiCache(mutator) {
     const data = getData();
-    data.uiCache = data.uiCache || { unitImagesByUser: {}, teknisiDocsByUser: {} };
+    data.uiCache = data.uiCache || { unitImagesByUser: {}, teknisiDocsByUser: {}, profilePhotosByUser: {} };
+    data.uiCache.profilePhotosByUser = data.uiCache.profilePhotosByUser || {};
     mutator(data.uiCache);
     saveData(data);
     return data.uiCache;
@@ -6231,6 +6315,14 @@ function getTeknisiDocsForUser(userId) {
         selfiePhoto: remoteState.profile.selfiePhotoUrl || localDocs.selfiePhoto || '',
         ktpPhotoPath: remoteState.profile.ktpPhotoPath || '',
         selfiePhotoPath: remoteState.profile.selfiePhotoPath || ''
+    };
+}
+
+function getProfilePhotoForUser(userId) {
+    const cache = getLocalUiCache();
+    return cache.profilePhotosByUser?.[userId] || {
+        path: '',
+        url: ''
     };
 }
 
@@ -6345,6 +6437,20 @@ async function persistUploadedImageReference(options = {}) {
         return updatedProfile;
     }
 
+    if (options.target === 'profile-photo') {
+        updateLocalUiCache((cache) => {
+            cache.profilePhotosByUser[profile.id] = {
+                path: String(options.path || '').trim(),
+                url: String(options.url || '').trim()
+            };
+        });
+        if (remoteState.profile?.id === profile.id) {
+            remoteState.profile.profilePhotoPath = String(options.path || '').trim();
+            remoteState.profile.profilePhotoUrl = String(options.url || '').trim();
+        }
+        return profile;
+    }
+
     if (options.target === 'teknisi-ktp' || options.target === 'teknisi-selfie') {
         const updatedProfile = await upsertOwnProfile(validateProfilePayloadForRole('teknisi', {
             ...profile,
@@ -6416,6 +6522,29 @@ async function removeUploadedImage(options = {}) {
             bucket: getPublicUploadBucket()
         });
         return updatedProfile;
+    }
+
+    if (options.target === 'profile-photo') {
+        const photo = getProfilePhotoForUser(profile.id);
+        await deleteImageFromSupabaseStorage({
+            bucket: getPublicUploadBucket(),
+            path: photo.path,
+            url: photo.url
+        });
+        updateLocalUiCache((cache) => {
+            delete cache.profilePhotosByUser[profile.id];
+        });
+        if (remoteState.profile?.id === profile.id) {
+            remoteState.profile.profilePhotoPath = '';
+            remoteState.profile.profilePhotoUrl = '';
+        }
+        await syncDeletionToRemote({
+            target: 'profile-photo',
+            profileId: profile.id,
+            path: photo.path,
+            bucket: getPublicUploadBucket()
+        });
+        return profile;
     }
 
     if (options.target === 'teknisi-ktp' || options.target === 'teknisi-selfie') {
@@ -8282,6 +8411,7 @@ function renderKonsumenProfile() {
         profileState.isDirty = false;
     }
     syncKonsumenProfileEditorUi();
+    void renderProfilePhotoSection('konsumen');
 }
 
 async function renderKonsumenUnit() {
@@ -8424,6 +8554,55 @@ function renderTeknisiProfile() {
     document.getElementById('profileTeknisiAddress').value = user.address || '';
     document.getElementById('profileTeknisiLocation').textContent = formatLocationSummary(user);
     document.getElementById('profileTeknisiStatus').textContent = user.status || 'Aktif';
+    void renderProfilePhotoSection('teknisi');
+}
+
+async function renderProfilePhotoSection(role) {
+    const user = getCurrentUser();
+    const previewId = role === 'konsumen' ? 'profileKonsumenPhotoPreview' : 'profileTeknisiPhotoPreview';
+    const statusId = role === 'konsumen' ? 'profileKonsumenPhotoStatus' : 'profileTeknisiPhotoStatus';
+    const preview = document.getElementById(previewId);
+    if (!preview) return;
+
+    if (!user || user.role !== role) {
+        preview.innerHTML = '';
+        return;
+    }
+
+    syncStorageStatusMessage(statusId, getPublicUploadBucket(), 'Foto profil akan tersimpan otomatis saat file dipilih.');
+
+    const cachedPhoto = getProfilePhotoForUser(user.id);
+    const photoPath = String(cachedPhoto.path || user.profilePhotoPath || '').trim();
+    let photoUrl = String(cachedPhoto.url || user.profilePhotoUrl || '').trim();
+
+    if (!photoUrl && photoPath) {
+        photoUrl = await resolveStorageImageUrl(getPublicUploadBucket(), photoPath, { forceRefresh: true });
+        if (photoUrl) {
+            updateLocalUiCache((cache) => {
+                cache.profilePhotosByUser[user.id] = {
+                    path: photoPath,
+                    url: photoUrl
+                };
+            });
+        }
+    }
+
+    if (photoUrl) {
+        if (remoteState.profile?.id === user.id) {
+            remoteState.profile.profilePhotoPath = photoPath;
+            remoteState.profile.profilePhotoUrl = photoUrl;
+        }
+        preview.innerHTML = createPreviewCardHtml(photoUrl, {
+            alt: `Foto profil ${user.name || ROLE_LABELS[role] || 'user'}`,
+            caption: 'Foto profil aktif',
+            deleteTarget: 'confirmRemoveProfilePhoto',
+            deleteArgs: [role],
+            deleteLabel: 'Hapus Foto'
+        });
+        return;
+    }
+
+    preview.innerHTML = '<div class="empty-state-box"><p>Belum ada foto profil.</p></div>';
 }
 
 async function renderTeknisiDocs() {
