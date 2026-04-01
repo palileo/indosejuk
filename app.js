@@ -14,6 +14,7 @@ const LEGACY_STORAGE_KEY = 'sejukac_data';
 const SCHEMA_VERSION = 2;
 const APP_BUILD_VERSION = '20260329-5';
 const FALLBACK_IMAGE = 'image/logo.png';
+const DEFAULT_APP_TAGLINE = 'Solusi AC Sejuk & Terpercaya di Kota Anda';
 const OCR_CDN_URL = 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js';
 const SERVICE_WORKER_URL = `./sw.js?v=${APP_BUILD_VERSION}`;
 const SERVICE_WORKER_UPDATE_INTERVAL_MS = 5 * 60 * 1000;
@@ -340,6 +341,12 @@ const ROLE_LABELS = {
     admin: 'Admin',
     konsumen: 'Konsumen',
     teknisi: 'Teknisi'
+};
+
+const APP_BRAND_TITLE_BY_ROLE = {
+    admin: 'Indo Sejuk AC Admin',
+    konsumen: 'Indo Sejuk AC User',
+    teknisi: 'Indo Sejuk AC Teknisi'
 };
 
 const DEFAULT_IMAGE_CATALOG = [
@@ -6818,16 +6825,14 @@ function applySupabaseSession(profile) {
 }
 
 function syncAppBranding(profile = remoteState.profile) {
-    const isAdmin = isAdminProfile(profile);
     const titleEl = document.getElementById('appBrandTitle');
     const taglineEl = document.getElementById('appBrandTagline');
-    const pageTitle = isAdmin
-        ? 'Indo Sejuk AC Admin - Dashboard Operasional'
-        : 'Indo Sejuk AC - Solusi AC Sejuk & Terpercaya di Banyumas';
-    const brandTitle = isAdmin ? 'Indo Sejuk AC Admin' : 'Indo Sejuk AC';
-    const brandTagline = isAdmin
-        ? 'Pusat kendali website dan aplikasi Indo Sejuk AC'
-        : 'Solusi AC Sejuk & Terpercaya di Banyumas';
+    const activeRole = profile?.role || '';
+    const brandTitle = APP_BRAND_TITLE_BY_ROLE[activeRole] || 'Indo Sejuk AC';
+    const brandTagline = DEFAULT_APP_TAGLINE;
+    const pageTitle = activeRole
+        ? brandTitle
+        : `${brandTitle} - ${brandTagline}`;
 
     if (titleEl) titleEl.textContent = brandTitle;
     if (taglineEl) taglineEl.textContent = brandTagline;
@@ -7462,11 +7467,14 @@ function renderAppShell() {
     currentRole = user.role;
     setBodyAppMode('app');
     syncAppBranding(user);
-    document.getElementById('headerAvatar').textContent = (user.name || 'U').charAt(0).toUpperCase();
-    document.getElementById('headerUserName').textContent = user.name || 'User';
-    document.getElementById('headerUserRole').textContent = user.role === 'admin'
-        ? 'Indo Sejuk AC Admin'
-        : (ROLE_LABELS[user.role] || user.role);
+    const headerUserNameEl = document.getElementById('headerUserName');
+    const headerUserRoleEl = document.getElementById('headerUserRole');
+    if (headerUserNameEl) headerUserNameEl.textContent = user.name || 'User';
+    if (headerUserRoleEl) {
+        headerUserRoleEl.textContent = user.role === 'admin'
+            ? 'Indo Sejuk AC Admin'
+            : (ROLE_LABELS[user.role] || user.role);
+    }
 
     const navHtml = renderNavMarkup(user.role);
     document.getElementById('sidebarNav').innerHTML = navHtml;
