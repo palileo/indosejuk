@@ -6971,6 +6971,63 @@ function syncAppBranding(profile = remoteState.profile) {
     if (appleTitleMeta) appleTitleMeta.setAttribute('content', brandTitle);
 }
 
+async function syncHeaderUserAvatar(user = getCurrentUser(), options = {}) {
+    const avatarEl = document.getElementById('headerAvatar');
+    const imageEl = avatarEl?.querySelector('.user-avatar__image');
+    if (!avatarEl || !imageEl) return;
+
+    const profileLabel = user?.name
+        ? `Foto profil ${user.name}`
+        : `Foto profil ${ROLE_LABELS[user?.role] || 'user'}`;
+
+    if (!user?.id) {
+        imageEl.hidden = false;
+        imageEl.src = FALLBACK_IMAGE;
+        imageEl.alt = '';
+        avatarEl.classList.remove('user-avatar--fallback', 'user-avatar--photo');
+        avatarEl.setAttribute('aria-label', 'Logo Indo Sejuk AC');
+        return;
+    }
+
+    try {
+        const cachedPhoto = getProfilePhotoForUser(user.id);
+        const photoPath = String(options.photoPath || cachedPhoto.path || user.profilePhotoPath || '').trim();
+        let photoUrl = String(options.photoUrl || cachedPhoto.url || user.profilePhotoUrl || '').trim();
+
+        if (!photoUrl && photoPath) {
+            const resolvedUrl = await resolveStorageImageUrl(getPublicUploadBucket(), photoPath, { forceRefresh: true });
+            if ((getCurrentUser()?.id || '') !== user.id) return;
+            photoUrl = String(resolvedUrl || '').trim();
+            if (photoUrl) {
+                updateLocalUiCache((cache) => {
+                    cache.profilePhotosByUser[user.id] = {
+                        path: photoPath,
+                        url: photoUrl
+                    };
+                });
+                if (remoteState.profile?.id === user.id) {
+                    remoteState.profile.profilePhotoPath = photoPath;
+                    remoteState.profile.profilePhotoUrl = photoUrl;
+                }
+            }
+        }
+
+        imageEl.hidden = false;
+        imageEl.src = photoUrl || FALLBACK_IMAGE;
+        imageEl.alt = photoUrl ? profileLabel : '';
+        avatarEl.classList.remove('user-avatar--fallback');
+        avatarEl.classList.toggle('user-avatar--photo', Boolean(photoUrl));
+        avatarEl.setAttribute('aria-label', photoUrl ? profileLabel : 'Logo Indo Sejuk AC');
+    } catch (error) {
+        console.warn('Gagal sinkron avatar header:', error);
+        imageEl.hidden = false;
+        imageEl.src = FALLBACK_IMAGE;
+        imageEl.alt = '';
+        avatarEl.classList.remove('user-avatar--fallback', 'user-avatar--photo');
+        avatarEl.setAttribute('aria-label', 'Logo Indo Sejuk AC');
+    }
+}
+
 function buildProfileSyncSignature(profile = {}) {
     return [
         profile.id || '',
@@ -7604,6 +7661,7 @@ function renderAppShell() {
             ? 'Indo Sejuk AC Admin'
             : (ROLE_LABELS[user.role] || user.role);
     }
+    void syncHeaderUserAvatar(user);
 
     const navHtml = renderNavMarkup(user.role);
     document.getElementById('sidebarNav').innerHTML = navHtml;
@@ -8569,7 +8627,7 @@ async function renderProfilePhotoSection(role) {
         return;
     }
 
-    syncStorageStatusMessage(statusId, getPublicUploadBucket(), 'Foto profil akan tersimpan otomatis saat file dipilih.');
+    syncStorageStatusMessage(statusId, getPublicUploadBucket(), 'Foto profil akan tersimpan otomatis dan tampil di logo profil atas saat file dipilih.');
 
     const cachedPhoto = getProfilePhotoForUser(user.id);
     const photoPath = String(cachedPhoto.path || user.profilePhotoPath || '').trim();
@@ -8592,6 +8650,7 @@ async function renderProfilePhotoSection(role) {
             remoteState.profile.profilePhotoPath = photoPath;
             remoteState.profile.profilePhotoUrl = photoUrl;
         }
+        await syncHeaderUserAvatar(user, { photoPath, photoUrl });
         preview.innerHTML = createPreviewCardHtml(photoUrl, {
             alt: `Foto profil ${user.name || ROLE_LABELS[role] || 'user'}`,
             caption: 'Foto profil aktif',
@@ -8602,6 +8661,7 @@ async function renderProfilePhotoSection(role) {
         return;
     }
 
+    await syncHeaderUserAvatar(user);
     preview.innerHTML = '<div class="empty-state-box"><p>Belum ada foto profil.</p></div>';
 }
 

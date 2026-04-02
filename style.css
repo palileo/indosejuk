@@ -465,6 +465,11 @@ body {
     padding: 4px;
 }
 
+.user-avatar--photo .user-avatar__image {
+    object-fit: cover;
+    padding: 0;
+}
+
 .user-avatar__fallback {
     position: absolute;
     inset: 0;
