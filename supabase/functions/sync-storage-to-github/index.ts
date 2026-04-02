@@ -20,6 +20,8 @@ const REQUIRED_PROFILE_COLUMNS = ["id", "role", "email", "updated_at"];
 const OPTIONAL_PROFILE_COLUMNS = [
   "unit_image_paths",
   "unit_image_urls",
+  "profile_photo_path",
+  "profile_photo_url",
   "ktp_photo_path",
   "ktp_photo_url",
   "selfie_photo_path",

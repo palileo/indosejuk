@@ -119,7 +119,7 @@ serve(async (req) => {
 
     const { data: profile, error: profileError } = await supabaseAdmin
       .from("profiles")
-      .select("id, role, name, unit_image_paths, ac_units, ktp_photo_path, selfie_photo_path")
+      .select("id, role, name, unit_image_paths, ac_units, profile_photo_path, ktp_photo_path, selfie_photo_path")
       .eq("id", userId)
       .maybeSingle();
 
@@ -146,6 +146,7 @@ serve(async (req) => {
       if (deleteOrdersError) throw deleteOrdersError;
 
       await removeStorageObjects(PUBLIC_BUCKET, [
+        normalizeText(profile.profile_photo_path),
         ...normalizeTextArray(profile.unit_image_paths),
         ...extractAcUnitPaths(profile.ac_units),
         ...proofPaths,
@@ -175,6 +176,9 @@ serve(async (req) => {
       await removeStorageObjects(PRIVATE_BUCKET, [
         normalizeText(profile.ktp_photo_path),
         normalizeText(profile.selfie_photo_path),
+      ]).catch(() => {});
+      await removeStorageObjects(PUBLIC_BUCKET, [
+        normalizeText(profile.profile_photo_path),
       ]).catch(() => {});
     }
 

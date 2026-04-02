@@ -71,6 +71,8 @@ const OPTIONAL_PROFILE_COLUMNS = [
     'ac_units',
     'unit_image_paths',
     'unit_image_urls',
+    'profile_photo_path',
+    'profile_photo_url',
     'ktp_photo_path',
     'ktp_photo_url',
     'selfie_photo_path',
@@ -2430,7 +2432,9 @@ function normalizeUser(user, role, index = 0) {
         birthDate: user?.birthDate || user?.tanggalLahir || '',
         age: calculateAge(user?.birthDate || user?.tanggalLahir || '') || user?.age || '',
         status: normalizeProfileStatus(user?.status || PROFILE_STATUS_ACTIVE),
-        joinedAt: user?.joinedAt || user?.joined || defaults.joinedAt || new Date().toISOString()
+        joinedAt: user?.joinedAt || user?.joined || defaults.joinedAt || new Date().toISOString(),
+        profilePhotoPath: user?.profilePhotoPath || user?.profile_photo_path || '',
+        profilePhotoUrl: user?.profilePhotoUrl || user?.profile_photo_url || ''
     };
 
     if (role === 'konsumen') {
@@ -4006,7 +4010,7 @@ async function handleProfilePhotoUpload(event, role) {
     runtimeState.uploadLocks[lockKey] = true;
 
     const statusId = role === 'konsumen' ? 'profileKonsumenPhotoStatus' : 'profileTeknisiPhotoStatus';
-    const previousPhoto = getProfilePhotoForUser(profile.id);
+    const previousPhoto = getProfilePhotoState(profile);
     setElementText(statusId, 'Mengunggah foto profil ke Supabase Storage...');
 
     try {
@@ -6326,6 +6330,43 @@ function getProfilePhotoForUser(userId) {
     };
 }
 
+function getProfilePhotoState(profile = {}, options = {}) {
+    const cachedPhoto = profile?.id ? getProfilePhotoForUser(profile.id) : { path: '', url: '' };
+    return {
+        path: String(options.photoPath || profile.profilePhotoPath || profile.profile_photo_path || cachedPhoto.path || '').trim(),
+        url: String(options.photoUrl || profile.profilePhotoUrl || profile.profile_photo_url || cachedPhoto.url || '').trim()
+    };
+}
+
+async function hydrateProfilePhotoState(profile = {}, options = {}) {
+    const photo = getProfilePhotoState(profile, options);
+    if (!profile?.id || photo.url || !photo.path) return photo;
+
+    const resolvedUrl = await resolveStorageImageUrl(getPublicUploadBucket(), photo.path, {
+        forceRefresh: Boolean(options.forceRefresh)
+    });
+    if (!resolvedUrl) return photo;
+
+    photo.url = String(resolvedUrl || '').trim();
+    updateLocalUiCache((cache) => {
+        cache.profilePhotosByUser[profile.id] = {
+            path: photo.path,
+            url: photo.url
+        };
+    });
+
+    if (profile && typeof profile === 'object') {
+        profile.profilePhotoPath = photo.path;
+        profile.profilePhotoUrl = photo.url;
+    }
+    if (remoteState.profile?.id === profile.id) {
+        remoteState.profile.profilePhotoPath = photo.path;
+        remoteState.profile.profilePhotoUrl = photo.url;
+    }
+
+    return photo;
+}
+
 function clearImagePreviewState(target, options = {}) {
     switch (target) {
     case 'register-konsumen-unit':
@@ -6438,17 +6479,29 @@ async function persistUploadedImageReference(options = {}) {
     }
 
     if (options.target === 'profile-photo') {
-        updateLocalUiCache((cache) => {
-            cache.profilePhotosByUser[profile.id] = {
-                path: String(options.path || '').trim(),
-                url: String(options.url || '').trim()
-            };
-        });
-        if (remoteState.profile?.id === profile.id) {
-            remoteState.profile.profilePhotoPath = String(options.path || '').trim();
-            remoteState.profile.profilePhotoUrl = String(options.url || '').trim();
+        const nextPath = String(options.path || '').trim();
+        const nextUrl = String(options.url || '').trim();
+        const updatedProfile = await upsertOwnProfile(validateProfilePayloadForRole(profile.role, {
+            ...profile,
+            profile_photo_path: nextPath,
+            profile_photo_url: nextUrl
+        }));
+        if (nextPath && updatedProfile.profilePhotoPath !== nextPath) {
+            await deleteImageFromSupabaseStorage({ bucket: getPublicUploadBucket(), path: nextPath, url: nextUrl });
+            throw new Error('Kolom storage foto profil belum siap di schema profiles. Jalankan migration storage foto profil terlebih dahulu.');
         }
-        return profile;
+        applySupabaseSession(updatedProfile);
+        updateLocalUiCache((cache) => {
+            if (nextPath || nextUrl) {
+                cache.profilePhotosByUser[profile.id] = {
+                    path: updatedProfile.profilePhotoPath || nextPath,
+                    url: updatedProfile.profilePhotoUrl || nextUrl
+                };
+                return;
+            }
+            delete cache.profilePhotosByUser[profile.id];
+        });
+        return updatedProfile;
     }
 
     if (options.target === 'teknisi-ktp' || options.target === 'teknisi-selfie') {
@@ -6525,26 +6578,24 @@ async function removeUploadedImage(options = {}) {
     }
 
     if (options.target === 'profile-photo') {
-        const photo = getProfilePhotoForUser(profile.id);
+        const photo = getProfilePhotoState(profile);
         await deleteImageFromSupabaseStorage({
             bucket: getPublicUploadBucket(),
             path: photo.path,
             url: photo.url
         });
-        updateLocalUiCache((cache) => {
-            delete cache.profilePhotosByUser[profile.id];
+        const updatedProfile = await persistUploadedImageReference({
+            target: 'profile-photo',
+            path: '',
+            url: ''
         });
-        if (remoteState.profile?.id === profile.id) {
-            remoteState.profile.profilePhotoPath = '';
-            remoteState.profile.profilePhotoUrl = '';
-        }
         await syncDeletionToRemote({
             target: 'profile-photo',
             profileId: profile.id,
             path: photo.path,
             bucket: getPublicUploadBucket()
         });
-        return profile;
+        return updatedProfile;
     }
 
     if (options.target === 'teknisi-ktp' || options.target === 'teknisi-selfie') {
@@ -6660,6 +6711,8 @@ function sanitizeProfileRecord(profile) {
         unitImagePaths: legacyImages.paths,
         unitImageUrls: legacyImages.urls,
         unitImages: legacyImages.urls,
+        profilePhotoPath: String(profile.profile_photo_path || profile.profilePhotoPath || '').trim(),
+        profilePhotoUrl: String(profile.profile_photo_url || profile.profilePhotoUrl || '').trim(),
         ktpPhotoPath: String(profile.ktp_photo_path || profile.ktpPhotoPath || '').trim(),
         ktpPhotoUrl: String(profile.ktp_photo_url || profile.ktpPhotoUrl || '').trim(),
         selfiePhotoPath: String(profile.selfie_photo_path || profile.selfiePhotoPath || '').trim(),
@@ -6990,27 +7043,13 @@ async function syncHeaderUserAvatar(user = getCurrentUser(), options = {}) {
     }
 
     try {
-        const cachedPhoto = getProfilePhotoForUser(user.id);
-        const photoPath = String(options.photoPath || cachedPhoto.path || user.profilePhotoPath || '').trim();
-        let photoUrl = String(options.photoUrl || cachedPhoto.url || user.profilePhotoUrl || '').trim();
-
-        if (!photoUrl && photoPath) {
-            const resolvedUrl = await resolveStorageImageUrl(getPublicUploadBucket(), photoPath, { forceRefresh: true });
-            if ((getCurrentUser()?.id || '') !== user.id) return;
-            photoUrl = String(resolvedUrl || '').trim();
-            if (photoUrl) {
-                updateLocalUiCache((cache) => {
-                    cache.profilePhotosByUser[user.id] = {
-                        path: photoPath,
-                        url: photoUrl
-                    };
-                });
-                if (remoteState.profile?.id === user.id) {
-                    remoteState.profile.profilePhotoPath = photoPath;
-                    remoteState.profile.profilePhotoUrl = photoUrl;
-                }
-            }
-        }
+        const photo = await hydrateProfilePhotoState(user, {
+            photoPath: options.photoPath,
+            photoUrl: options.photoUrl,
+            forceRefresh: true
+        });
+        if ((getCurrentUser()?.id || '') !== user.id) return;
+        const photoUrl = photo.url;
 
         imageEl.hidden = false;
         imageEl.src = photoUrl || FALLBACK_IMAGE;
@@ -7273,6 +7312,8 @@ function validateProfilePayloadForRole(role, payload = {}, options = {}) {
         }),
         unit_image_paths: normalizeTextArray(payload.unit_image_paths ?? payload.unitImagePaths),
         unit_image_urls: normalizeTextArray(payload.unit_image_urls ?? payload.unitImageUrls),
+        profile_photo_path: payload.profile_photo_path || payload.profilePhotoPath || '',
+        profile_photo_url: payload.profile_photo_url || payload.profilePhotoUrl || '',
         ktp_photo_path: payload.ktp_photo_path || payload.ktpPhotoPath || '',
         ktp_photo_url: payload.ktp_photo_url || payload.ktpPhotoUrl || '',
         selfie_photo_path: payload.selfie_photo_path || payload.selfiePhotoPath || '',
@@ -7307,7 +7348,9 @@ function validateProfilePayloadForRole(role, payload = {}, options = {}) {
         completed_jobs: toNullableNumber(cleanPayload.completed_jobs),
         ac_units: cleanPayload.ac_units,
         unit_image_paths: cleanPayload.unit_image_paths,
-        unit_image_urls: cleanPayload.unit_image_urls
+        unit_image_urls: cleanPayload.unit_image_urls,
+        profile_photo_path: toNullableText(cleanPayload.profile_photo_path),
+        profile_photo_url: toNullableText(cleanPayload.profile_photo_url)
     };
 
     if (normalizedRole === 'teknisi') {
@@ -8629,28 +8672,11 @@ async function renderProfilePhotoSection(role) {
 
     syncStorageStatusMessage(statusId, getPublicUploadBucket(), 'Foto profil akan tersimpan otomatis dan tampil di logo profil atas saat file dipilih.');
 
-    const cachedPhoto = getProfilePhotoForUser(user.id);
-    const photoPath = String(cachedPhoto.path || user.profilePhotoPath || '').trim();
-    let photoUrl = String(cachedPhoto.url || user.profilePhotoUrl || '').trim();
-
-    if (!photoUrl && photoPath) {
-        photoUrl = await resolveStorageImageUrl(getPublicUploadBucket(), photoPath, { forceRefresh: true });
-        if (photoUrl) {
-            updateLocalUiCache((cache) => {
-                cache.profilePhotosByUser[user.id] = {
-                    path: photoPath,
-                    url: photoUrl
-                };
-            });
-        }
-    }
+    const photo = await hydrateProfilePhotoState(user, { forceRefresh: true });
+    const photoUrl = photo.url;
 
     if (photoUrl) {
-        if (remoteState.profile?.id === user.id) {
-            remoteState.profile.profilePhotoPath = photoPath;
-            remoteState.profile.profilePhotoUrl = photoUrl;
-        }
-        await syncHeaderUserAvatar(user, { photoPath, photoUrl });
+        await syncHeaderUserAvatar(user, photo);
         preview.innerHTML = createPreviewCardHtml(photoUrl, {
             alt: `Foto profil ${user.name || ROLE_LABELS[role] || 'user'}`,
             caption: 'Foto profil aktif',
@@ -8849,15 +8875,15 @@ async function renderAdminUsers(options = {}) {
     if (!requireAdminAccess()) return;
     renderAdminServicesTable();
     renderAdminImageCatalogTable();
-    renderTableLoading('adminKonsumenListBody', 10, 4);
-    renderTableLoading('adminTeknisiListBody', 10, 4);
+    renderTableLoading('adminKonsumenListBody', 11, 4);
+    renderTableLoading('adminTeknisiListBody', 11, 4);
     renderTableLoading('adminFotoUnitBody', 7, 4);
     renderTableLoading('adminAdminListBody', 5, 3);
 
     try {
         if (!options.skipRemoteLoad) await loadAdminMasterData();
-        renderAdminKonsumenTable(remoteState.adminProfiles.konsumen);
-        renderAdminTeknisiTable(remoteState.adminProfiles.teknisi);
+        await renderAdminKonsumenTable(remoteState.adminProfiles.konsumen);
+        await renderAdminTeknisiTable(remoteState.adminProfiles.teknisi);
         await renderAdminFotoUnitTable(remoteState.adminProfiles.konsumen);
         renderAdminAdminTable(remoteState.adminProfiles.admin);
     } catch (error) {
@@ -8900,8 +8926,8 @@ async function setPublicUserStatus(role, userId, status) {
     try {
         await updateProfileByAdmin(userId, payload);
         await loadAdminMasterData();
-        renderAdminKonsumenTable(remoteState.adminProfiles.konsumen);
-        renderAdminTeknisiTable(remoteState.adminProfiles.teknisi);
+        await renderAdminKonsumenTable(remoteState.adminProfiles.konsumen);
+        await renderAdminTeknisiTable(remoteState.adminProfiles.teknisi);
         await renderAdminHome();
         showToast(`Status akun ${ROLE_LABELS[role] || role} diperbarui menjadi ${normalizedStatus}.`, 'success');
     } catch (error) {
@@ -8928,7 +8954,7 @@ function renderAdminUserActions(user, role) {
     return `${approveButton} ${editButton} ${deleteButton}`;
 }
 
-function renderAdminKonsumenTable(users = []) {
+async function renderAdminKonsumenTable(users = []) {
     if (!requireAdminAccess()) return;
     const body = document.getElementById('adminKonsumenListBody');
     const orders = remoteState.adminOrders;
@@ -8940,9 +8966,17 @@ function renderAdminKonsumenTable(users = []) {
         return String(right.joinedAt || '').localeCompare(String(left.joinedAt || ''));
     });
 
-    body.innerHTML = sortedUsers.length ? sortedUsers.map((user) => `
+    const hydratedUsers = await Promise.all(sortedUsers.map(async (user) => ({
+        user,
+        photo: await hydrateProfilePhotoState(user)
+    })));
+
+    body.innerHTML = hydratedUsers.length ? hydratedUsers.map(({ user, photo }) => `
         <tr>
             ${tableCell('Nama', escapeHtml(user.name))}
+            ${tableCell('Foto Profil', photo.url
+                ? `<img src="${escapeHtml(photo.url)}" alt="${escapeHtml(`Foto profil ${user.name || user.username || 'konsumen'}`)}" class="table-thumb table-thumb--avatar">`
+                : '<span class="text-muted">Belum ada foto</span>')}
             ${tableCell('Username', escapeHtml(user.username || '-'))}
             ${tableCell('Email', escapeHtml(user.email || '-'))}
             ${tableCell('Telepon', escapeHtml(user.phone || '-'))}
@@ -8956,10 +8990,10 @@ function renderAdminKonsumenTable(users = []) {
             ${tableCell('Total Pesanan', String(orders.filter((order) => order.konsumenId === user.id).length))}
             ${tableCell('Aksi', renderAdminUserActions(user, 'konsumen'))}
         </tr>
-    `).join('') : '<tr><td colspan="10" class="empty-state">Tidak ada data</td></tr>';
+    `).join('') : '<tr><td colspan="11" class="empty-state">Tidak ada data</td></tr>';
 }
 
-function renderAdminTeknisiTable(users = []) {
+async function renderAdminTeknisiTable(users = []) {
     if (!requireAdminAccess()) return;
     const body = document.getElementById('adminTeknisiListBody');
     const orders = remoteState.adminOrders;
@@ -8971,9 +9005,17 @@ function renderAdminTeknisiTable(users = []) {
         return String(right.joinedAt || '').localeCompare(String(left.joinedAt || ''));
     });
 
-    body.innerHTML = sortedUsers.length ? sortedUsers.map((user) => `
+    const hydratedUsers = await Promise.all(sortedUsers.map(async (user) => ({
+        user,
+        photo: await hydrateProfilePhotoState(user)
+    })));
+
+    body.innerHTML = hydratedUsers.length ? hydratedUsers.map(({ user, photo }) => `
         <tr>
             ${tableCell('Nama', escapeHtml(user.name))}
+            ${tableCell('Foto Profil', photo.url
+                ? `<img src="${escapeHtml(photo.url)}" alt="${escapeHtml(`Foto profil ${user.name || user.username || 'teknisi'}`)}" class="table-thumb table-thumb--avatar">`
+                : '<span class="text-muted">Belum ada foto</span>')}
             ${tableCell('Username', `
                 <div class="directory-table-user">
                     <span>${escapeHtml(user.username || '-')}</span>
@@ -8989,7 +9031,7 @@ function renderAdminTeknisiTable(users = []) {
             ${tableCell('Tugas Selesai', String(orders.filter((order) => order.teknisiId === user.id && order.status === 'Selesai').length))}
             ${tableCell('Aksi', renderAdminUserActions(user, 'teknisi'))}
         </tr>
-    `).join('') : '<tr><td colspan="10" class="empty-state">Tidak ada data</td></tr>';
+    `).join('') : '<tr><td colspan="11" class="empty-state">Tidak ada data</td></tr>';
 }
 
 async function renderAdminFotoUnitTable(users = []) {

@@ -2970,6 +2970,13 @@ body {
     border: 1px solid var(--gray-200);
 }
 
+.table-thumb--avatar {
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    display: block;
+}
+
 .image-card {
     overflow: hidden;
     border-radius: var(--border-radius-sm);
