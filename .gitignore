@@ -1,0 +1,14 @@
+.env
+.env.local
+.env.*.local
+!.env.example
+
+node_modules/
+supabase/.temp/
+
+*.log
+*.tmp
+*.temp
+
+Thumbs.db
+Desktop.ini

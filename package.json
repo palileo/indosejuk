@@ -1,0 +1,11 @@
+{
+  "name": "indosejuk",
+  "private": true,
+  "scripts": {
+    "serve": "node scripts/serve-static.js",
+    "validate": "node scripts/validate-static-app.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

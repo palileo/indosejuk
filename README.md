@@ -87,13 +87,34 @@ Migration terbaru melakukan hal penting berikut:
 - Register tetap bisa mengunggah draft file penting karena frontend membuka sesi sementara yang langsung ditutup lagi setelah upload selesai.
 - Perubahan email verifikasi pertama untuk akun dengan email auth sintetis mungkin masih membutuhkan dukungan backend/auth setting tambahan jika project Supabase mengharuskan konfirmasi ke email lama sintetis yang tidak bisa diakses user.
 
-## Menjalankan lokal
+## Menjalankan lokal di Windows
 
-Contoh:
+Prasyarat:
 
-- `python -m http.server 5500`
-- VS Code Live Server
-- static server lokal lain
+- Node.js 18 atau lebih baru
+
+Perintah lokal yang reproducible tanpa dependency tambahan:
+
+- `npm run serve`
+
+Opsi port lain:
+
+- `node scripts/serve-static.js --port=8080`
+
+Server bawaan repo hanya bind ke `127.0.0.1` agar aman untuk pengujian lokal di Windows dan tetap stabil setelah restart / reopen VS Code.
+
+## Validasi project
+
+Jalankan validasi bawaan repo:
+
+- `npm run validate`
+
+Validasi ini memeriksa:
+
+- syntax `app.js` dan `sw.js`
+- keberadaan asset lokal yang direferensikan `index.html` dan `sw.js`
+- HTTP smoke test untuk `index.html`, `app.js`, `style.css`, `manifest.webmanifest`, `offline.html`, dan icon PWA
+- `.gitignore` tetap mengabaikan `.env` tetapi tetap mengizinkan `.env.example`
 
 ## Deploy backend yang berubah
 
