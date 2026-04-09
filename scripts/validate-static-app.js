@@ -90,8 +90,33 @@ async function validateGitIgnore() {
     await assert(gitIgnore.includes('supabase/.temp/'), '.gitignore must ignore supabase/.temp/');
 }
 
+async function validateGitAttributes() {
+    const gitAttributes = await fs.readFile(path.join(projectRoot, '.gitattributes'), 'utf8');
+    const requiredRules = [
+        '.gitattributes text eol=lf',
+        '.gitignore text eol=lf',
+        '*.css text eol=lf',
+        '*.html text eol=lf',
+        '*.js text eol=lf',
+        '*.json text eol=lf',
+        '*.md text eol=lf',
+        '*.sh text eol=lf',
+        '*.sql text eol=lf',
+        '*.ts text eol=lf',
+        '*.webmanifest text eol=lf',
+        '*.yml text eol=lf',
+        '*.yaml text eol=lf',
+        '*.ps1 text eol=crlf'
+    ];
+
+    for (const rule of requiredRules) {
+        await assert(gitAttributes.includes(rule), `.gitattributes must include: ${rule}`);
+    }
+}
+
 async function main() {
     await validateGitIgnore();
+    await validateGitAttributes();
     await runSyntaxCheck(path.join(projectRoot, 'app.js'));
     await runSyntaxCheck(path.join(projectRoot, 'sw.js'));
     await runSyntaxCheck(path.join(projectRoot, 'scripts/serve-static.js'));
@@ -124,7 +149,7 @@ async function main() {
         await fetchStatus(`${baseUrl}/icons/icon-192.png`);
     });
 
-    console.log('Validation passed: syntax, local assets, HTTP smoke test, and .gitignore checks are clean.');
+    console.log('Validation passed: syntax, local assets, HTTP smoke test, and repository guardrails are clean.');
 }
 
 main().catch((error) => {
