@@ -10,7 +10,6 @@ const corsHeaders = {
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
-const PUBLIC_BUCKET = "app-public-uploads";
 const PRIVATE_BUCKET = "app-private-documents";
 
 const supabaseAdmin = SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY
@@ -28,24 +27,6 @@ function jsonResponse(status: number, payload: Record<string, unknown>) {
 
 function normalizeText(value: unknown) {
   return String(value || "").trim();
-}
-
-function normalizeTextArray(value: unknown) {
-  if (!Array.isArray(value)) return [];
-  return value.map((item) => normalizeText(item)).filter(Boolean);
-}
-
-function extractAcUnitPaths(value: unknown) {
-  if (!Array.isArray(value)) return [];
-  return value
-    .filter((item) => item && typeof item === "object")
-    .flatMap((item) => {
-      const record = item as Record<string, unknown>;
-      return [
-        normalizeText(record.image_path),
-        normalizeText(record.imagePath),
-      ].filter(Boolean);
-    });
 }
 
 async function requireAdminCaller(req: Request) {
@@ -119,7 +100,7 @@ serve(async (req) => {
 
     const { data: profile, error: profileError } = await supabaseAdmin
       .from("profiles")
-      .select("id, role, name, unit_image_paths, ac_units, profile_photo_path, ktp_photo_path, selfie_photo_path")
+      .select("id, role, name, ktp_photo_path, selfie_photo_path")
       .eq("id", userId)
       .maybeSingle();
 
@@ -132,25 +113,11 @@ serve(async (req) => {
     }
 
     if (role === "konsumen") {
-      const { data: orders, error: orderFetchError } = await supabaseAdmin
-        .from("orders")
-        .select("id, proof_image_path")
-        .eq("konsumen_id", userId);
-      if (orderFetchError) throw orderFetchError;
-
-      const proofPaths = (orders || []).map((item) => normalizeText(item.proof_image_path)).filter(Boolean);
       const { error: deleteOrdersError } = await supabaseAdmin
         .from("orders")
         .delete()
         .eq("konsumen_id", userId);
       if (deleteOrdersError) throw deleteOrdersError;
-
-      await removeStorageObjects(PUBLIC_BUCKET, [
-        normalizeText(profile.profile_photo_path),
-        ...normalizeTextArray(profile.unit_image_paths),
-        ...extractAcUnitPaths(profile.ac_units),
-        ...proofPaths,
-      ]).catch(() => {});
     } else {
       const { error: resetActiveOrdersError } = await supabaseAdmin
         .from("orders")
@@ -176,9 +143,6 @@ serve(async (req) => {
       await removeStorageObjects(PRIVATE_BUCKET, [
         normalizeText(profile.ktp_photo_path),
         normalizeText(profile.selfie_photo_path),
-      ]).catch(() => {});
-      await removeStorageObjects(PUBLIC_BUCKET, [
-        normalizeText(profile.profile_photo_path),
       ]).catch(() => {});
     }
 

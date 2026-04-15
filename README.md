@@ -5,7 +5,7 @@ Frontend statis Indo Sejuk AC dengan source of truth utama di Supabase untuk:
 - `auth/session`
 - `public.profiles`
 - `public.orders`
-- Supabase Storage untuk upload gambar penting
+- Supabase Storage untuk dokumen teknisi yang memang penting
 
 ## Flow auth terbaru
 
@@ -71,6 +71,7 @@ Jalankan migration berikut:
 - `supabase/migrations/202603250100_consumer_auth_phone_and_security.sql`
 - `supabase/migrations/202603260101_admin_verification_and_public_auth.sql`
 - `supabase/migrations/202603260102_fix_security_advisor_warnings.sql`
+- `supabase/migrations/202604150101_remove_public_image_features.sql`
 
 Migration terbaru melakukan hal penting berikut:
 
@@ -79,12 +80,20 @@ Migration terbaru melakukan hal penting berikut:
 - trigger provisioning profile tidak lagi mengaktifkan user publik otomatis
 - existing user aktif tetap dipertahankan aktif
 - verifikasi register dipisahkan dari email verification
+- referensi storage untuk foto unit, foto profil, dan bukti pekerjaan dihapus
+
+## Penyederhanaan storage terbaru
+
+- Foto unit AC konsumen dihapus total. `public.profiles.ac_units` sekarang hanya menyimpan metadata teks seperti merk, jenis, refrigerant, dan kapasitas.
+- Foto profil dihapus total. Header dashboard selalu memakai logo/fallback statis.
+- Upload bukti pekerjaan teknisi dihapus total. Teknisi menandai order selesai tanpa upload gambar.
+- Foto layanan / katalog layanan admin tetap dipertahankan dan tidak diubah.
 
 ## Catatan implementasi penting
 
 - Admin tetap localhost-only.
-- Upload Storage, OCR, PWA, WhatsApp, dan dashboard existing tetap dipertahankan.
-- Register tetap bisa mengunggah draft file penting karena frontend membuka sesi sementara yang langsung ditutup lagi setelah upload selesai.
+- OCR dokumen teknisi, PWA, WhatsApp, dan dashboard existing tetap dipertahankan.
+- Register konsumen tetap bisa menyimpan draft unit AC, tetapi hanya metadata teks tanpa foto.
 - Perubahan email verifikasi pertama untuk akun dengan email auth sintetis mungkin masih membutuhkan dukungan backend/auth setting tambahan jika project Supabase mengharuskan konfirmasi ke email lama sintetis yang tidak bisa diakses user.
 
 ## Menjalankan lokal di Windows

@@ -25,8 +25,7 @@
                            "Tanggal Perbaikan":  "ac_units[].notes + updated_at",
                            "Pengingat Pemeliharaan":  "ac_units[].notes",
                            "Teknisi":  "ac_units[].notes",
-                           "Pekerjaan":  "ac_units[].notes",
-                           "Image1..Image8":  "ac_units[].image_path + unit_image_paths[]"
+                           "Pekerjaan":  "ac_units[].notes"
                        },
     "consumers":  [
                       {
@@ -56,12 +55,6 @@
                                                "notes":  "Pemeliharaan: 2026-03-17 | Pengingat: 4 Bulan | Teknisi: topik,dodo | Pekerjaan: cuci unit"
                                            }
                                        ],
-                          "unit_image_paths":  [
-
-                                               ],
-                          "unit_image_urls":  [
-
-                                              ],
                           "source_row_numbers":  [
                                                      9
                                                  ]
@@ -87,7 +80,6 @@
                                                "type":  "Split Standard",
                                                "refrigerant":  "R22",
                                                "capacity":  "0.5 PK",
-                                               "image_path":  "C:\\Users\\justdoit\\Documents\\SEJUK\\Sejuk Data\\database konsumen\\dokumentasi\\muh eldabrun somagede 2026-03-15 at 21.24.54.jpeg",
                                                "created_at":  "2026-03-16",
                                                "updated_at":  "2026-03-16",
                                                "source":  "excel-import",
@@ -99,19 +91,12 @@
                                                "type":  "Split Standard",
                                                "refrigerant":  "R22",
                                                "capacity":  "0.5 PK",
-                                               "image_path":  "C:\\Users\\justdoit\\Documents\\SEJUK\\Sejuk Data\\database konsumen\\dokumentasi\\muh eldabrun somagede 2026-03-15 at 21.24.54.jpeg",
                                                "created_at":  "2026-03-15",
                                                "updated_at":  "2026-03-15",
                                                "source":  "excel-import",
                                                "notes":  "Pemeliharaan: 2026-03-15 | Pengingat: 5 Bulan | Teknisi: anang,deby | Pekerjaan: cuci unit"
                                            }
                                        ],
-                          "unit_image_paths":  [
-                                                   "C:\\Users\\justdoit\\Documents\\SEJUK\\Sejuk Data\\database konsumen\\dokumentasi\\muh eldabrun somagede 2026-03-15 at 21.24.54.jpeg"
-                                               ],
-                          "unit_image_urls":  [
-
-                                              ],
                           "source_row_numbers":  [
                                                      7,
                                                      8
@@ -138,21 +123,12 @@
                                                "type":  "Split Standard",
                                                "refrigerant":  "R22",
                                                "capacity":  "0.5 PK",
-                                               "image_path":  "C:\\Users\\justdoit\\Documents\\SEJUK\\Sejuk Data\\database konsumen\\dokumentasi\\cipto pucung 2026-03-22 at 12.48.28.jpeg",
                                                "created_at":  "2026-03-22",
                                                "updated_at":  "2026-03-22",
                                                "source":  "excel-import",
                                                "notes":  "Perbaikan: 2026-03-22 | Pengingat: 5 Bulan | Teknisi: wawan | Pekerjaan: tambah freon"
                                            }
                                        ],
-                          "unit_image_paths":  [
-                                                   "C:\\Users\\justdoit\\Documents\\SEJUK\\Sejuk Data\\database konsumen\\dokumentasi\\cipto pucung 2026-03-22 at 12.48.28.jpeg",
-                                                   "C:\\Users\\justdoit\\Documents\\SEJUK\\Sejuk Data\\database konsumen\\dokumentasi\\WhatsApp Image 2026-03-22 at 13.39.51.jpeg",
-                                                   "C:\\Users\\justdoit\\Documents\\SEJUK\\Sejuk Data\\database konsumen\\dokumentasi\\WhatsApp Image 2026-03-22 at 13.39.58.jpeg"
-                                               ],
-                          "unit_image_urls":  [
-
-                                              ],
                           "source_row_numbers":  [
                                                      10
                                                  ]
@@ -180,12 +156,6 @@
                                                "notes":  "Pemeliharaan: 2026-03-27 | Teknisi: sholeh"
                                            }
                                        ],
-                          "unit_image_paths":  [
-
-                                               ],
-                          "unit_image_urls":  [
-
-                                              ],
                           "source_row_numbers":  [
                                                      12
                                                  ]
@@ -211,21 +181,12 @@
                                                "type":  "Split Standard",
                                                "refrigerant":  "R22",
                                                "capacity":  "1 PK",
-                                               "image_path":  "C:\\Users\\justdoit\\Documents\\SEJUK\\Sejuk Data\\database konsumen\\dokumentasi\\sintels kroya 2026-03-25 at 15.42.30.jpeg",
                                                "created_at":  "2026-03-25",
                                                "updated_at":  "2026-03-25",
                                                "source":  "excel-import",
                                                "notes":  "Pemeliharaan: 2026-03-25 | Pengingat: 5 Bulan | Teknisi: wawan | Pekerjaan: cuci indoor outdoor"
                                            }
                                        ],
-                          "unit_image_paths":  [
-                                                   "C:\\Users\\justdoit\\Documents\\SEJUK\\Sejuk Data\\database konsumen\\dokumentasi\\sintels kroya 2026-03-25 at 15.42.30.jpeg",
-                                                   "C:\\Users\\justdoit\\Documents\\SEJUK\\Sejuk Data\\database konsumen\\dokumentasi\\sintels kroya 2026-03-25 at 15.42.31.jpeg",
-                                                   "C:\\Users\\justdoit\\Documents\\SEJUK\\Sejuk Data\\database konsumen\\dokumentasi\\sintels kroya 2026-03-25 at 15.42.33.jpeg"
-                                               ],
-                          "unit_image_urls":  [
-
-                                              ],
                           "source_row_numbers":  [
                                                      11
                                                  ]
@@ -251,19 +212,12 @@
                                                "type":  "Split Standard",
                                                "refrigerant":  "R32",
                                                "capacity":  "0.5 PK",
-                                               "image_path":  "C:\\Users\\justdoit\\Documents\\SEJUK\\Sejuk Data\\database konsumen\\dokumentasi\\dwi puji astuti 2026-03-16 at 18.25.00.jpeg",
                                                "created_at":  "2026-03-17",
                                                "updated_at":  "2026-03-17",
                                                "source":  "excel-import",
                                                "notes":  "Pemeliharaan: 2026-03-17 | Pengingat: 4 Bulan | Teknisi: topik,dodo | Pekerjaan: cuci unit"
                                            }
                                        ],
-                          "unit_image_paths":  [
-                                                   "C:\\Users\\justdoit\\Documents\\SEJUK\\Sejuk Data\\database konsumen\\dokumentasi\\dwi puji astuti 2026-03-16 at 18.25.00.jpeg"
-                                               ],
-                          "unit_image_urls":  [
-
-                                              ],
                           "source_row_numbers":  [
                                                      3
                                                  ]
@@ -289,19 +243,12 @@
                                                "type":  "Split Standard",
                                                "refrigerant":  "R32",
                                                "capacity":  "0.5 PK",
-                                               "image_path":  "C:\\Users\\justdoit\\Documents\\SEJUK\\Sejuk Data\\database konsumen\\dokumentasi\\bu arsita kalisube 2026-03-15 at 21.24.54.jpeg",
                                                "created_at":  "2026-03-15",
                                                "updated_at":  "2026-03-15",
                                                "source":  "excel-import",
                                                "notes":  "Pemeliharaan: 2026-03-15 | Pengingat: 5 Bulan | Teknisi: anang,deby | Pekerjaan: cuci unit"
                                            }
                                        ],
-                          "unit_image_paths":  [
-                                                   "C:\\Users\\justdoit\\Documents\\SEJUK\\Sejuk Data\\database konsumen\\dokumentasi\\bu arsita kalisube 2026-03-15 at 21.24.54.jpeg"
-                                               ],
-                          "unit_image_urls":  [
-
-                                              ],
                           "source_row_numbers":  [
                                                      2
                                                  ]
@@ -327,19 +274,12 @@
                                                "type":  "Split Standard",
                                                "refrigerant":  "R22",
                                                "capacity":  "1 PK",
-                                               "image_path":  "C:\\Users\\justdoit\\Documents\\SEJUK\\Sejuk Data\\database konsumen\\dokumentasi\\febri sirau 2026-03-19 at 14.33.08.jpeg",
                                                "created_at":  "2026-03-19",
                                                "updated_at":  "2026-03-19",
                                                "source":  "excel-import",
                                                "notes":  "Pemasangan: 2026-03-19 | Perbaikan: 2026-03-19 | Pengingat: 4 Bulan | Teknisi: topik,wawan | Pekerjaan: ganti overload, ganti kapasitor 30mf, tambah freon, perbaikan naple"
                                            }
                                        ],
-                          "unit_image_paths":  [
-                                                   "C:\\Users\\justdoit\\Documents\\SEJUK\\Sejuk Data\\database konsumen\\dokumentasi\\febri sirau 2026-03-19 at 14.33.08.jpeg"
-                                               ],
-                          "unit_image_urls":  [
-
-                                              ],
                           "source_row_numbers":  [
                                                      4
                                                  ]
@@ -365,20 +305,12 @@
                                                "type":  "Split Standard",
                                                "refrigerant":  "R32",
                                                "capacity":  "0.5 PK",
-                                               "image_path":  "C:\\Users\\justdoit\\Documents\\SEJUK\\Sejuk Data\\database konsumen\\dokumentasi\\luigi plana 2026-03-19 at 18.16.49.jpeg",
                                                "created_at":  "2026-03-18",
                                                "updated_at":  "2026-03-18",
                                                "source":  "excel-import",
                                                "notes":  "Pemasangan: 2026-03-18 | Pengingat: 4 Bulan | Teknisi: wawan,deby | Pekerjaan: pemasangan unit material dan jasa"
                                            }
                                        ],
-                          "unit_image_paths":  [
-                                                   "C:\\Users\\justdoit\\Documents\\SEJUK\\Sejuk Data\\database konsumen\\dokumentasi\\luigi plana 2026-03-19 at 18.16.49.jpeg",
-                                                   "C:\\Users\\justdoit\\Documents\\SEJUK\\Sejuk Data\\database konsumen\\dokumentasi\\luigi plana-2026-03-19 at 18.16.48.jpeg"
-                                               ],
-                          "unit_image_urls":  [
-
-                                              ],
                           "source_row_numbers":  [
                                                      6
                                                  ]
@@ -404,19 +336,12 @@
                                                "type":  "Split Standard",
                                                "refrigerant":  "R22",
                                                "capacity":  "0.5 PK",
-                                               "image_path":  "C:\\Users\\justdoit\\Documents\\SEJUK\\Sejuk Data\\database konsumen\\dokumentasi\\toro 2026-03-15 at 21.58.08.jpeg",
                                                "created_at":  "2026-03-17",
                                                "updated_at":  "2026-03-17",
                                                "source":  "excel-import",
                                                "notes":  "Perbaikan: 2026-03-17 | Pengingat: 4 Bulan | Teknisi: wawan,topik | Pekerjaan: jog freon"
                                            }
                                        ],
-                          "unit_image_paths":  [
-                                                   "C:\\Users\\justdoit\\Documents\\SEJUK\\Sejuk Data\\database konsumen\\dokumentasi\\toro 2026-03-15 at 21.58.08.jpeg"
-                                               ],
-                          "unit_image_urls":  [
-
-                                              ],
                           "source_row_numbers":  [
                                                      5
                                                  ]

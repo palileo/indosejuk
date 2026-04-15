@@ -254,8 +254,6 @@ function Build-ProfilePayload {
         status = $Consumer.status
         verified_at = $Consumer.verified_at
         ac_units = @($Consumer.ac_units)
-        unit_image_paths = @($Consumer.unit_image_paths)
-        unit_image_urls = @($Consumer.unit_image_urls)
     }
 }
 

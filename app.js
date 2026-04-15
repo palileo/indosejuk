@@ -394,9 +394,7 @@ function createDefaultData() {
         orders: [],
         currentSession: null,
         uiCache: {
-            unitImagesByUser: {},
-            teknisiDocsByUser: {},
-            profilePhotosByUser: {}
+            teknisiDocsByUser: {}
         },
         imageCatalog: DEFAULT_IMAGE_CATALOG,
         appSettings: {
@@ -2103,11 +2101,8 @@ function validateImageFile(file, options = {}) {
 
 function getStorageTargetConfig(target) {
     const targetMap = {
-        'konsumen-unit': { bucket: getPublicUploadBucket(), isPrivate: false, folder: 'units' },
-        'profile-photo': { bucket: getPublicUploadBucket(), isPrivate: false, folder: 'profile' },
         'teknisi-ktp': { bucket: getPrivateDocumentBucket(), isPrivate: true, folder: 'ktp' },
-        'teknisi-selfie': { bucket: getPrivateDocumentBucket(), isPrivate: true, folder: 'selfie' },
-        'order-proof': { bucket: getPublicUploadBucket(), isPrivate: false, folder: 'proofs' }
+        'teknisi-selfie': { bucket: getPrivateDocumentBucket(), isPrivate: true, folder: 'selfie' }
     };
     return targetMap[target] || null;
 }
@@ -2119,21 +2114,11 @@ function buildStoragePath(options = {}) {
     const uniqueSuffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const target = options.target;
 
-    if (target === 'konsumen-unit') {
-        return `users/${userId}/units/${uniqueSuffix}-${fileName}`;
-    }
-    if (target === 'profile-photo') {
-        return `users/${userId}/profile/${uniqueSuffix}-${fileName}`;
-    }
     if (target === 'teknisi-ktp') {
         return `users/${userId}/ktp/${uniqueSuffix}-${fileName}`;
     }
     if (target === 'teknisi-selfie') {
         return `users/${userId}/selfie/${uniqueSuffix}-${fileName}`;
-    }
-    if (target === 'order-proof') {
-        const orderId = slugifyPathSegment(options.orderId || 'manual');
-        return `users/${userId}/orders/${orderId}/proofs/${uniqueSuffix}-${fileName}`;
     }
 
     throw new Error('Target upload storage tidak dikenal.');
@@ -2378,13 +2363,10 @@ function normalizeUser(user, role, index = 0) {
         birthDate: user?.birthDate || user?.tanggalLahir || '',
         age: calculateAge(user?.birthDate || user?.tanggalLahir || '') || user?.age || '',
         status: normalizeProfileStatus(user?.status || PROFILE_STATUS_ACTIVE),
-        joinedAt: user?.joinedAt || user?.joined || defaults.joinedAt || new Date().toISOString(),
-        profilePhotoPath: user?.profilePhotoPath || user?.profile_photo_path || '',
-        profilePhotoUrl: user?.profilePhotoUrl || user?.profile_photo_url || ''
+        joinedAt: user?.joinedAt || user?.joined || defaults.joinedAt || new Date().toISOString()
     };
 
     if (role === 'konsumen') {
-        normalized.unitImages = Array.isArray(user?.unitImages) ? user.unitImages : [];
         normalized.district = user?.district || user?.kecamatan || '';
         normalized.locationText = user?.locationText || user?.location_text || '';
         normalized.lat = user?.lat || '';
@@ -2453,12 +2435,7 @@ function sanitizeData(input) {
     data.users.teknisi = Array.isArray(data.users.teknisi) && data.users.teknisi.length ? data.users.teknisi : createDefaultUsers().teknisi;
     data.orders = Array.isArray(data.orders) ? data.orders : [];
     data.currentSession = data.currentSession || null;
-    data.uiCache = data.uiCache || {
-        unitImagesByUser: {},
-        teknisiDocsByUser: {},
-        profilePhotosByUser: {}
-    };
-    data.uiCache.profilePhotosByUser = data.uiCache.profilePhotosByUser || {};
+    data.uiCache = data.uiCache || { teknisiDocsByUser: {} };
     data.appSettings = {
         appName: 'Indo Sejuk AC',
         storageMode: 'supabase-auth-supabase-data',
@@ -2546,7 +2523,7 @@ function getNavItems(role) {
             { id: 'konsumen-order', label: 'Pesan Layanan', icon: navIcon('plus') },
             { id: 'konsumen-history', label: 'Riwayat', icon: navIcon('clock') },
             { id: 'konsumen-profile', label: 'Profil', icon: navIcon('user') },
-            { id: 'konsumen-unit', label: 'Foto Unit', icon: navIcon('camera') }
+            { id: 'konsumen-unit', label: 'Data Unit', icon: navIcon('grid') }
         ];
     }
     if (role === 'teknisi') {
@@ -2822,7 +2799,6 @@ function switchUserTab(tab, element) {
     const ids = {
         konsumen: 'adminUserKonsumenCard',
         teknisi: 'adminUserTeknisiCard',
-        'foto-unit': 'adminUserFotoUnitCard',
         admin: 'adminUserAdminCard',
         layanan: 'adminUserServicesCard',
         gambar: 'adminUserImageCard'
@@ -3554,10 +3530,6 @@ async function editKonsumenUnit(index) {
         return false;
     }
 
-    if (!targetUnit.imageUrl && targetUnit.imagePath) {
-        targetUnit.imageUrl = await resolveStorageImageUrl(getPublicUploadBucket(), targetUnit.imagePath);
-    }
-
     const state = getKonsumenUnitDraftState();
     state.active = true;
     state.editingKey = targetUnit.key;
@@ -3794,64 +3766,6 @@ async function handleTekDocUpload(event, type) {
     }
 }
 
-async function handleProfilePhotoUpload(event, role) {
-    event?.stopPropagation?.();
-    const file = event.target.files?.[0];
-    const profile = getCurrentUser();
-    if (!file || !profile || profile.role !== role) return;
-    const lockKey = `upload:profile-photo:${profile.id}`;
-    if (runtimeState.uploadLocks[lockKey]) return;
-    runtimeState.uploadLocks[lockKey] = true;
-
-    const statusId = role === 'konsumen' ? 'profileKonsumenPhotoStatus' : 'profileTeknisiPhotoStatus';
-    const previousPhoto = getProfilePhotoState(profile);
-    setElementText(statusId, 'Mengunggah foto profil ke Supabase Storage...');
-
-    try {
-        const uploaded = await uploadImageToSupabaseStorage({
-            file,
-            target: 'profile-photo',
-            userId: profile.id,
-            label: 'Foto profil'
-        });
-        await persistUploadedImageReference({
-            target: 'profile-photo',
-            path: uploaded.path,
-            url: uploaded.url
-        });
-        await syncUploadedAssetToRemote({
-            target: 'profile-photo',
-            profileId: profile.id,
-            bucket: uploaded.bucket,
-            path: uploaded.path
-        });
-        clearInputFileValue(event.target.id);
-        await renderProfilePhotoSection(role);
-        setElementText(statusId, 'Foto profil berhasil tersimpan.');
-        showToast('Foto profil berhasil diunggah.', 'success');
-
-        if (previousPhoto.path && previousPhoto.path !== uploaded.path) {
-            await deleteImageFromSupabaseStorage({
-                bucket: getPublicUploadBucket(),
-                path: previousPhoto.path,
-                url: previousPhoto.url
-            }).catch(() => {});
-            await syncDeletionToRemote({
-                target: 'profile-photo',
-                profileId: profile.id,
-                path: previousPhoto.path,
-                bucket: getPublicUploadBucket()
-            }).catch(() => {});
-        }
-    } catch (error) {
-        console.error('Gagal upload foto profil:', error);
-        setElementText(statusId, toUserFacingError(error, 'Upload foto profil gagal.'));
-        showToast(toUserFacingError(error, 'Upload foto profil gagal.'), 'error');
-    } finally {
-        runtimeState.uploadLocks[lockKey] = false;
-    }
-}
-
 async function finalizeSignupUploadsAfterSession(role) {
     const profile = runtimeState.registrationSessionActive
         ? (remoteState.profile || await fetchCurrentProfileStrict().catch(() => null))
@@ -3859,55 +3773,10 @@ async function finalizeSignupUploadsAfterSession(role) {
     if (!profile) return null;
 
     if (role === 'konsumen' && draftUploads.regKonSavedUnits.length) {
-        const uploadedAssets = [];
-        const persistedUnits = [];
-
-        for (const draftUnit of draftUploads.regKonSavedUnits) {
-            let uploaded = null;
-            if (draftUnit.draftFile?.dataUrl) {
-                const file = createFileLikeFromDraft(draftUnit.draftFile, draftUnit.draftFile.name || 'foto-unit.jpg');
-                uploaded = await uploadImageToSupabaseStorage({
-                    file,
-                    target: 'konsumen-unit',
-                    userId: profile.id,
-                    label: 'Foto unit'
-                });
-            }
-
-            if (uploaded?.path) uploadedAssets.push(uploaded);
-            persistedUnits.push(normalizeAcUnitRecord({
-                ...draftUnit,
-                image_path: uploaded?.path || draftUnit.imagePath || '',
-                image_url: uploaded?.url || draftUnit.imageUrl || ''
-            }, {
-                source: 'register'
-            }));
-        }
-
-        try {
-            const updatedProfile = await persistUploadedImageReference({
-                target: 'konsumen-unit',
-                units: persistedUnits
-            });
-            if (uploadedAssets.length) {
-                await syncUploadedAssetToRemote({
-                    target: 'konsumen-unit',
-                    profileId: profile.id,
-                    bucket: getPublicUploadBucket(),
-                    paths: uploadedAssets.map((item) => item.path)
-                });
-            }
-            return updatedProfile;
-        } catch (error) {
-            for (const asset of uploadedAssets) {
-                await deleteImageFromSupabaseStorage({
-                    bucket: asset.bucket || getPublicUploadBucket(),
-                    path: asset.path,
-                    url: asset.url
-                }).catch(() => {});
-            }
-            throw error;
-        }
+        return persistUploadedImageReference({
+            target: 'konsumen-unit',
+            units: draftUploads.regKonSavedUnits.map((unit) => ({ ...unit }))
+        });
     }
 
     if (role === 'teknisi') {
@@ -4627,14 +4496,6 @@ async function deleteOrderByAdmin(orderId) {
             .eq('id', orderId);
         if (error) throw error;
 
-        if (order.proofImagePath) {
-            await deleteImageFromSupabaseStorage({
-                bucket: getPublicUploadBucket(),
-                path: order.proofImagePath,
-                url: order.proofImageUrl
-            }).catch(() => {});
-        }
-
         await loadAdminMasterData();
         await renderAdminOrders();
         await renderAdminHistory();
@@ -4879,21 +4740,7 @@ async function openOrderDetail(orderId) {
         return;
     }
 
-    const proofUrl = order.proofImageUrl || order.proofImage || await resolveStorageImageUrl(getPublicUploadBucket(), order.proofImagePath);
     const mapsLink = resolveOrderCustomerMapsLink(order);
-    const canRemoveProof = remoteState.profile?.role === 'teknisi' && remoteState.profile?.id === order.teknisiId && proofUrl;
-    const proof = proofUrl
-        ? `
-            <div class="image-card">
-                <img src="${escapeHtml(proofUrl)}" alt="Bukti pekerjaan">
-                ${canRemoveProof ? `
-                    <div class="image-card-actions">
-                        <button type="button" class="btn btn-danger btn-xs" onclick="confirmRemoveOrderProof('${order.id}')">Hapus Gambar</button>
-                    </div>
-                ` : ''}
-            </div>
-        `
-        : '<p class="text-muted">Belum ada bukti pekerjaan.</p>';
 
     document.getElementById('modalDetailBody').innerHTML = `
         <div class="order-detail-layout">
@@ -4945,11 +4792,6 @@ async function openOrderDetail(orderId) {
                 <h4>Catatan Konsumen</h4>
                 <p class="order-detail-message">${escapeHtml(order.notes || 'Tidak ada catatan tambahan.')}</p>
             </section>
-
-            <section class="detail-section-card detail-section-card--full">
-                <h4>Bukti Pekerjaan</h4>
-                <div class="detail-proof">${proof}</div>
-            </section>
         </div>
     `;
     document.getElementById('modalDetail').style.display = 'flex';
@@ -4987,40 +4829,6 @@ async function confirmRemoveTeknisiDocument(type) {
     }
 }
 
-async function confirmRemoveProfilePhoto(role) {
-    const profile = getCurrentUser();
-    if (!profile || profile.role !== role) return;
-    if (!window.confirm('Hapus foto profil ini dari Storage dan cache perangkat?')) return;
-    try {
-        await removeUploadedImage({ target: 'profile-photo' });
-        clearInputFileValue(role === 'konsumen' ? 'profileKonsumenPhotoCamera' : 'profileTeknisiPhotoCamera');
-        clearInputFileValue(role === 'konsumen' ? 'profileKonsumenPhotoDevice' : 'profileTeknisiPhotoDevice');
-        await renderProfilePhotoSection(role);
-        setElementText(role === 'konsumen' ? 'profileKonsumenPhotoStatus' : 'profileTeknisiPhotoStatus', 'Foto profil berhasil dihapus.');
-        showToast('Foto profil berhasil dihapus.', 'success');
-    } catch (error) {
-        console.error('Gagal menghapus foto profil:', error);
-        showToast(toUserFacingError(error, 'Gagal menghapus foto profil.'), 'error');
-    }
-}
-
-async function confirmRemoveOrderProof(orderId) {
-    if (!window.confirm('Hapus bukti pekerjaan ini? Status pesanan akan dikembalikan ke dikerjakan agar tidak menipu seolah sudah selesai.')) return;
-    try {
-        await removeUploadedImage({ target: 'order-proof', orderId });
-        closeModal('modalDetail');
-        setElementText('uploadProofStatus', 'Bukti pekerjaan berhasil dihapus dan status pesanan dikembalikan ke dikerjakan.');
-        if (currentView === 'teknisi-upload') {
-            uploadingOrderId = orderId;
-            await renderTeknisiUpload();
-        }
-        showToast('Bukti pekerjaan berhasil dihapus.', 'success');
-    } catch (error) {
-        console.error('Gagal menghapus bukti pekerjaan:', error);
-        showToast(toUserFacingError(error, 'Gagal menghapus bukti pekerjaan.'), 'error');
-    }
-}
-
 async function startJob(orderId) {
     const profile = await requireAuthenticatedProfile(false);
     if (!profile || profile.role !== 'teknisi') return;
@@ -5048,84 +4856,22 @@ async function startJob(orderId) {
     }
 }
 
-function openUploadProof(orderId) {
-    if (!requireRole('teknisi')) return;
-    uploadingOrderId = orderId;
-    clearImagePreviewState('upload-proof-draft');
-    navigateTo('teknisi-upload');
-}
-
-async function handleFileUpload(event) {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    validateImageFile(file, { label: 'Bukti pekerjaan' });
-    uploadProofImage = await readFileAsDataUrl(file);
-    uploadProofFileMeta = {
-        dataUrl: uploadProofImage,
-        name: file.name,
-        type: file.type,
-        size: file.size,
-        lastModified: file.lastModified
-    };
-    document.getElementById('uploadPreviewImg').src = uploadProofImage;
-    document.getElementById('uploadFileName').textContent = file.name;
-    document.getElementById('uploadPreview').style.display = 'block';
-    setElementText('uploadProofStatus', 'Preview bukti siap dikirim ke Supabase Storage.');
-}
-
-async function submitUploadProof() {
+async function completeJob(orderId) {
     const profile = await requireAuthenticatedProfile(false);
     if (!profile || profile.role !== 'teknisi') return;
-
-    if (!uploadingOrderId || !uploadProofImage) {
-        showToast('Pilih foto bukti pekerjaan terlebih dahulu.', 'error');
-        return;
-    }
-
-    const lockKey = `upload:order-proof:${uploadingOrderId}`;
+    const lockKey = `complete:order:${orderId}`;
     if (runtimeState.uploadLocks[lockKey]) return;
     runtimeState.uploadLocks[lockKey] = true;
-    setElementText('uploadProofStatus', 'Mengunggah bukti pekerjaan ke Supabase Storage...');
 
     try {
-        const file = createFileLikeFromDraft(uploadProofFileMeta || {
-            dataUrl: uploadProofImage,
-            name: `bukti-${uploadingOrderId}.jpg`,
-            type: 'image/jpeg'
-        }, `bukti-${uploadingOrderId}.jpg`);
-        const uploaded = await uploadImageToSupabaseStorage({
-            file,
-            target: 'order-proof',
-            userId: profile.id,
-            orderId: uploadingOrderId,
-            label: 'Bukti pekerjaan'
-        });
-        await persistUploadedImageReference({
-            target: 'order-proof',
-            orderId: uploadingOrderId,
-            path: uploaded.path,
-            url: uploaded.url,
-            status: 'Selesai'
-        });
-        await syncUploadedAssetToRemote({
-            target: 'order-proof',
-            profileId: profile.id,
-            orderId: uploadingOrderId,
-            bucket: uploaded.bucket,
-            path: uploaded.path
-        });
-
-        clearImagePreviewState('upload-proof-draft', {
-            message: 'Bukti pekerjaan berhasil dikirim ke Supabase.'
-        });
-        uploadingOrderId = null;
+        await updateOrderForCurrentTeknisi(orderId, { status: 'Selesai' });
         await loadCurrentOrdersForProfile();
-        await navigateTo('teknisi-home');
-        showToast('Bukti pekerjaan berhasil dikirim ke Supabase.', 'success');
+        await renderTeknisiHome();
+        await renderTeknisiJobs();
+        showToast('Pekerjaan berhasil ditandai selesai.', 'success');
     } catch (error) {
-        console.error('Gagal upload bukti pekerjaan:', error);
-        setElementText('uploadProofStatus', toUserFacingError(error, 'Gagal mengirim bukti pekerjaan.'));
-        showToast(toUserFacingError(error, 'Gagal mengirim bukti pekerjaan.'), 'error');
+        console.error('Gagal menyelesaikan pekerjaan:', error);
+        showToast(toUserFacingError(error, 'Gagal menandai pekerjaan selesai.'), 'error');
     } finally {
         runtimeState.uploadLocks[lockKey] = false;
     }
@@ -6083,25 +5829,16 @@ function activatePasswordRecoveryMode() {
 
 function getLocalUiCache() {
     const data = getData();
-    data.uiCache = data.uiCache || { unitImagesByUser: {}, teknisiDocsByUser: {}, profilePhotosByUser: {} };
-    data.uiCache.profilePhotosByUser = data.uiCache.profilePhotosByUser || {};
+    data.uiCache = data.uiCache || { teknisiDocsByUser: {} };
     return data.uiCache;
 }
 
 function updateLocalUiCache(mutator) {
     const data = getData();
-    data.uiCache = data.uiCache || { unitImagesByUser: {}, teknisiDocsByUser: {}, profilePhotosByUser: {} };
-    data.uiCache.profilePhotosByUser = data.uiCache.profilePhotosByUser || {};
+    data.uiCache = data.uiCache || { teknisiDocsByUser: {} };
     mutator(data.uiCache);
     saveData(data);
     return data.uiCache;
-}
-
-function getUnitImagesForUser(userId) {
-    const cache = getLocalUiCache();
-    const localImages = Array.isArray(cache.unitImagesByUser?.[userId]) ? cache.unitImagesByUser[userId] : [];
-    const remoteImages = remoteState.profile?.id === userId ? normalizeTextArray(remoteState.profile.unitImageUrls) : [];
-    return Array.from(new Set([...remoteImages, ...localImages].filter(Boolean)));
 }
 
 function getTeknisiDocsForUser(userId) {
@@ -6116,56 +5853,9 @@ function getTeknisiDocsForUser(userId) {
     };
 }
 
-function getProfilePhotoForUser(userId) {
-    const cache = getLocalUiCache();
-    return cache.profilePhotosByUser?.[userId] || {
-        path: '',
-        url: ''
-    };
-}
-
-function getProfilePhotoState(profile = {}, options = {}) {
-    const cachedPhoto = profile?.id ? getProfilePhotoForUser(profile.id) : { path: '', url: '' };
-    return {
-        path: String(options.photoPath || profile.profilePhotoPath || profile.profile_photo_path || cachedPhoto.path || '').trim(),
-        url: String(options.photoUrl || profile.profilePhotoUrl || profile.profile_photo_url || cachedPhoto.url || '').trim()
-    };
-}
-
-async function hydrateProfilePhotoState(profile = {}, options = {}) {
-    const photo = getProfilePhotoState(profile, options);
-    if (!profile?.id || photo.url || !photo.path) return photo;
-
-    const resolvedUrl = await resolveStorageImageUrl(getPublicUploadBucket(), photo.path, {
-        forceRefresh: Boolean(options.forceRefresh)
-    });
-    if (!resolvedUrl) return photo;
-
-    photo.url = String(resolvedUrl || '').trim();
-    updateLocalUiCache((cache) => {
-        cache.profilePhotosByUser[profile.id] = {
-            path: photo.path,
-            url: photo.url
-        };
-    });
-
-    if (profile && typeof profile === 'object') {
-        profile.profilePhotoPath = photo.path;
-        profile.profilePhotoUrl = photo.url;
-    }
-    if (remoteState.profile?.id === profile.id) {
-        remoteState.profile.profilePhotoPath = photo.path;
-        remoteState.profile.profilePhotoUrl = photo.url;
-    }
-
-    return photo;
-}
 
 function clearImagePreviewState(target, options = {}) {
     switch (target) {
-    case 'register-konsumen-unit':
-        resetRegisterAcUnitDraft({ silent: true });
-        break;
     case 'register-teknisi-ktp':
         draftUploads.regTekKtpPhoto = '';
         draftUploads.regTekKtpFile = null;
@@ -6186,17 +5876,6 @@ function clearImagePreviewState(target, options = {}) {
         if (regSelfiePreview) regSelfiePreview.innerHTML = '';
         clearInputFileValue('regTekSelfieCamera');
         clearInputFileValue('regTekSelfieDevice');
-        break;
-    case 'upload-proof-draft':
-        uploadProofImage = null;
-        uploadProofFileMeta = null;
-        const proofPreview = document.getElementById('uploadPreview');
-        if (proofPreview) proofPreview.style.display = 'none';
-        const proofImage = document.getElementById('uploadPreviewImg');
-        if (proofImage) proofImage.removeAttribute('src');
-        setElementText('uploadFileName', '');
-        setElementText('uploadProofStatus', options.message || 'Belum ada bukti yang dipilih.');
-        clearInputFileValue('uploadFileInput');
         break;
     default:
         break;
@@ -6229,26 +5908,13 @@ async function persistUploadedImageReference(options = {}) {
     if (!profile) throw new Error('Session login dibutuhkan untuk menyimpan referensi gambar.');
 
     if (options.target === 'konsumen-unit') {
-        clearMissingProfileColumns(['ac_units', 'unit_image_paths', 'unit_image_urls']);
-        const nextUnits = normalizeAcUnitArray(options.units, {
-            unitImagePaths: options.paths,
-            unitImageUrls: options.urls,
-            joinedAt: profile.joinedAt
-        });
-        const nextLegacyImages = collectLegacyUnitImagesFromUnits(nextUnits);
-        const cleanupPath = options.cleanupPath || nextLegacyImages.paths[nextLegacyImages.paths.length - 1] || '';
-        const cleanupUrl = options.cleanupUrl || nextLegacyImages.urls[nextLegacyImages.urls.length - 1] || '';
+        clearMissingProfileColumns(['ac_units']);
+        const nextUnits = normalizeAcUnitArray(options.units);
         const updatedProfile = await upsertOwnProfile(validateProfilePayloadForRole('konsumen', {
             ...profile,
             referral: options.referral ?? profile.referral,
-            ac_units: nextUnits,
-            unit_image_paths: nextLegacyImages.paths,
-            unit_image_urls: nextLegacyImages.urls
+            ac_units: nextUnits
         }));
-        if (nextLegacyImages.paths.length && updatedProfile.unitImagePaths.length < nextLegacyImages.paths.length) {
-            await deleteImageFromSupabaseStorage({ bucket: getPublicUploadBucket(), path: cleanupPath, url: cleanupUrl });
-            throw new Error('Kolom storage foto unit belum siap di schema profiles. Jalankan migration storage terlebih dahulu.');
-        }
         const persistedUnits = getProfileAcUnits(updatedProfile);
         const metadataRequired = nextUnits.some(hasAcUnitStructuredData);
         const metadataLost = metadataRequired && nextUnits.some((unit, index) => {
@@ -6260,41 +5926,9 @@ async function persistUploadedImageReference(options = {}) {
                 || persisted.capacity !== unit.capacity;
         });
         if (metadataLost) {
-            if (cleanupPath || cleanupUrl) {
-                await deleteImageFromSupabaseStorage({ bucket: getPublicUploadBucket(), path: cleanupPath, url: cleanupUrl });
-            }
             throw new Error('Metadata unit AC belum bisa dikonfirmasi dari profile setelah penyimpanan. Coba simpan ulang sebentar lagi.');
         }
         applySupabaseSession(updatedProfile);
-        updateLocalUiCache((cache) => {
-            cache.unitImagesByUser[profile.id] = nextLegacyImages.urls;
-        });
-        return updatedProfile;
-    }
-
-    if (options.target === 'profile-photo') {
-        const nextPath = String(options.path || '').trim();
-        const nextUrl = String(options.url || '').trim();
-        const updatedProfile = await upsertOwnProfile(validateProfilePayloadForRole(profile.role, {
-            ...profile,
-            profile_photo_path: nextPath,
-            profile_photo_url: nextUrl
-        }));
-        if (nextPath && updatedProfile.profilePhotoPath !== nextPath) {
-            await deleteImageFromSupabaseStorage({ bucket: getPublicUploadBucket(), path: nextPath, url: nextUrl });
-            throw new Error('Kolom storage foto profil belum siap di schema profiles. Jalankan migration storage foto profil terlebih dahulu.');
-        }
-        applySupabaseSession(updatedProfile);
-        updateLocalUiCache((cache) => {
-            if (nextPath || nextUrl) {
-                cache.profilePhotosByUser[profile.id] = {
-                    path: updatedProfile.profilePhotoPath || nextPath,
-                    url: updatedProfile.profilePhotoUrl || nextUrl
-                };
-                return;
-            }
-            delete cache.profilePhotosByUser[profile.id];
-        });
         return updatedProfile;
     }
 
@@ -6323,20 +5957,6 @@ async function persistUploadedImageReference(options = {}) {
         return updatedProfile;
     }
 
-    if (options.target === 'order-proof') {
-        const updatedOrder = await updateOrderForCurrentTeknisi(options.orderId, {
-            proof_image_path: options.path || null,
-            proof_image_url: options.url || null,
-            proof_image_data: null,
-            status: options.status || 'Selesai'
-        });
-        if (options.path && updatedOrder.proofImagePath !== options.path) {
-            await deleteImageFromSupabaseStorage({ bucket: getPublicUploadBucket(), path: options.path, url: options.url });
-            throw new Error('Kolom storage bukti pekerjaan belum siap di schema orders. Jalankan migration storage terlebih dahulu.');
-        }
-        return updatedOrder;
-    }
-
     throw new Error('Persist referensi gambar belum didukung untuk target ini.');
 }
 
@@ -6348,48 +5968,11 @@ async function removeUploadedImage(options = {}) {
         const currentUnits = getProfileAcUnits(profile);
         const targetIndex = Number(options.index);
         if (!Number.isInteger(targetIndex) || targetIndex < 0) throw new Error('Index gambar unit tidak valid.');
-        const targetUnit = currentUnits[targetIndex];
-        if (!targetUnit) throw new Error('Data unit AC tidak ditemukan.');
-        const path = targetUnit.imagePath || '';
-        const url = targetUnit.imageUrl || '';
-        await deleteImageFromSupabaseStorage({
-            bucket: getPublicUploadBucket(),
-            path,
-            url
-        });
         const nextUnits = currentUnits.filter((_, index) => index !== targetIndex);
-        const updatedProfile = await persistUploadedImageReference({
+        return persistUploadedImageReference({
             target: 'konsumen-unit',
             units: nextUnits
         });
-        await syncDeletionToRemote({
-            target: 'konsumen-unit',
-            profileId: profile.id,
-            path,
-            bucket: getPublicUploadBucket()
-        });
-        return updatedProfile;
-    }
-
-    if (options.target === 'profile-photo') {
-        const photo = getProfilePhotoState(profile);
-        await deleteImageFromSupabaseStorage({
-            bucket: getPublicUploadBucket(),
-            path: photo.path,
-            url: photo.url
-        });
-        const updatedProfile = await persistUploadedImageReference({
-            target: 'profile-photo',
-            path: '',
-            url: ''
-        });
-        await syncDeletionToRemote({
-            target: 'profile-photo',
-            profileId: profile.id,
-            path: photo.path,
-            bucket: getPublicUploadBucket()
-        });
-        return updatedProfile;
     }
 
     if (options.target === 'teknisi-ktp' || options.target === 'teknisi-selfie') {
@@ -6415,32 +5998,6 @@ async function removeUploadedImage(options = {}) {
         return updatedProfile;
     }
 
-    if (options.target === 'order-proof') {
-        const order = findVisibleOrderById(options.orderId);
-        if (!order) throw new Error('Pesanan bukti tidak ditemukan.');
-        await deleteImageFromSupabaseStorage({
-            bucket: getPublicUploadBucket(),
-            path: order.proofImagePath,
-            url: order.proofImageUrl || order.proofImage
-        });
-        const updatedOrder = await persistUploadedImageReference({
-            target: 'order-proof',
-            orderId: order.id,
-            path: '',
-            url: '',
-            status: order.status === 'Selesai' ? 'Dikerjakan' : (order.status || 'Dikerjakan')
-        });
-        await syncDeletionToRemote({
-            target: 'order-proof',
-            orderId: order.id,
-            profileId: profile.id,
-            path: order.proofImagePath,
-            bucket: getPublicUploadBucket()
-        });
-        remoteState.currentOrders = remoteState.currentOrders.map((item) => item.id === updatedOrder.id ? updatedOrder : item);
-        return updatedOrder;
-    }
-
     throw new Error('Target hapus gambar belum didukung.');
 }
 
@@ -6452,8 +6009,6 @@ function clearRemoteSessionState(options = {}) {
     remoteState.adminProfiles = { konsumen: [], teknisi: [], admin: [] };
     remoteState.adminOrders = [];
     currentRole = null;
-    uploadingOrderId = null;
-    uploadProofImage = null;
     runtimeState.profileEditor.konsumen = {
         isEditing: false,
         isDirty: false,
@@ -6468,12 +6023,7 @@ function clearRemoteSessionState(options = {}) {
 
 function sanitizeProfileRecord(profile) {
     if (!profile) return null;
-    const normalizedUnits = normalizeAcUnitArray(profile.ac_units || profile.acUnits, {
-        unitImagePaths: profile.unit_image_paths || profile.unitImagePaths,
-        unitImageUrls: profile.unit_image_urls || profile.unitImageUrls,
-        joinedAt: profile.created_at || profile.joinedAt || ''
-    });
-    const legacyImages = collectLegacyUnitImagesFromUnits(normalizedUnits);
+    const normalizedUnits = normalizeAcUnitArray(profile.ac_units || profile.acUnits);
     return {
         ...profile,
         role: String(profile.role || '').trim().toLowerCase(),
@@ -6502,11 +6052,6 @@ function sanitizeProfileRecord(profile) {
         verifiedBy: profile.verified_by || profile.verifiedBy || '',
         verifiedByName: profile.verified_by_name || profile.verifiedByName || '',
         acUnits: normalizedUnits,
-        unitImagePaths: legacyImages.paths,
-        unitImageUrls: legacyImages.urls,
-        unitImages: legacyImages.urls,
-        profilePhotoPath: String(profile.profile_photo_path || profile.profilePhotoPath || '').trim(),
-        profilePhotoUrl: String(profile.profile_photo_url || profile.profilePhotoUrl || '').trim(),
         ktpPhotoPath: String(profile.ktp_photo_path || profile.ktpPhotoPath || '').trim(),
         ktpPhotoUrl: String(profile.ktp_photo_url || profile.ktpPhotoUrl || '').trim(),
         selfiePhotoPath: String(profile.selfie_photo_path || profile.selfiePhotoPath || '').trim(),
@@ -6597,9 +6142,6 @@ function mapOrderRecord(order, options = {}) {
         address: normalizeWhitespace(order.address || fallbackSnapshot.address || ''),
         notes: normalizeWhitespace(order.notes || fallbackSnapshot.notes || ''),
         acUnitKey: order.ac_unit_key || order.acUnitKey || fallbackSnapshot.ac_unit_key || fallbackSnapshot.acUnitKey || '',
-        proofImagePath: order.proof_image_path || order.proofImagePath || fallbackSnapshot.proof_image_path || fallbackSnapshot.proofImagePath || '',
-        proofImageUrl: order.proof_image_url || order.proofImageUrl || fallbackSnapshot.proof_image_url || fallbackSnapshot.proofImageUrl || '',
-        proofImage: order.proof_image_data || order.proof_image_url || order.proofImage || fallbackSnapshot.proof_image_data || fallbackSnapshot.proofImage || '',
         createdAt: order.created_at || order.createdAt || '',
         adminConfirmationText: order.admin_confirmation_text || order.adminConfirmationText || fallbackSnapshot.admin_confirmation_text || fallbackSnapshot.adminConfirmationText || '',
         verifiedAt: order.verified_at || order.verifiedAt || fallbackSnapshot.verified_at || fallbackSnapshot.verifiedAt || '',
@@ -6822,43 +6364,11 @@ async function syncHeaderUserAvatar(user = getCurrentUser(), options = {}) {
     const avatarEl = document.getElementById('headerAvatar');
     const imageEl = avatarEl?.querySelector('.user-avatar__image');
     if (!avatarEl || !imageEl) return;
-
-    const profileLabel = user?.name
-        ? `Foto profil ${user.name}`
-        : `Foto profil ${ROLE_LABELS[user?.role] || 'user'}`;
-
-    if (!user?.id) {
-        imageEl.hidden = false;
-        imageEl.src = FALLBACK_IMAGE;
-        imageEl.alt = '';
-        avatarEl.classList.remove('user-avatar--fallback', 'user-avatar--photo');
-        avatarEl.setAttribute('aria-label', 'Logo Indo Sejuk AC');
-        return;
-    }
-
-    try {
-        const photo = await hydrateProfilePhotoState(user, {
-            photoPath: options.photoPath,
-            photoUrl: options.photoUrl,
-            forceRefresh: true
-        });
-        if ((getCurrentUser()?.id || '') !== user.id) return;
-        const photoUrl = photo.url;
-
-        imageEl.hidden = false;
-        imageEl.src = photoUrl || FALLBACK_IMAGE;
-        imageEl.alt = photoUrl ? profileLabel : '';
-        avatarEl.classList.remove('user-avatar--fallback');
-        avatarEl.classList.toggle('user-avatar--photo', Boolean(photoUrl));
-        avatarEl.setAttribute('aria-label', photoUrl ? profileLabel : 'Logo Indo Sejuk AC');
-    } catch (error) {
-        console.warn('Gagal sinkron avatar header:', error);
-        imageEl.hidden = false;
-        imageEl.src = FALLBACK_IMAGE;
-        imageEl.alt = '';
-        avatarEl.classList.remove('user-avatar--fallback', 'user-avatar--photo');
-        avatarEl.setAttribute('aria-label', 'Logo Indo Sejuk AC');
-    }
+    imageEl.hidden = false;
+    imageEl.src = FALLBACK_IMAGE;
+    imageEl.alt = '';
+    avatarEl.classList.remove('user-avatar--fallback', 'user-avatar--photo');
+    avatarEl.setAttribute('aria-label', 'Logo Indo Sejuk AC');
 }
 
 function buildProfileSyncSignature(profile = {}) {
@@ -7100,14 +6610,7 @@ function validateProfilePayloadForRole(role, payload = {}, options = {}) {
         verified_at: payload.verified_at || payload.verifiedAt || '',
         verified_by: payload.verified_by || payload.verifiedBy || '',
         completed_jobs: payload.completed_jobs ?? payload.completedJobs,
-        ac_units: normalizeAcUnitArray(payload.ac_units ?? payload.acUnits, {
-            unitImagePaths: payload.unit_image_paths ?? payload.unitImagePaths,
-            unitImageUrls: payload.unit_image_urls ?? payload.unitImageUrls
-        }),
-        unit_image_paths: normalizeTextArray(payload.unit_image_paths ?? payload.unitImagePaths),
-        unit_image_urls: normalizeTextArray(payload.unit_image_urls ?? payload.unitImageUrls),
-        profile_photo_path: payload.profile_photo_path || payload.profilePhotoPath || '',
-        profile_photo_url: payload.profile_photo_url || payload.profilePhotoUrl || '',
+        ac_units: normalizeAcUnitArray(payload.ac_units ?? payload.acUnits),
         ktp_photo_path: payload.ktp_photo_path || payload.ktpPhotoPath || '',
         ktp_photo_url: payload.ktp_photo_url || payload.ktpPhotoUrl || '',
         selfie_photo_path: payload.selfie_photo_path || payload.selfiePhotoPath || '',
@@ -7140,11 +6643,7 @@ function validateProfilePayloadForRole(role, payload = {}, options = {}) {
         verified_at: toNullableText(cleanPayload.verified_at),
         verified_by: toNullableText(cleanPayload.verified_by),
         completed_jobs: toNullableNumber(cleanPayload.completed_jobs),
-        ac_units: cleanPayload.ac_units,
-        unit_image_paths: cleanPayload.unit_image_paths,
-        unit_image_urls: cleanPayload.unit_image_urls,
-        profile_photo_path: toNullableText(cleanPayload.profile_photo_path),
-        profile_photo_url: toNullableText(cleanPayload.profile_photo_url)
+        ac_units: cleanPayload.ac_units
     };
 
     if (normalizedRole === 'teknisi') {
@@ -7991,7 +7490,7 @@ async function finalizePendingRegistration(role, formValues, authResult) {
 function resetRegisterKonsumenUi() {
     document.getElementById('formRegKonsumen')?.reset();
     draftUploads.regKonSavedUnits = [];
-    clearImagePreviewState('register-konsumen-unit');
+    resetRegisterAcUnitDraft({ silent: true });
     renderRegisterAcUnitSavedList();
     document.getElementById('regKonLocationResult').style.display = 'none';
 }
@@ -8306,7 +7805,6 @@ function renderKonsumenProfile() {
         profileState.isDirty = false;
     }
     syncKonsumenProfileEditorUi();
-    void renderProfilePhotoSection('konsumen');
 }
 
 async function renderKonsumenUnit() {
@@ -8319,13 +7817,8 @@ async function renderKonsumenUnit() {
         return;
     }
 
-    syncStorageStatusMessage('konUnitUploadStatus', getPublicUploadBucket(), 'Draft unit yang di-save akan tersimpan ke Supabase Storage dan profile ac_units.');
+    setElementText('konUnitUploadStatus', 'Draft unit yang di-save akan tersimpan ke profile `ac_units` tanpa foto.');
     const units = getProfileAcUnits(user);
-    for (const unit of units) {
-        if (!unit.imageUrl && unit.imagePath) {
-            unit.imageUrl = await resolveStorageImageUrl(getPublicUploadBucket(), unit.imagePath);
-        }
-    }
 
     gallery.innerHTML = units.length ? `
         <div class="saved-unit-list-header">
@@ -8335,11 +7828,6 @@ async function renderKonsumenUnit() {
         <div class="saved-unit-card-grid">
             ${units.map((unit, index) => `
                 <article class="unit-card">
-                    <div class="unit-card-media">
-                        ${unit.imageUrl
-                            ? `<img src="${escapeHtml(unit.imageUrl)}" alt="${escapeHtml(formatAcUnitLabel(unit, index))}" loading="lazy" decoding="async">`
-                            : '<div class="saved-unit-placeholder">Tanpa Foto</div>'}
-                    </div>
                     <div class="unit-card-body">
                         <div class="unit-card-header">
                             <h4>${escapeHtml(formatAcUnitLabel(unit, index))}</h4>
@@ -8396,7 +7884,7 @@ async function renderTeknisiHome() {
             <div class="btn-action-group">
                 <button class="btn btn-outline btn-xs" onclick="openOrderDetail('${order.id}')">Detail</button>
                 ${order.status === 'Ditugaskan' ? `<button class="btn btn-info btn-xs" onclick="startJob('${order.id}')">Mulai</button>` : ''}
-                ${order.status !== 'Selesai' ? `<button class="btn btn-primary btn-xs" onclick="openUploadProof('${order.id}')">Upload Bukti</button>` : ''}
+                ${order.status === 'Dikerjakan' ? `<button class="btn btn-primary btn-xs" onclick="completeJob('${order.id}')">Selesaikan</button>` : ''}
             </div>
         </div>
     `).join('') : '<div class="empty-state-box"><p>Belum ada pekerjaan yang ditugaskan.</p></div>';
@@ -8421,7 +7909,7 @@ async function renderTeknisiJobs() {
                 <div class="btn-action-group">
                     <button class="btn btn-outline btn-xs" onclick="openOrderDetail('${order.id}')">Detail</button>
                     ${order.status === 'Ditugaskan' ? `<button class="btn btn-info btn-xs" onclick="startJob('${order.id}')">Mulai</button>` : ''}
-                    ${order.status !== 'Selesai' ? `<button class="btn btn-primary btn-xs" onclick="openUploadProof('${order.id}')">Upload</button>` : ''}
+                    ${order.status === 'Dikerjakan' ? `<button class="btn btn-primary btn-xs" onclick="completeJob('${order.id}')">Selesaikan</button>` : ''}
                 </div>
             `)}
         </tr>
@@ -8449,40 +7937,6 @@ function renderTeknisiProfile() {
     document.getElementById('profileTeknisiAddress').value = user.address || '';
     document.getElementById('profileTeknisiLocation').textContent = formatLocationSummary(user);
     document.getElementById('profileTeknisiStatus').textContent = user.status || 'Aktif';
-    void renderProfilePhotoSection('teknisi');
-}
-
-async function renderProfilePhotoSection(role) {
-    const user = getCurrentUser();
-    const previewId = role === 'konsumen' ? 'profileKonsumenPhotoPreview' : 'profileTeknisiPhotoPreview';
-    const statusId = role === 'konsumen' ? 'profileKonsumenPhotoStatus' : 'profileTeknisiPhotoStatus';
-    const preview = document.getElementById(previewId);
-    if (!preview) return;
-
-    if (!user || user.role !== role) {
-        preview.innerHTML = '';
-        return;
-    }
-
-    syncStorageStatusMessage(statusId, getPublicUploadBucket(), 'Foto profil akan tersimpan otomatis dan tampil di logo profil atas saat file dipilih.');
-
-    const photo = await hydrateProfilePhotoState(user, { forceRefresh: true });
-    const photoUrl = photo.url;
-
-    if (photoUrl) {
-        await syncHeaderUserAvatar(user, photo);
-        preview.innerHTML = createPreviewCardHtml(photoUrl, {
-            alt: `Foto profil ${user.name || ROLE_LABELS[role] || 'user'}`,
-            caption: 'Foto profil aktif',
-            deleteTarget: 'confirmRemoveProfilePhoto',
-            deleteArgs: [role],
-            deleteLabel: 'Hapus Foto'
-        });
-        return;
-    }
-
-    await syncHeaderUserAvatar(user);
-    preview.innerHTML = '<div class="empty-state-box"><p>Belum ada foto profil.</p></div>';
 }
 
 async function renderTeknisiDocs() {
@@ -8524,43 +7978,6 @@ async function renderTeknisiDocs() {
     }) : '<div class="empty-state-box"><p>Belum ada foto diri.</p></div>';
 }
 
-async function renderTeknisiUpload() {
-    const info = document.getElementById('uploadOrderInfo');
-    const order = remoteState.currentOrders.find((item) => item.id === uploadingOrderId);
-    if (info) {
-        info.innerHTML = order ? `
-        <div class="detail-row"><span class="detail-label">Pesanan</span><span class="detail-value">${escapeHtml(getOrderLabel(order))}</span></div>
-        <div class="detail-row"><span class="detail-label">Layanan</span><span class="detail-value">${escapeHtml(order.serviceName)}</span></div>
-        <div class="detail-row"><span class="detail-label">Konsumen</span><span class="detail-value">${escapeHtml(order.konsumenName)}</span></div>
-    ` : '';
-    }
-    const existingProof = document.getElementById('existingProofCard');
-    syncStorageStatusMessage('uploadProofStatus', getPublicUploadBucket(), order?.proofImagePath || order?.proofImageUrl || order?.proofImage
-        ? 'Bukti pekerjaan yang tersimpan bisa diganti atau dihapus dari sini.'
-        : 'Belum ada bukti yang dipilih.');
-    if (!existingProof) return;
-    if (!order?.proofImagePath && !order?.proofImageUrl && !order?.proofImage) {
-        existingProof.hidden = true;
-        existingProof.innerHTML = '';
-        return;
-    }
-
-    const proofUrl = order.proofImageUrl || order.proofImage || await resolveStorageImageUrl(getPublicUploadBucket(), order.proofImagePath);
-    if (proofUrl && !order.proofImageUrl) order.proofImageUrl = proofUrl;
-    existingProof.hidden = !proofUrl;
-    existingProof.innerHTML = proofUrl ? `
-        <div class="upload-existing-proof">
-            <h4>Bukti yang sudah tersimpan</h4>
-            ${createPreviewCardHtml(proofUrl, {
-                alt: 'Bukti pekerjaan tersimpan',
-                deleteTarget: 'confirmRemoveOrderProof',
-                deleteArgs: [order.id],
-                deleteLabel: 'Hapus Gambar'
-            })}
-        </div>
-    ` : '';
-}
-
 async function renderCurrentView(prefill = '', options = {}) {
     if (currentView === 'konsumen-home') await renderKonsumenHome();
     if (currentView === 'konsumen-order') renderKonsumenOrder(prefill);
@@ -8571,7 +7988,6 @@ async function renderCurrentView(prefill = '', options = {}) {
     if (currentView === 'teknisi-jobs') await renderTeknisiJobs();
     if (currentView === 'teknisi-profile') renderTeknisiProfile();
     if (currentView === 'teknisi-docs') await renderTeknisiDocs();
-    if (currentView === 'teknisi-upload') await renderTeknisiUpload();
     if (currentView === 'admin-home') await renderAdminHome(options);
     if (currentView === 'admin-orders') await renderAdminOrders(options);
     if (currentView === 'admin-history') await renderAdminHistory(options);
@@ -8669,16 +8085,14 @@ async function renderAdminUsers(options = {}) {
     if (!requireAdminAccess()) return;
     renderAdminServicesTable();
     renderAdminImageCatalogTable();
-    renderTableLoading('adminKonsumenListBody', 11, 4);
-    renderTableLoading('adminTeknisiListBody', 11, 4);
-    renderTableLoading('adminFotoUnitBody', 7, 4);
+    renderTableLoading('adminKonsumenListBody', 10, 4);
+    renderTableLoading('adminTeknisiListBody', 10, 4);
     renderTableLoading('adminAdminListBody', 5, 3);
 
     try {
         if (!options.skipRemoteLoad) await loadAdminMasterData();
         await renderAdminKonsumenTable(remoteState.adminProfiles.konsumen);
         await renderAdminTeknisiTable(remoteState.adminProfiles.teknisi);
-        await renderAdminFotoUnitTable(remoteState.adminProfiles.konsumen);
         renderAdminAdminTable(remoteState.adminProfiles.admin);
     } catch (error) {
         console.error('Gagal memuat data master admin dari Supabase:', error);
@@ -8760,17 +8174,9 @@ async function renderAdminKonsumenTable(users = []) {
         return String(right.joinedAt || '').localeCompare(String(left.joinedAt || ''));
     });
 
-    const hydratedUsers = await Promise.all(sortedUsers.map(async (user) => ({
-        user,
-        photo: await hydrateProfilePhotoState(user)
-    })));
-
-    body.innerHTML = hydratedUsers.length ? hydratedUsers.map(({ user, photo }) => `
+    body.innerHTML = sortedUsers.length ? sortedUsers.map((user) => `
         <tr>
             ${tableCell('Nama', escapeHtml(user.name))}
-            ${tableCell('Foto Profil', photo.url
-                ? `<img src="${escapeHtml(photo.url)}" alt="${escapeHtml(`Foto profil ${user.name || user.username || 'konsumen'}`)}" class="table-thumb table-thumb--avatar">`
-                : '<span class="text-muted">Belum ada foto</span>')}
             ${tableCell('Username', escapeHtml(user.username || '-'))}
             ${tableCell('Email', escapeHtml(user.email || '-'))}
             ${tableCell('Telepon', escapeHtml(user.phone || '-'))}
@@ -8784,7 +8190,7 @@ async function renderAdminKonsumenTable(users = []) {
             ${tableCell('Total Pesanan', String(orders.filter((order) => order.konsumenId === user.id).length))}
             ${tableCell('Aksi', renderAdminUserActions(user, 'konsumen'))}
         </tr>
-    `).join('') : '<tr><td colspan="11" class="empty-state">Tidak ada data</td></tr>';
+    `).join('') : '<tr><td colspan="10" class="empty-state">Tidak ada data</td></tr>';
 }
 
 async function renderAdminTeknisiTable(users = []) {
@@ -8799,17 +8205,9 @@ async function renderAdminTeknisiTable(users = []) {
         return String(right.joinedAt || '').localeCompare(String(left.joinedAt || ''));
     });
 
-    const hydratedUsers = await Promise.all(sortedUsers.map(async (user) => ({
-        user,
-        photo: await hydrateProfilePhotoState(user)
-    })));
-
-    body.innerHTML = hydratedUsers.length ? hydratedUsers.map(({ user, photo }) => `
+    body.innerHTML = sortedUsers.length ? sortedUsers.map((user) => `
         <tr>
             ${tableCell('Nama', escapeHtml(user.name))}
-            ${tableCell('Foto Profil', photo.url
-                ? `<img src="${escapeHtml(photo.url)}" alt="${escapeHtml(`Foto profil ${user.name || user.username || 'teknisi'}`)}" class="table-thumb table-thumb--avatar">`
-                : '<span class="text-muted">Belum ada foto</span>')}
             ${tableCell('Username', `
                 <div class="directory-table-user">
                     <span>${escapeHtml(user.username || '-')}</span>
@@ -8825,47 +8223,7 @@ async function renderAdminTeknisiTable(users = []) {
             ${tableCell('Tugas Selesai', String(orders.filter((order) => order.teknisiId === user.id && order.status === 'Selesai').length))}
             ${tableCell('Aksi', renderAdminUserActions(user, 'teknisi'))}
         </tr>
-    `).join('') : '<tr><td colspan="11" class="empty-state">Tidak ada data</td></tr>';
-}
-
-async function renderAdminFotoUnitTable(users = []) {
-    if (!requireAdminAccess()) return;
-    const body = document.getElementById('adminFotoUnitBody');
-    if (!body) return;
-
-    const rows = users.flatMap((user) => getProfileAcUnits(user).map((unit, index) => ({
-        user,
-        unit,
-        index
-    }))).sort((left, right) => String(right.unit.createdAt || '').localeCompare(String(left.unit.createdAt || '')));
-
-    const hydratedRows = await Promise.all(rows.map(async ({ user, unit, index }) => {
-        if (!unit.imageUrl && unit.imagePath) {
-            return {
-                user,
-                index,
-                unit: {
-                    ...unit,
-                    imageUrl: await resolveStorageImageUrl(getPublicUploadBucket(), unit.imagePath)
-                }
-            };
-        }
-        return { user, unit, index };
-    }));
-
-    body.innerHTML = hydratedRows.length ? hydratedRows.map(({ user, unit, index }) => `
-        <tr>
-            ${tableCell('Nama Konsumen', escapeHtml(user.name || '-'))}
-            ${tableCell('Foto Unit', unit.imageUrl
-                ? `<img src="${escapeHtml(unit.imageUrl)}" alt="${escapeHtml(formatAcUnitLabel(unit, index))}" class="table-thumb">`
-                : '<span class="text-muted">Tidak ada foto</span>')}
-            ${tableCell('Merk AC', escapeHtml(unit.brand || '-'))}
-            ${tableCell('Jenis AC', escapeHtml(unit.type || '-'))}
-            ${tableCell('Refrigerant', escapeHtml(unit.refrigerant || '-'))}
-            ${tableCell('Kapasitas AC', escapeHtml(unit.capacity || '-'))}
-            ${tableCell('Tanggal Input', escapeHtml(formatDateTime(unit.createdAt || user.joinedAt)))}
-        </tr>
-    `).join('') : '<tr><td colspan="7" class="empty-state">Belum ada data foto unit konsumen</td></tr>';
+    `).join('') : '<tr><td colspan="10" class="empty-state">Tidak ada data</td></tr>';
 }
 
 function renderAdminAdminTable(users = []) {

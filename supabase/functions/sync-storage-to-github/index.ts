@@ -18,17 +18,13 @@ const GITHUB_UPLOADS_SNAPSHOT_PATH = Deno.env.get("GITHUB_UPLOADS_SNAPSHOT_PATH"
 
 const REQUIRED_PROFILE_COLUMNS = ["id", "role", "email", "updated_at"];
 const OPTIONAL_PROFILE_COLUMNS = [
-  "unit_image_paths",
-  "unit_image_urls",
-  "profile_photo_path",
-  "profile_photo_url",
   "ktp_photo_path",
   "ktp_photo_url",
   "selfie_photo_path",
   "selfie_photo_url",
 ];
 const REQUIRED_ORDER_COLUMNS = ["id", "order_number", "status", "konsumen_id", "teknisi_id", "updated_at"];
-const OPTIONAL_ORDER_COLUMNS = ["proof_image_path", "proof_image_url"];
+const OPTIONAL_ORDER_COLUMNS: string[] = [];
 
 const supabaseAdmin = SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY
   ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {

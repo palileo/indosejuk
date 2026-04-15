@@ -54,8 +54,6 @@ function normalizeAcUnits(value: unknown) {
         type: String(record.type || record.ac_type || record.acType || "").trim(),
         refrigerant: String(record.refrigerant || "").trim(),
         capacity: String(record.capacity || record.pk || record.ac_capacity || record.acCapacity || "").trim(),
-        image_path: String(record.image_path || record.imagePath || "").trim(),
-        image_url: String(record.image_url || record.imageUrl || record.photoUrl || record.url || "").trim(),
         created_at: String(record.created_at || record.createdAt || "").trim(),
       };
     })

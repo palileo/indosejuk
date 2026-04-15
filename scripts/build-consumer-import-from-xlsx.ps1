@@ -437,7 +437,6 @@ foreach ($group in $consumerGroups) {
         $passwordBase = "konsumen"
     }
 
-    $unitImagePaths = Get-UniqueTrimmedValues ($items | ForEach-Object { $_.ImagePaths })
     $units = @()
     $unitSignatures = @{}
 
@@ -454,14 +453,12 @@ foreach ($group in $consumerGroups) {
         $notes = $unitNotesParts -join " | "
         $createdAt = Select-FirstNonEmpty @($item.TanggalPemasangan, $item.TanggalPemeliharaan, $item.TanggalPerbaikan, $importedAt)
         $updatedAt = Select-FirstNonEmpty @($item.TanggalPerbaikan, $item.TanggalPemeliharaan, $item.TanggalPemasangan, $importedAt)
-        $firstImagePath = Select-FirstNonEmpty $item.ImagePaths
 
         $unitSignature = @(
             ([string]$item.MerkAC).ToLowerInvariant(),
             ([string]$item.JenisAC).ToLowerInvariant(),
             ([string]$item.Refrigerant).ToLowerInvariant(),
             ([string]$item.KapasitasAC).ToLowerInvariant(),
-            ([string]$firstImagePath).ToLowerInvariant(),
             ([string]$notes).ToLowerInvariant(),
             $createdAt,
             $updatedAt
@@ -478,7 +475,6 @@ foreach ($group in $consumerGroups) {
         Add-IfValue -Target $unit -Key "type" -Value $item.JenisAC
         Add-IfValue -Target $unit -Key "refrigerant" -Value $item.Refrigerant
         Add-IfValue -Target $unit -Key "capacity" -Value $item.KapasitasAC
-        Add-IfValue -Target $unit -Key "image_path" -Value $firstImagePath
         Add-IfValue -Target $unit -Key "created_at" -Value $createdAt
         Add-IfValue -Target $unit -Key "updated_at" -Value $updatedAt
         Add-IfValue -Target $unit -Key "source" -Value "excel-import"
@@ -501,8 +497,6 @@ foreach ($group in $consumerGroups) {
     $consumer["location_text"] = if ($locationValues.Count) { $locationValues -join " | " } else { $null }
     $consumer["referral"] = if ($referralValues.Count) { $referralValues -join ", " } else { $null }
     $consumer["ac_units"] = @($units)
-    $consumer["unit_image_paths"] = @($unitImagePaths)
-    $consumer["unit_image_urls"] = @()
     $consumer["source_row_numbers"] = @($items | ForEach-Object { $_.RowNumber } | Sort-Object)
     $consumers += $consumer
 }
@@ -544,7 +538,7 @@ $output["column_mapping"] = [ordered]@{
     "Pengingat Pemeliharaan" = "ac_units[].notes"
     "Teknisi" = "ac_units[].notes"
     "Pekerjaan" = "ac_units[].notes"
-    "Image1..Image8" = "ac_units[].image_path + unit_image_paths[]"
+    "Image1..Image8" = "tidak diimport lagi"
 }
 $output["consumers"] = @($consumers | Sort-Object name, username)
 
