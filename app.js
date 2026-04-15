@@ -42,6 +42,8 @@ const AUTH_BACKEND_HEALTH_CACHE_TTL_MS = 5 * 60 * 1000;
 const AUTH_SETTINGS_CACHE_TTL_MS = 5 * 60 * 1000;
 const PUBLIC_AUTH_FUNCTION_NAMES = ['register-public-account', 'profile-password-login', 'request-password-reset'];
 const PUBLIC_AUTH_FUNCTION_SET = new Set(PUBLIC_AUTH_FUNCTION_NAMES);
+const LOCAL_ORDERS_PURGE_TAG = '202604150201';
+const REMOTE_ORDERS_PURGE_TAG = '202604150201';
 const REQUIRED_PROFILE_COLUMNS = [
     'id',
     'role',
@@ -315,6 +317,7 @@ const runtimeState = {
         previewUrl: '',
         file: null
     },
+    orderRemotePurgeInFlight: false,
     orderAutofillToken: 0,
     authBackendHealth: {
         functions: {},
@@ -388,7 +391,9 @@ function createDefaultData() {
         metadata: {
             schemaVersion: SCHEMA_VERSION,
             historyResetAt: new Date().toISOString(),
-            migratedFromLegacy: false
+            migratedFromLegacy: false,
+            ordersPurgedAt: LOCAL_ORDERS_PURGE_TAG,
+            remoteOrdersPurgedAt: ''
         },
         services: DEFAULT_SERVICES,
         users: createDefaultUsers(),
@@ -2419,10 +2424,14 @@ function recalculateDerivedFields(data) {
 
 function sanitizeData(input) {
     const data = deepClone(input || {});
+    const existingPurgeTag = String(data?.metadata?.ordersPurgedAt || '').trim();
+    const shouldPurgeLocalOrders = existingPurgeTag !== LOCAL_ORDERS_PURGE_TAG;
     data.metadata = {
         schemaVersion: SCHEMA_VERSION,
         historyResetAt: data?.metadata?.historyResetAt || new Date().toISOString(),
         migratedFromLegacy: Boolean(data?.metadata?.migratedFromLegacy),
+        ordersPurgedAt: LOCAL_ORDERS_PURGE_TAG,
+        remoteOrdersPurgedAt: String(data?.metadata?.remoteOrdersPurgedAt || '').trim(),
         lastSavedAt: new Date().toISOString()
     };
     data.imageCatalog = normalizeImageCatalog(data.imageCatalog);
@@ -2431,7 +2440,7 @@ function sanitizeData(input) {
     data.users.admin = Array.isArray(data.users.admin) && data.users.admin.length ? data.users.admin : createDefaultUsers().admin;
     data.users.konsumen = Array.isArray(data.users.konsumen) && data.users.konsumen.length ? data.users.konsumen : createDefaultUsers().konsumen;
     data.users.teknisi = Array.isArray(data.users.teknisi) && data.users.teknisi.length ? data.users.teknisi : createDefaultUsers().teknisi;
-    data.orders = Array.isArray(data.orders) ? data.orders : [];
+    data.orders = shouldPurgeLocalOrders ? [] : (Array.isArray(data.orders) ? data.orders : []);
     data.currentSession = data.currentSession || null;
     data.uiCache = data.uiCache || { teknisiDocsByUser: {} };
     data.appSettings = {
@@ -2497,6 +2506,21 @@ function saveData(data) {
     appData = sanitizeData(data);
     localStorage.setItem(STORAGE_KEY, JSON.stringify(appData));
     return appData;
+}
+
+function hasCompletedRemoteOrdersPurge() {
+    return String(getData()?.metadata?.remoteOrdersPurgedAt || '').trim() === REMOTE_ORDERS_PURGE_TAG;
+}
+
+function markRemoteOrdersPurged() {
+    const data = getData();
+    data.metadata = {
+        ...(data.metadata || {}),
+        remoteOrdersPurgedAt: REMOTE_ORDERS_PURGE_TAG,
+        historyResetAt: new Date().toISOString()
+    };
+    data.orders = [];
+    saveData(data);
 }
 
 function getData() {
@@ -7073,6 +7097,10 @@ async function fetchOrdersForRole(profile) {
         throw new Error(`Role ${profile.role} tidak didukung untuk query orders.`);
     }
 
+    if (profile.role !== 'admin' && !hasCompletedRemoteOrdersPurge()) {
+        return [];
+    }
+
     const { data } = await withOrderColumnFallback(({ selectClause }) => {
         let query = supabaseClient
             .from('orders')
@@ -7116,8 +7144,35 @@ async function fetchProfilesByRole(role) {
     return (data || []).map(sanitizeProfileRecord);
 }
 
+async function purgeAllOrdersByAdmin() {
+    return invokeEdgeFunction('admin-manage-account', {
+        action: 'purge_all_orders'
+    }, {
+        fallbackMessage: 'Purge semua pesanan gagal diproses oleh backend admin.'
+    });
+}
+
+async function ensureRemoteOrdersPurgedByAdmin() {
+    if (!requireAdminAccess() || hasCompletedRemoteOrdersPurge() || runtimeState.orderRemotePurgeInFlight) {
+        return false;
+    }
+
+    runtimeState.orderRemotePurgeInFlight = true;
+    try {
+        await purgeAllOrdersByAdmin();
+        remoteState.currentOrders = [];
+        remoteState.adminOrders = [];
+        markRemoteOrdersPurged();
+        return true;
+    } finally {
+        runtimeState.orderRemotePurgeInFlight = false;
+    }
+}
+
 async function loadAdminMasterData() {
     if (!requireAdminAccess()) return false;
+
+    await ensureRemoteOrdersPurgedByAdmin();
 
     const [konsumen, teknisi, admin, orders] = await Promise.all([
         fetchProfilesByRole('konsumen'),

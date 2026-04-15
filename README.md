@@ -84,6 +84,8 @@ Migration terbaru melakukan hal penting berikut:
 - verifikasi register dipisahkan dari email verification
 - referensi storage untuk foto unit, foto profil, dan bukti pekerjaan dihapus
 - seluruh data `public.orders` dibersihkan untuk menghapus semua pesanan dan riwayat tanpa menyentuh data profile lain
+- cache `orders` di localhost/browser juga dibersihkan satu kali saat app dimuat ulang, tanpa mengubah data user, layanan, atau konfigurasi lain
+- dashboard admin localhost juga memicu purge seluruh `public.orders` secara otomatis satu kali, lalu menandainya selesai agar tidak mengulang lagi setelah berhasil
 
 ## Penyederhanaan storage terbaru
 

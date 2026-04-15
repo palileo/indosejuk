@@ -90,8 +90,21 @@ serve(async (req) => {
 
     const body = await req.json().catch(() => ({}));
     const action = normalizeText(body?.action).toLowerCase();
-    if (action !== "delete_public_account") {
+    if (!["delete_public_account", "purge_all_orders"].includes(action)) {
       return jsonResponse(400, { ok: false, message: "Aksi admin tidak didukung." });
+    }
+
+    if (action === "purge_all_orders") {
+      const { error: purgeOrdersError } = await supabaseAdmin
+        .from("orders")
+        .delete()
+        .not("id", "is", null);
+      if (purgeOrdersError) throw purgeOrdersError;
+
+      return jsonResponse(200, {
+        ok: true,
+        message: "Semua data pesanan dan riwayat berhasil dihapus permanen.",
+      });
     }
 
     const userId = normalizeText(body?.userId);
