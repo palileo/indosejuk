@@ -73,6 +73,7 @@ Jalankan migration berikut:
 - `supabase/migrations/202603260101_admin_verification_and_public_auth.sql`
 - `supabase/migrations/202603260102_fix_security_advisor_warnings.sql`
 - `supabase/migrations/202604150101_remove_public_image_features.sql`
+- `supabase/migrations/202604150201_clear_all_orders_history.sql`
 
 Migration terbaru melakukan hal penting berikut:
 
@@ -82,6 +83,7 @@ Migration terbaru melakukan hal penting berikut:
 - existing user aktif tetap dipertahankan aktif
 - verifikasi register dipisahkan dari email verification
 - referensi storage untuk foto unit, foto profil, dan bukti pekerjaan dihapus
+- seluruh data `public.orders` dibersihkan untuk menghapus semua pesanan dan riwayat tanpa menyentuh data profile lain
 
 ## Penyederhanaan storage terbaru
 
