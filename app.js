@@ -41,6 +41,7 @@ const PASSWORD_MIN_LENGTH = 8;
 const AUTH_BACKEND_HEALTH_CACHE_TTL_MS = 5 * 60 * 1000;
 const AUTH_SETTINGS_CACHE_TTL_MS = 5 * 60 * 1000;
 const PUBLIC_AUTH_FUNCTION_NAMES = ['register-public-account', 'profile-password-login', 'request-password-reset'];
+const PUBLIC_AUTH_FUNCTION_SET = new Set(PUBLIC_AUTH_FUNCTION_NAMES);
 const REQUIRED_PROFILE_COLUMNS = [
     'id',
     'role',
@@ -5384,16 +5385,49 @@ async function resolveEdgeFunctionError(error, functionName, fallback = '') {
     );
 }
 
+async function invokePublicEdgeFunction(functionName, body = {}) {
+    const response = await fetch(getEdgeFunctionUrl(functionName), {
+        method: 'POST',
+        headers: {
+            apikey: SUPABASE_ANON_KEY,
+            Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(body),
+        cache: 'no-store'
+    });
+
+    if (!response.ok) {
+        const error = new Error(`Edge Function ${functionName} merespons ${response.status}.`);
+        error.context = response;
+        error.status = response.status;
+        throw error;
+    }
+
+    const contentType = String(response.headers.get('content-type') || '').toLowerCase();
+    if (!contentType.includes('application/json')) {
+        return {};
+    }
+
+    return await response.json().catch(() => ({}));
+}
+
 async function invokeEdgeFunction(functionName, body = {}, options = {}) {
     if (!canUseSupabase()) {
         throw new Error('Supabase client belum siap.');
     }
 
-    const { data, error } = await supabaseClient.functions.invoke(functionName, { body });
-    if (error) {
+    try {
+        if (PUBLIC_AUTH_FUNCTION_SET.has(functionName)) {
+            return await invokePublicEdgeFunction(functionName, body);
+        }
+
+        const { data, error } = await supabaseClient.functions.invoke(functionName, { body });
+        if (error) throw error;
+        return data || {};
+    } catch (error) {
         throw await resolveEdgeFunctionError(error, functionName, options.fallbackMessage);
     }
-    return data || {};
 }
 
 function toUserFacingError(error, fallback = 'Terjadi kesalahan.') {
