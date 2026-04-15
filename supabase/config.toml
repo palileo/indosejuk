@@ -1,0 +1,19 @@
+project_id = "zqjretruylhumkehtcli"
+
+[functions.register-public-account]
+verify_jwt = false
+
+[functions.profile-password-login]
+verify_jwt = false
+
+[functions.request-password-reset]
+verify_jwt = false
+
+[functions.admin-manage-account]
+verify_jwt = false
+
+[functions.sync-user-to-github]
+verify_jwt = false
+
+[functions.sync-storage-to-github]
+verify_jwt = false

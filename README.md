@@ -55,6 +55,7 @@ Frontend statis Indo Sejuk AC dengan source of truth utama di Supabase untuk:
 - `supabase/functions/admin-manage-account`
 - `supabase/functions/sync-user-to-github`
 - `supabase/functions/sync-storage-to-github`
+- `supabase/config.toml`
 
 Function lama berikut sudah tidak relevan untuk flow baru dan dihapus dari source:
 
@@ -130,10 +131,13 @@ Validasi ini memeriksa:
 Setelah update ini, deploy ulang:
 
 - migration SQL terbaru
+- file `supabase/config.toml`
 - Edge Function `register-public-account`
 - Edge Function `profile-password-login`
 - Edge Function `request-password-reset`
 - Edge Function `admin-manage-account`
+- Edge Function `sync-user-to-github`
+- Edge Function `sync-storage-to-github`
 
 Contoh CLI:
 
@@ -141,6 +145,10 @@ Contoh CLI:
 - `supabase functions deploy profile-password-login --project-ref zqjretruylhumkehtcli`
 - `supabase functions deploy request-password-reset --project-ref zqjretruylhumkehtcli`
 - `supabase functions deploy admin-manage-account --project-ref zqjretruylhumkehtcli`
+- `supabase functions deploy sync-user-to-github --project-ref zqjretruylhumkehtcli`
+- `supabase functions deploy sync-storage-to-github --project-ref zqjretruylhumkehtcli`
+
+Konfigurasi `supabase/config.toml` menonaktifkan verifikasi JWT gateway untuk function yang memang melakukan verifikasi session sendiri di dalam function. Ini menjaga kompatibilitas dengan access token Supabase yang memakai algoritma `ES256` dan mencegah error seperti `Unsupported JWT algorithm ES256`.
 
 Jika browser menampilkan error seperti `Requested function was not found` atau `Failed to send a request to the Edge Function`, itu berarti frontend sudah berjalan tetapi function live di project Supabase belum tersedia / belum bisa dijangkau.
 

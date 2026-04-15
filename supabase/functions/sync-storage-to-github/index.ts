@@ -3,7 +3,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.52.0";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Headers": "authorization, x-user-authorization, x-client-info, apikey, content-type",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
   "Content-Type": "application/json; charset=utf-8",
 };
@@ -132,7 +132,9 @@ serve(async (req) => {
     });
   }
 
-  const authHeader = req.headers.get("Authorization") || "";
+  const authHeader = req.headers.get("x-user-authorization")
+    || req.headers.get("Authorization")
+    || "";
   const jwt = authHeader.replace(/^Bearer\s+/i, "").trim();
   if (!jwt) {
     return jsonResponse(401, { ok: false, message: "Session pengguna dibutuhkan untuk memicu sinkronisasi asset." });

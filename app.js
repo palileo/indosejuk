@@ -1574,17 +1574,15 @@ async function syncNewUserToRemote(profile, options = {}) {
     }
 
     try {
-        const { data, error } = await supabaseClient.functions.invoke(REMOTE_SYNC_FUNCTION_NAME, {
-            body: {
-                profileId: profile.id,
-                role: profile.role,
-                reason: options.reason || 'profile-upsert',
-                requestedAt: new Date().toISOString(),
-                requestedBy: remoteState.user?.id || profile.id
-            }
+        const data = await invokeEdgeFunction(REMOTE_SYNC_FUNCTION_NAME, {
+            profileId: profile.id,
+            role: profile.role,
+            reason: options.reason || 'profile-upsert',
+            requestedAt: new Date().toISOString(),
+            requestedBy: remoteState.user?.id || profile.id
+        }, {
+            fallbackMessage: 'Pemanggilan backend sinkronisasi profil gagal.'
         });
-
-        if (error) throw error;
 
         return {
             ok: true,
@@ -2019,14 +2017,13 @@ async function invokeRemoteAssetSync(functionName, payload = {}, options = {}) {
     }
 
     try {
-        const { data, error } = await supabaseClient.functions.invoke(functionName, {
-            body: {
-                ...payload,
-                requestedAt: new Date().toISOString(),
-                requestedBy: remoteState.user?.id || payload.userId || payload.profileId || null
-            }
+        const data = await invokeEdgeFunction(functionName, {
+            ...payload,
+            requestedAt: new Date().toISOString(),
+            requestedBy: remoteState.user?.id || payload.userId || payload.profileId || null
+        }, {
+            fallbackMessage: `Pemanggilan backend ${functionName} gagal.`
         });
-        if (error) throw error;
         return {
             ok: true,
             skipped: false,
@@ -5385,14 +5382,40 @@ async function resolveEdgeFunctionError(error, functionName, fallback = '') {
     );
 }
 
-async function invokePublicEdgeFunction(functionName, body = {}) {
+function shouldBypassEdgeFunctionJwt(functionName) {
+    return PUBLIC_AUTH_FUNCTION_SET.has(functionName)
+        || functionName === 'admin-manage-account'
+        || functionName === REMOTE_SYNC_FUNCTION_NAME
+        || functionName === REMOTE_STORAGE_SYNC_FUNCTION_NAME;
+}
+
+async function getCurrentAccessToken() {
+    const cachedSession = remoteState.session;
+    const cachedToken = cachedSession?.access_token || cachedSession?.accessToken;
+    if (cachedToken) return cachedToken;
+
+    const session = await getSupabaseSession();
+    return session?.access_token || session?.accessToken || '';
+}
+
+async function invokeDirectEdgeFunction(functionName, body = {}, options = {}) {
+    const headers = {
+        apikey: SUPABASE_ANON_KEY,
+        Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+        'Content-Type': 'application/json'
+    };
+
+    if (options.includeUserSession) {
+        const accessToken = await getCurrentAccessToken();
+        if (!accessToken) {
+            throw new Error('Session pengguna tidak ditemukan untuk memanggil backend aman.');
+        }
+        headers['X-User-Authorization'] = `Bearer ${accessToken}`;
+    }
+
     const response = await fetch(getEdgeFunctionUrl(functionName), {
         method: 'POST',
-        headers: {
-            apikey: SUPABASE_ANON_KEY,
-            Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-            'Content-Type': 'application/json'
-        },
+        headers,
         body: JSON.stringify(body),
         cache: 'no-store'
     });
@@ -5418,8 +5441,10 @@ async function invokeEdgeFunction(functionName, body = {}, options = {}) {
     }
 
     try {
-        if (PUBLIC_AUTH_FUNCTION_SET.has(functionName)) {
-            return await invokePublicEdgeFunction(functionName, body);
+        if (shouldBypassEdgeFunctionJwt(functionName)) {
+            return await invokeDirectEdgeFunction(functionName, body, {
+                includeUserSession: !PUBLIC_AUTH_FUNCTION_SET.has(functionName)
+            });
         }
 
         const { data, error } = await supabaseClient.functions.invoke(functionName, { body });
