@@ -416,27 +416,9 @@
                         <input type="hidden" id="regKonLng">
                     </div>
 
-                    <!-- Upload Foto Unit AC -->
                     <div class="upload-section">
-                        <h4>Foto Unit AC (Opsional)</h4>
-                        <p class="text-muted text-sm">Upload foto AC Anda agar teknisi bisa mempersiapkan peralatan yang tepat</p>
-                        <div class="upload-options">
-                            <div class="upload-option">
-                                <label class="upload-option-btn" for="regKonUnitCamera">
-                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:28px;height:28px"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
-                                    <span>Ambil dari Kamera</span>
-                                    <input type="file" id="regKonUnitCamera" accept="image/*" capture="environment" onchange="previewRegUpload(event, 'regKonUnitPreview')" style="display:none;">
-                                </label>
-                            </div>
-                            <div class="upload-option">
-                                <label class="upload-option-btn" for="regKonUnitDevice">
-                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:28px;height:28px"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-                                    <span>Upload dari Galeri</span>
-                                    <input type="file" id="regKonUnitDevice" accept="image/*" onchange="previewRegUpload(event, 'regKonUnitPreview')" style="display:none;">
-                                </label>
-                            </div>
-                        </div>
-                        <div class="upload-preview-grid" id="regKonUnitPreview"></div>
+                        <h4>Data Unit AC (Opsional)</h4>
+                        <p class="text-muted text-sm">Simpan spesifikasi dasar unit AC agar form order berikutnya lebih cepat terisi.</p>
                         <div class="unit-spec-grid">
                             <div class="form-group">
                                 <label for="regKonUnitBrand">Merk AC</label>
@@ -473,7 +455,7 @@
                             <button type="button" class="btn btn-info btn-sm" onclick="prepareNextRegisterAcUnit()">Tambah Data Unit AC</button>
                         </div>
                         <div class="saved-unit-list" id="regKonUnitSavedList"></div>
-                        <p class="text-muted text-sm upload-helper-note">Foto unit akan dikirim aman ke Supabase Storage selama proses pendaftaran, lalu akun tetap menunggu verifikasi manual admin sebelum dashboard aktif bisa dipakai.</p>
+                        <p class="text-muted text-sm upload-helper-note">Hanya metadata teks yang disimpan. Foto unit tidak dipakai lagi.</p>
                     </div>
 
                     <div class="form-actions">
@@ -869,28 +851,6 @@
                 </div>
                 <div class="card form-card">
                     <form id="formKonsumenProfile">
-                        <div class="upload-section profile-photo-section">
-                            <h4>Foto Profil</h4>
-                            <p class="text-muted text-sm">Tambahkan foto profil dari kamera atau galeri perangkat tanpa mengubah data akun utama.</p>
-                            <div class="upload-options">
-                                <div class="upload-option">
-                                    <label class="upload-option-btn" for="profileKonsumenPhotoCamera">
-                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:28px;height:28px"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
-                                        <span>Ambil dari Kamera</span>
-                                        <input type="file" id="profileKonsumenPhotoCamera" accept="image/*" capture="user" oninput="event.stopPropagation()" onchange="handleProfilePhotoUpload(event, 'konsumen')" style="display:none;">
-                                    </label>
-                                </div>
-                                <div class="upload-option">
-                                    <label class="upload-option-btn" for="profileKonsumenPhotoDevice">
-                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:28px;height:28px"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-                                        <span>Pilih dari Device</span>
-                                        <input type="file" id="profileKonsumenPhotoDevice" accept="image/*" oninput="event.stopPropagation()" onchange="handleProfilePhotoUpload(event, 'konsumen')" style="display:none;">
-                                    </label>
-                                </div>
-                            </div>
-                            <div class="upload-preview-grid profile-photo-preview" id="profileKonsumenPhotoPreview"></div>
-                            <p class="text-muted text-sm" id="profileKonsumenPhotoStatus">Foto profil akan tersimpan otomatis dan tampil di logo profil atas saat file dipilih.</p>
-                        </div>
                         <div class="form-grid">
                             <div class="form-group">
                                 <label for="profileKonsumenName">Nama Lengkap</label>
@@ -951,11 +911,11 @@
                 </div>
             </section>
 
-            <!-- Konsumen: Upload Unit AC -->
+            <!-- Konsumen: Data Unit AC -->
             <section class="view" id="viewKonsumenUnit" style="display:none;">
                 <div class="page-header">
-                    <h2>Upload Foto Unit AC</h2>
-                    <p>Kelola foto dan metadata unit AC Anda dengan mode draft agar perubahan baru tersimpan saat Anda menekan Save.</p>
+                    <h2>Data Unit AC</h2>
+                    <p>Kelola metadata unit AC tanpa upload foto agar lebih ringan dan konsisten.</p>
                 </div>
                 <div class="card form-card">
                     <div class="upload-section">
@@ -963,24 +923,7 @@
                             <h4>Draft Unit AC</h4>
                             <button type="button" class="btn btn-outline btn-sm" id="btnNewKonUnitDraft" onclick="startNewKonsumenUnitDraft()">Tambah Unit Baru</button>
                         </div>
-                        <p class="text-muted text-sm">Pilih foto lalu lengkapi metadata. Perubahan baru tersimpan ke Supabase setelah password dikonfirmasi.</p>
-                        <div class="upload-options">
-                            <div class="upload-option">
-                                <label class="upload-option-btn" for="konUnitCamera">
-                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:28px;height:28px"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
-                                    <span>Ambil dari Kamera</span>
-                                    <input type="file" id="konUnitCamera" accept="image/*" capture="environment" onchange="handleKonUnitUpload(event)" style="display:none;">
-                                </label>
-                            </div>
-                            <div class="upload-option">
-                                <label class="upload-option-btn" for="konUnitDevice">
-                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:28px;height:28px"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-                                    <span>Upload dari Galeri</span>
-                                    <input type="file" id="konUnitDevice" accept="image/*" onchange="handleKonUnitUpload(event)" style="display:none;">
-                                </label>
-                            </div>
-                        </div>
-                        <div class="upload-preview-grid" id="konUnitPreviewGrid"></div>
+                        <p class="text-muted text-sm">Lengkapi spesifikasi unit. Perubahan baru tersimpan ke Supabase setelah password dikonfirmasi.</p>
                         <div class="unit-spec-grid">
                             <div class="form-group">
                                 <label for="konUnitBrand">Merk AC</label>
@@ -1019,7 +962,7 @@
                         <p class="text-muted text-sm upload-helper-note">Data unit yang disimpan saat register juga otomatis muncul di bawah panel ini, termasuk merk AC, jenis AC, refrigerant, dan kapasitas AC.</p>
                     </div>
                     <div class="unit-gallery" id="konUnitGallery"></div>
-                    <p class="text-muted text-sm" id="konUnitUploadStatus">Draft unit yang di-save akan tersimpan ke Supabase Storage dan profile ac_units.</p>
+                    <p class="text-muted text-sm" id="konUnitUploadStatus">Draft unit yang di-save akan tersimpan ke profile `ac_units` tanpa foto.</p>
                 </div>
             </section>
 
@@ -1130,28 +1073,6 @@
                 </div>
                 <div class="card form-card">
                     <form id="formTeknisiProfile">
-                        <div class="upload-section profile-photo-section">
-                            <h4>Foto Profil</h4>
-                            <p class="text-muted text-sm">Tambahkan foto profil dari kamera depan atau file perangkat tanpa mengganggu dokumen verifikasi teknisi.</p>
-                            <div class="upload-options">
-                                <div class="upload-option">
-                                    <label class="upload-option-btn" for="profileTeknisiPhotoCamera">
-                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:28px;height:28px"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
-                                        <span>Ambil dari Kamera</span>
-                                        <input type="file" id="profileTeknisiPhotoCamera" accept="image/*" capture="user" oninput="event.stopPropagation()" onchange="handleProfilePhotoUpload(event, 'teknisi')" style="display:none;">
-                                    </label>
-                                </div>
-                                <div class="upload-option">
-                                    <label class="upload-option-btn" for="profileTeknisiPhotoDevice">
-                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:28px;height:28px"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-                                        <span>Pilih dari Device</span>
-                                        <input type="file" id="profileTeknisiPhotoDevice" accept="image/*" oninput="event.stopPropagation()" onchange="handleProfilePhotoUpload(event, 'teknisi')" style="display:none;">
-                                    </label>
-                                </div>
-                            </div>
-                            <div class="upload-preview-grid profile-photo-preview" id="profileTeknisiPhotoPreview"></div>
-                            <p class="text-muted text-sm" id="profileTeknisiPhotoStatus">Foto profil akan tersimpan otomatis dan tampil di logo profil atas saat file dipilih.</p>
-                        </div>
                         <div class="form-grid">
                             <div class="form-group">
                                 <label for="profileTeknisiName">Nama Lengkap</label>
@@ -1208,38 +1129,6 @@
                             <button type="button" class="btn btn-outline btn-sm" onclick="openSensitiveEmailModal()">Kelola Email Verifikasi</button>
                             <button type="button" class="btn btn-outline btn-sm" onclick="openChangePasswordModal('profile')">Ubah Sandi</button>
                         </div>
-                    </div>
-                </div>
-            </section>
-
-            <!-- Teknisi: Upload Bukti -->
-            <section class="view" id="viewTeknisiUpload" style="display:none;">
-                <div class="page-header">
-                    <button type="button" class="btn-back" onclick="navigateTo('teknisi-home')">&lt; Kembali</button>
-                    <h2>Upload Bukti Pekerjaan</h2>
-                    <p>Unggah foto sebagai bukti penyelesaian pekerjaan</p>
-                </div>
-                <div class="card form-card">
-                    <div class="upload-info" id="uploadOrderInfo"></div>
-                    <div class="upload-zone" id="uploadZone">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="width:48px;height:48px"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-                        <p>Klik atau seret file foto ke sini</p>
-                        <input type="file" id="uploadFileInput" accept="image/*" onchange="handleFileUpload(event)">
-                    </div>
-                    <div class="upload-preview" id="uploadPreview" style="display:none;">
-                        <img id="uploadPreviewImg" alt="Preview">
-                        <p id="uploadFileName"></p>
-                        <div class="image-card-actions image-card-actions--center">
-                            <button type="button" class="btn btn-danger btn-xs" onclick="clearImagePreviewState('upload-proof-draft')">Hapus Gambar</button>
-                        </div>
-                    </div>
-                    <div class="card-subtle" id="existingProofCard" hidden></div>
-                    <p class="text-muted text-sm" id="uploadProofStatus">Belum ada bukti yang dipilih.</p>
-                    <div class="form-actions">
-                        <button type="button" class="btn btn-primary btn-lg" onclick="submitUploadProof()" id="btnSubmitProof">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
-                            Kirim Bukti & Selesaikan
-                        </button>
                     </div>
                 </div>
             </section>
@@ -1469,7 +1358,6 @@
                 <div class="tabs">
                     <button type="button" class="tab active" onclick="switchUserTab('konsumen', this)">Konsumen</button>
                     <button type="button" class="tab" onclick="switchUserTab('teknisi', this)">Teknisi</button>
-                    <button type="button" class="tab" onclick="switchUserTab('foto-unit', this)">Foto Unit</button>
                     <button type="button" class="tab" onclick="switchUserTab('admin', this)">Admin</button>
                     <button type="button" class="tab" onclick="switchUserTab('layanan', this)">Layanan</button>
                     <button type="button" class="tab" onclick="switchUserTab('gambar', this)">Gambar</button>
@@ -1486,7 +1374,6 @@
                             <thead>
                                 <tr>
                                     <th>Nama</th>
-                                    <th>Foto Profil</th>
                                     <th>Username</th>
                                     <th>Email</th>
                                     <th>Telepon</th>
@@ -1499,7 +1386,7 @@
                                 </tr>
                             </thead>
                             <tbody id="adminKonsumenListBody">
-                                <tr><td colspan="11" class="empty-state">Tidak ada data</td></tr>
+                                <tr><td colspan="10" class="empty-state">Tidak ada data</td></tr>
                             </tbody>
                         </table>
                     </div>
@@ -1516,7 +1403,6 @@
                             <thead>
                                 <tr>
                                     <th>Nama</th>
-                                    <th>Foto Profil</th>
                                     <th>Username</th>
                                     <th>Email</th>
                                     <th>Telepon</th>
@@ -1529,30 +1415,7 @@
                                 </tr>
                             </thead>
                             <tbody id="adminTeknisiListBody">
-                                <tr><td colspan="11" class="empty-state">Tidak ada data</td></tr>
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
-
-                <div class="card" id="adminUserFotoUnitCard" style="display:none;">
-                    <div class="card-header"><h3>Foto Unit Konsumen</h3></div>
-                    <p class="text-muted text-sm">Menampilkan foto unit dan metadata AC yang sudah disimpan konsumen saat register maupun upload lanjutan.</p>
-                    <div class="table-responsive">
-                        <table class="data-table">
-                            <thead>
-                                <tr>
-                                    <th>Nama Konsumen</th>
-                                    <th>Foto Unit</th>
-                                    <th>Merk AC</th>
-                                    <th>Jenis AC</th>
-                                    <th>Refrigerant</th>
-                                    <th>Kapasitas AC</th>
-                                    <th>Tanggal Input</th>
-                                </tr>
-                            </thead>
-                            <tbody id="adminFotoUnitBody">
-                                <tr><td colspan="7" class="empty-state">Belum ada data foto unit konsumen</td></tr>
+                                <tr><td colspan="10" class="empty-state">Tidak ada data</td></tr>
                             </tbody>
                         </table>
                     </div>

@@ -69,10 +69,6 @@ const OPTIONAL_PROFILE_COLUMNS = [
     'auth_email',
     'referral',
     'ac_units',
-    'unit_image_paths',
-    'unit_image_urls',
-    'profile_photo_path',
-    'profile_photo_url',
     'ktp_photo_path',
     'ktp_photo_url',
     'selfie_photo_path',
@@ -106,10 +102,7 @@ const OPTIONAL_ORDER_COLUMNS = [
     'admin_confirmation_text',
     'verified_at',
     'verified_by',
-    'verified_by_name',
-    'proof_image_data',
-    'proof_image_path',
-    'proof_image_url'
+    'verified_by_name'
 ];
 const OPTIONAL_ORDER_COLUMN_SET = new Set(OPTIONAL_ORDER_COLUMNS);
 const REMOTE_SYNC_FUNCTION_NAME = 'sync-user-to-github';
@@ -241,9 +234,6 @@ const appRuntimeConfig = (() => {
 let currentRole = null;
 let currentView = null;
 let currentUserTab = 'konsumen';
-let uploadingOrderId = null;
-let uploadProofImage = null;
-let uploadProofFileMeta = null;
 let appData = null;
 let authBootstrapPromise = null;
 let authSignInInProgress = false;
@@ -266,8 +256,6 @@ const remoteState = {
 };
 
 const draftUploads = {
-    regKonUnitDraftImage: '',
-    regKonUnitDraftFile: null,
     regKonSavedUnits: [],
     regTekKtpPhoto: '',
     regTekKtpFile: null,
@@ -382,9 +370,7 @@ function createEmptyKonsumenUnitDraftState() {
         isDirty: false,
         submitting: false,
         editingKey: '',
-        initialSnapshot: null,
-        previewUrl: '',
-        file: null
+        initialSnapshot: null
     };
 }
 
@@ -1942,9 +1928,6 @@ function buildAcUnitKey(seed = '') {
 
 function normalizeAcUnitRecord(unit, options = {}) {
     if (!unit || typeof unit !== 'object') return null;
-
-    const imagePath = normalizeWhitespace(unit.image_path || unit.imagePath);
-    const imageUrl = normalizeWhitespace(unit.image_url || unit.imageUrl || unit.photoUrl || unit.url);
     const createdAt = unit.created_at || unit.createdAt || options.createdAt || '';
     const normalized = {
         key: normalizeWhitespace(unit.key || unit.id) || buildAcUnitKey(unit.brand || unit.type || options.seed || 'ac-unit'),
@@ -1952,8 +1935,6 @@ function normalizeAcUnitRecord(unit, options = {}) {
         type: normalizeAcSpecValue('type', unit.type || unit.ac_type || unit.acType || unit.jenis_ac),
         refrigerant: normalizeAcSpecValue('refrigerant', unit.refrigerant),
         capacity: normalizeAcSpecValue('capacity', unit.capacity || unit.pk || unit.ac_capacity || unit.acCapacity),
-        imagePath,
-        imageUrl,
         createdAt,
         updatedAt: unit.updated_at || unit.updatedAt || createdAt || '',
         source: normalizeWhitespace(unit.source || options.source || 'profile'),
@@ -1966,34 +1947,12 @@ function normalizeAcUnitRecord(unit, options = {}) {
 
 function normalizeAcUnitArray(value, options = {}) {
     const directArray = Array.isArray(value) ? value : tryParseJsonArray(value);
-    const normalizedUnits = directArray
+    return directArray
         .map((unit, index) => normalizeAcUnitRecord(unit, {
             ...options,
             legacyIndex: Number.isInteger(unit?.legacyIndex) ? unit.legacyIndex : index
         }))
         .filter(Boolean);
-
-    if (normalizedUnits.length) return normalizedUnits;
-
-    const fallbackPaths = normalizeTextArray(options.unitImagePaths || options.unit_image_paths);
-    const fallbackUrls = normalizeTextArray(options.unitImageUrls || options.unit_image_urls);
-    return Array.from({ length: Math.max(fallbackPaths.length, fallbackUrls.length) }).map((_, index) => normalizeAcUnitRecord({
-        key: `legacy-unit-${index + 1}`,
-        image_path: fallbackPaths[index] || '',
-        image_url: fallbackUrls[index] || '',
-        created_at: options.joinedAt || options.created_at || ''
-    }, {
-        source: 'legacy-profile',
-        legacyIndex: index
-    })).filter(Boolean);
-}
-
-function collectLegacyUnitImagesFromUnits(units = []) {
-    return units.reduce((accumulator, unit) => {
-        if (unit?.imagePath) accumulator.paths.push(unit.imagePath);
-        if (unit?.imageUrl) accumulator.urls.push(unit.imageUrl);
-        return accumulator;
-    }, { paths: [], urls: [] });
 }
 
 function formatAcUnitLabel(unit = {}, index = 0) {
@@ -2016,7 +1975,6 @@ function hasAcUnitStructuredData(unit = {}) {
         || unit.type
         || unit.refrigerant
         || unit.capacity
-        || (!unit.imagePath && !unit.imageUrl)
     );
 }
 
@@ -2026,14 +1984,6 @@ function findMatchingPersistedAcUnit(units = [], targetUnit = {}, fallbackIndex 
         const byKey = units.find((unit) => unit?.key === targetUnit.key);
         if (byKey) return byKey;
     }
-    if (targetUnit.imagePath) {
-        const byPath = units.find((unit) => unit?.imagePath === targetUnit.imagePath);
-        if (byPath) return byPath;
-    }
-    if (targetUnit.imageUrl) {
-        const byUrl = units.find((unit) => unit?.imageUrl === targetUnit.imageUrl);
-        if (byUrl) return byUrl;
-    }
     if (Number.isInteger(fallbackIndex) && fallbackIndex >= 0) {
         return units[fallbackIndex] || null;
     }
@@ -2041,11 +1991,7 @@ function findMatchingPersistedAcUnit(units = [], targetUnit = {}, fallbackIndex 
 }
 
 function getProfileAcUnits(profile) {
-    return normalizeAcUnitArray(profile?.ac_units || profile?.acUnits, {
-        unitImagePaths: profile?.unit_image_paths || profile?.unitImagePaths,
-        unitImageUrls: profile?.unit_image_urls || profile?.unitImageUrls,
-        joinedAt: profile?.joinedAt || profile?.created_at || ''
-    });
+    return normalizeAcUnitArray(profile?.ac_units || profile?.acUnits);
 }
 
 function createFileLikeFromDraft(draft, fallbackName = 'upload.jpg') {
@@ -3240,7 +3186,6 @@ function getRegisterUnitDraftPayload() {
     return normalizeAcUnitRecord({
         key: buildAcUnitKey('register-unit'),
         ...specValues,
-        image_url: draftUploads.regKonUnitDraftImage || '',
         created_at: new Date().toISOString(),
         source: 'register-draft'
     });
@@ -3249,8 +3194,7 @@ function getRegisterUnitDraftPayload() {
 function hasRegisterAcUnitDraftValues() {
     const draftUnit = getRegisterUnitDraftPayload();
     return Boolean(
-        draftUploads.regKonUnitDraftImage
-        || draftUnit.brand
+        draftUnit.brand
         || draftUnit.type
         || draftUnit.refrigerant
         || draftUnit.capacity
@@ -3270,7 +3214,6 @@ function renderRegisterAcUnitSavedList() {
         <div class="saved-unit-card-grid">
             ${units.map((unit, index) => `
                 <div class="saved-unit-card">
-                    ${unit.imageUrl ? `<img src="${escapeHtml(unit.imageUrl)}" alt="${escapeHtml(formatAcUnitLabel(unit, index))}" loading="lazy" decoding="async">` : '<div class="saved-unit-placeholder">Tanpa Foto</div>'}
                     <div class="saved-unit-card-body">
                         <strong>${escapeHtml(formatAcUnitLabel(unit, index))}</strong>
                         <p>${escapeHtml(buildAcUnitSummary(unit).join(' • ') || 'Spesifikasi dasar belum diisi')}</p>
@@ -3288,11 +3231,6 @@ function buildOrderUnitSelectionPreviewMarkup(unit = null, index = 0) {
 
     return `
         <div class="order-unit-selection-preview__content">
-            <div class="order-unit-selection-preview__media">
-                ${unit.imageUrl
-                    ? `<img src="${escapeHtml(unit.imageUrl)}" alt="${escapeHtml(formatAcUnitLabel(unit, index))}" loading="lazy" decoding="async">`
-                    : '<div class="saved-unit-placeholder">Tanpa Foto</div>'}
-            </div>
             <div class="order-unit-selection-preview__body">
                 <strong>${escapeHtml(formatAcUnitLabel(unit, index))}</strong>
                 <div class="unit-spec-list">
@@ -3328,12 +3266,6 @@ function renderOrderUnitSelectionPreview(units = [], selectedUnit = null) {
 }
 
 function resetRegisterAcUnitDraft(options = {}) {
-    draftUploads.regKonUnitDraftImage = '';
-    draftUploads.regKonUnitDraftFile = null;
-    const preview = document.getElementById('regKonUnitPreview');
-    if (preview) preview.innerHTML = '';
-    clearInputFileValue('regKonUnitCamera');
-    clearInputFileValue('regKonUnitDevice');
     resetAcSpecFormFields('regKonUnit');
     if (!options.silent) {
         showToast('Draft unit AC aktif berhasil dikosongkan.', 'success');
@@ -3343,19 +3275,16 @@ function resetRegisterAcUnitDraft(options = {}) {
 function saveRegisterAcUnit() {
     const draftUnit = getRegisterUnitDraftPayload();
     if (!hasRegisterAcUnitDraftValues()) {
-        showToast('Isi minimal satu data unit AC atau foto sebelum disimpan.', 'warning');
+        showToast('Isi minimal satu data spesifikasi unit AC sebelum disimpan.', 'warning');
         return;
     }
 
-    if (!draftUnit.brand && !draftUnit.type && !draftUnit.refrigerant && !draftUnit.capacity && !draftUploads.regKonUnitDraftImage) {
+    if (!draftUnit.brand && !draftUnit.type && !draftUnit.refrigerant && !draftUnit.capacity) {
         showToast('Data unit AC masih kosong.', 'warning');
         return;
     }
 
-    draftUploads.regKonSavedUnits.push({
-        ...draftUnit,
-        draftFile: draftUploads.regKonUnitDraftFile ? { ...draftUploads.regKonUnitDraftFile } : null
-    });
+    draftUploads.regKonSavedUnits.push(draftUnit);
     renderRegisterAcUnitSavedList();
     resetRegisterAcUnitDraft({ silent: true });
     showToast('Data unit AC berhasil disimpan ke draft register.', 'success');
@@ -3510,8 +3439,6 @@ function getKonsumenUnitDraftPayload() {
     return normalizeAcUnitRecord({
         key: snapshot.key || buildAcUnitKey('dashboard-unit'),
         ...specValues,
-        image_path: snapshot.imagePath || '',
-        image_url: state.previewUrl || snapshot.imageUrl || '',
         created_at: snapshot.createdAt || new Date().toISOString(),
         updated_at: new Date().toISOString(),
         source: snapshot.key ? 'dashboard-edit' : 'dashboard-draft'
@@ -3522,9 +3449,7 @@ function hasKonsumenUnitDraftValues() {
     const state = getKonsumenUnitDraftState();
     const draft = getKonsumenUnitDraftPayload();
     return Boolean(
-        state.previewUrl
-        || state.file
-        || draft.brand
+        draft.brand
         || draft.type
         || draft.refrigerant
         || draft.capacity
@@ -3539,9 +3464,7 @@ function syncKonsumenUnitDraftDirtyState() {
 
     if (!snapshot) {
         state.isDirty = Boolean(
-            state.previewUrl
-            || state.file
-            || draft.brand
+            draft.brand
             || draft.type
             || draft.refrigerant
             || draft.capacity
@@ -3551,8 +3474,7 @@ function syncKonsumenUnitDraftDirtyState() {
     }
 
     state.active = true;
-    state.isDirty = Boolean(state.file)
-        || draft.brand !== snapshot.brand
+    state.isDirty = draft.brand !== snapshot.brand
         || draft.type !== snapshot.type
         || draft.refrigerant !== snapshot.refrigerant
         || draft.capacity !== snapshot.capacity;
@@ -3561,21 +3483,10 @@ function syncKonsumenUnitDraftDirtyState() {
 
 function renderKonsumenUnitDraftUi() {
     const state = getKonsumenUnitDraftState();
-    const preview = document.getElementById('konUnitPreviewGrid');
     const saveButton = document.getElementById('btnSaveKonUnitDraft');
     const cancelButton = document.getElementById('btnCancelKonUnitDraft');
     const newButton = document.getElementById('btnNewKonUnitDraft');
     const status = document.getElementById('konUnitDraftStatus');
-
-    if (preview) {
-        const previewUrl = state.previewUrl || state.initialSnapshot?.imageUrl || '';
-        preview.innerHTML = previewUrl ? createPreviewCardHtml(previewUrl, {
-            alt: 'Preview draft unit AC',
-            caption: state.editingKey ? 'Foto unit draft saat ini' : 'Foto unit draft baru',
-            deleteTarget: 'clearKonsumenUnitDraftImage',
-            deleteLabel: 'Reset Foto Draft'
-        }) : '';
-    }
 
     if (saveButton) {
         saveButton.disabled = state.submitting || !state.isDirty;
@@ -3593,7 +3504,7 @@ function renderKonsumenUnitDraftUi() {
         } else if (state.editingKey && state.isDirty) {
             status.textContent = 'Anda sedang mengedit unit AC yang sudah tersimpan. Perubahan baru akan diproses saat Save.';
         } else if (state.editingKey) {
-            status.textContent = 'Mode edit unit aktif. Ubah metadata atau foto lalu klik Save.';
+            status.textContent = 'Mode edit unit aktif. Ubah metadata lalu klik Save.';
         } else if (state.isDirty) {
             status.textContent = 'Draft unit AC baru siap disimpan. Klik Save lalu konfirmasi password.';
         } else {
@@ -3606,8 +3517,6 @@ function startNewKonsumenUnitDraft(options = {}) {
     if (getKonsumenUnitDraftState().submitting) return false;
     resetKonsumenUnitDraftState();
     resetAcSpecFormFields('konUnit');
-    clearInputFileValue('konUnitCamera');
-    clearInputFileValue('konUnitDevice');
     renderKonsumenUnitDraftUi();
     if (!options.silent) {
         setElementText('konUnitUploadStatus', 'Draft unit AC baru siap diisi. Belum ada perubahan yang dikirim ke Supabase.');
@@ -3622,17 +3531,6 @@ function cancelKonsumenUnitDraft(options = {}) {
         setElementText('konUnitUploadStatus', 'Draft unit AC dibatalkan. Tidak ada perubahan yang disimpan.');
         showToast('Draft unit AC dibatalkan.', 'info');
     }
-    return false;
-}
-
-function clearKonsumenUnitDraftImage() {
-    const state = getKonsumenUnitDraftState();
-    state.previewUrl = '';
-    state.file = null;
-    clearInputFileValue('konUnitCamera');
-    clearInputFileValue('konUnitDevice');
-    syncKonsumenUnitDraftDirtyState();
-    renderKonsumenUnitDraftUi();
     return false;
 }
 
@@ -3664,11 +3562,7 @@ async function editKonsumenUnit(index) {
     state.active = true;
     state.editingKey = targetUnit.key;
     state.initialSnapshot = targetUnit;
-    state.previewUrl = '';
-    state.file = null;
     populateAcSpecFormFields('konUnit', targetUnit);
-    clearInputFileValue('konUnitCamera');
-    clearInputFileValue('konUnitDevice');
     syncKonsumenUnitDraftDirtyState();
     renderKonsumenUnitDraftUi();
     setElementText('konUnitUploadStatus', `Mode edit aktif untuk ${formatAcUnitLabel(targetUnit, index)}. Perubahan baru diproses saat Save.`);
@@ -3692,10 +3586,7 @@ function collectRegisterKonsumenForm() {
         locationText: document.getElementById('regKonLocationText')?.value.trim() || '',
         lat: document.getElementById('regKonLat').value,
         lng: document.getElementById('regKonLng').value,
-        ac_units: draftUploads.regKonSavedUnits.map((unit) => ({
-            ...unit,
-            draftFile: unit.draftFile ? { ...unit.draftFile } : null
-        }))
+        ac_units: draftUploads.regKonSavedUnits.map((unit) => ({ ...unit }))
     };
 }
 
@@ -3751,24 +3642,12 @@ async function previewRegUpload(event, previewId) {
         alt: 'Preview upload',
         deleteTarget: 'clearImagePreviewState',
         deleteArgs: [
-            previewId === 'regKonUnitPreview'
-                ? 'register-konsumen-unit'
-                : previewId === 'regTekIDPreview'
-                    ? 'register-teknisi-ktp'
-                    : 'register-teknisi-selfie'
+            previewId === 'regTekIDPreview'
+                ? 'register-teknisi-ktp'
+                : 'register-teknisi-selfie'
         ],
         deleteLabel: 'Hapus Gambar'
     });
-    if (previewId === 'regKonUnitPreview') {
-        draftUploads.regKonUnitDraftImage = dataUrl;
-        draftUploads.regKonUnitDraftFile = {
-            dataUrl,
-            name: file.name,
-            type: file.type,
-            size: file.size,
-            lastModified: file.lastModified
-        };
-    }
     if (previewId === 'regTekIDPreview') {
         draftUploads.regTekKtpPhoto = dataUrl;
         draftUploads.regTekKtpFile = {
@@ -3792,35 +3671,6 @@ async function previewRegUpload(event, previewId) {
     }
 }
 
-async function handleKonUnitUpload(event) {
-    const file = event.target.files?.[0];
-    if (!file) return;
-
-    try {
-        validateImageFile(file, { label: 'Foto unit' });
-        const dataUrl = await readFileAsDataUrl(file);
-        const state = getKonsumenUnitDraftState();
-        state.active = true;
-        state.previewUrl = dataUrl;
-        state.file = {
-            dataUrl,
-            name: file.name,
-            type: file.type,
-            size: file.size,
-            lastModified: file.lastModified
-        };
-        syncKonsumenUnitDraftDirtyState();
-        renderKonsumenUnitDraftUi();
-        setElementText('konUnitUploadStatus', 'Foto unit sudah masuk ke draft. Klik Save untuk menyimpan ke Supabase Storage.');
-    } catch (error) {
-        console.error('Gagal menyiapkan draft foto unit:', error);
-        setElementText('konUnitUploadStatus', toUserFacingError(error, 'Foto unit belum bisa dipakai sebagai draft.'));
-        showToast(toUserFacingError(error, 'Foto unit belum bisa dipakai sebagai draft.'), 'error');
-    } finally {
-        clearInputFileValue(event.target.id);
-    }
-}
-
 async function persistKonsumenUnitDraft() {
     const profile = await requireAuthenticatedProfile(false);
     if (!profile || profile.role !== 'konsumen') throw new Error('Session konsumen dibutuhkan untuk menyimpan unit AC.');
@@ -3831,7 +3681,7 @@ async function persistKonsumenUnitDraft() {
         throw new Error('Belum ada perubahan unit AC yang perlu disimpan.');
     }
     if (!hasKonsumenUnitDraftValues()) {
-        throw new Error('Isi minimal satu metadata unit AC atau pilih foto sebelum menyimpan.');
+        throw new Error('Isi minimal satu metadata unit AC sebelum menyimpan.');
     }
 
     const currentUnits = getProfileAcUnits(profile);
@@ -3840,31 +3690,17 @@ async function persistKonsumenUnitDraft() {
     const baseDraft = getKonsumenUnitDraftPayload();
     const draftRecord = normalizeAcUnitRecord({
         ...baseDraft,
-        key: existingUnit?.key || baseDraft.key || buildAcUnitKey(state.file?.name || 'dashboard-unit'),
-        image_path: existingUnit?.imagePath || '',
-        image_url: existingUnit?.imageUrl || '',
+        key: existingUnit?.key || baseDraft.key || buildAcUnitKey('dashboard-unit'),
         created_at: existingUnit?.createdAt || baseDraft.createdAt || new Date().toISOString(),
         updated_at: new Date().toISOString(),
-        source: existingUnit ? 'dashboard-edit' : 'dashboard-upload'
+        source: existingUnit ? 'dashboard-edit' : 'dashboard-entry'
     });
 
-    let uploaded = null;
     state.submitting = true;
     renderKonsumenUnitDraftUi();
     setElementText('konUnitUploadStatus', 'Menyimpan data unit AC ke Supabase...');
 
     try {
-        if (state.file) {
-            uploaded = await uploadImageToSupabaseStorage({
-                file: createFileLikeFromDraft(state.file, state.file.name || 'unit-ac.jpg'),
-                target: 'konsumen-unit',
-                userId: profile.id,
-                label: 'Foto unit'
-            });
-            draftRecord.imagePath = uploaded.path;
-            draftRecord.imageUrl = uploaded.url;
-        }
-
         const nextUnits = [...currentUnits];
         if (existingIndex >= 0) {
             nextUnits[existingIndex] = draftRecord;
@@ -3872,63 +3708,21 @@ async function persistKonsumenUnitDraft() {
             nextUnits.push(draftRecord);
         }
 
-        const updatedProfile = await persistUploadedImageReference({
-            target: 'konsumen-unit',
-            units: nextUnits,
-            cleanupPath: uploaded?.path || '',
-            cleanupUrl: uploaded?.url || ''
-        });
-
-        if (uploaded) {
-            await syncUploadedAssetToRemote({
-                target: 'konsumen-unit',
-                profileId: profile.id,
-                bucket: uploaded.bucket,
-                path: uploaded.path
-            });
-        }
-
-        if (uploaded && existingUnit?.imagePath && existingUnit.imagePath !== uploaded.path) {
-            try {
-                await deleteImageFromSupabaseStorage({
-                    bucket: getPublicUploadBucket(),
-                    path: existingUnit.imagePath,
-                    url: existingUnit.imageUrl || ''
-                });
-                await syncDeletionToRemote({
-                    target: 'konsumen-unit',
-                    profileId: profile.id,
-                    path: existingUnit.imagePath,
-                    bucket: getPublicUploadBucket()
-                });
-            } catch (cleanupError) {
-                console.warn('Foto unit lama belum berhasil dibersihkan setelah edit:', cleanupError);
-                showToast('Data unit tersimpan, tetapi foto lama belum sempat dibersihkan dari storage.', 'warning');
-            }
-        }
+        const updatedProfile = await upsertOwnProfile(validateProfilePayloadForRole('konsumen', {
+            ...profile,
+            ac_units: nextUnits
+        }));
 
         resetKonsumenUnitDraftState();
         resetAcSpecFormFields('konUnit');
-        clearInputFileValue('konUnitCamera');
-        clearInputFileValue('konUnitDevice');
+        applySupabaseSession(updatedProfile);
+        void syncNewUserToRemote(updatedProfile, { reason: 'konsumen-unit-metadata-update' });
         renderAppShell();
         await renderKonsumenUnit();
-        setElementText(
-            'konUnitUploadStatus',
-            uploaded
-                ? 'Foto dan metadata unit AC berhasil tersimpan ke Supabase.'
-                : 'Metadata unit AC berhasil tersimpan ke Supabase.'
-        );
+        setElementText('konUnitUploadStatus', 'Metadata unit AC berhasil tersimpan ke Supabase.');
         showToast(existingUnit ? 'Data unit AC berhasil diperbarui.' : 'Data unit AC berhasil disimpan.', 'success');
         return updatedProfile;
     } catch (error) {
-        if (uploaded?.path) {
-            await deleteImageFromSupabaseStorage({
-                bucket: getPublicUploadBucket(),
-                path: uploaded.path,
-                url: uploaded.url
-            }).catch(() => {});
-        }
         setElementText('konUnitUploadStatus', toUserFacingError(error, 'Penyimpanan data unit AC gagal.'));
         throw error;
     } finally {
@@ -3948,7 +3742,7 @@ function saveKonsumenUnitDraft() {
     openPasswordConfirmModal({
         title: state.editingKey ? 'Konfirmasi Simpan Edit Unit AC' : 'Konfirmasi Simpan Unit AC',
         intro: state.editingKey
-            ? 'Masukkan password akun Anda untuk menyimpan perubahan foto atau metadata unit AC ke Supabase.'
+            ? 'Masukkan password akun Anda untuk menyimpan perubahan metadata unit AC ke Supabase.'
             : 'Masukkan password akun Anda untuk menyimpan draft unit AC baru ke Supabase.',
         confirmLabel: state.editingKey ? 'Verifikasi & Simpan Edit' : 'Verifikasi & Simpan Unit',
         onConfirm: async () => {
